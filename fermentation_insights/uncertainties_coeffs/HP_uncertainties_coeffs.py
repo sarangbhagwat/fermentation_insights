@@ -57,12 +57,9 @@ import pandas as pd
 import contourplots
 import biosteam as bst
 print('\n\nLoading system ...')
-# from biorefineries
-# from biorefineries import HP
 from biorefineries import HP
 from biorefineries.HP.models.glucose import models_glucose_improved_separations as models
-# models = HP.models
-# from . import models
+# from biorefineries.HP.models.sugarcane import models_sc_improved_separations as models
 
 print('\nLoaded system.')
 from datetime import datetime
@@ -94,7 +91,7 @@ u, s = f.unit, f.stream
 # %% 
 np.random.seed(4153)
 
-N_simulations_per_TRY_combo = 100 # 6000
+N_simulations_per_TRY_combo = 20 # 6000
 
 percentiles = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 1]
 
@@ -214,10 +211,12 @@ steps = [5, 5]
 def MPSP_sim_f(y, t):
     # spec.load_specifications(y, t, spec.spec_3)
     spec.spec_1, spec.spec_2 = y, t
-    model.specification()
+    spec.load_specifications(spec_1=spec.spec_1, spec_2=spec.spec_2, spec_3=spec.spec_3)
+    model._system.simulate()
     return get_adjusted_MSP()
 
 yts = get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f)
+yts = np.array(yts)
 
 #%%
 # overall_results_dict = {(y,t): {'Baseline':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}, 
@@ -258,80 +257,81 @@ errors_dict = {}
 
 for yt in yts:
     y, t = yt
+    print('\n\n------------------------------------------------------------------------------------')
     print(f'\nPerforming uncertainty analysis at yield = {np.round(y,2)} and titer = {np.round(t,2)} ...')
     spec.spec_1 = y/theo_max_yield
     spec.spec_2 = t
-    try:
+    # try:
         # results_dict = overall_results_dict[(y,t)]
-        overall_results_dict[(y,t)] = results_dict = {'Baseline':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}, 
-                                    # 'GWP Breakdown':{}, 'FEC Breakdown':{},
-                                    },
-                                    'Uncertainty':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}, 'Recovery':{}},
-                                    'Sensitivity':{'Spearman':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}},
-                                                    'p-val Spearman':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}}},}
-        
-        
-        # Initial baseline simulation
-        print('\n\nSimulating baseline ...')
-        
-        baseline_initial = model.metrics_at_baseline()
-        # spec.set_production_capacity()
-        baseline_initial = model.metrics_at_baseline()
-        
-        # baseline = pd.DataFrame(data=np.array([[i for i in baseline_initial.values],]), 
-        #                         columns=baseline_initial.keys())
-        
-        results_dict['Baseline']['MPSP'][mode] = get_adjusted_MSP()
-        results_dict['Baseline']['GWP100a'][mode] = tot_GWP = lca.GWP
-        results_dict['Baseline']['FEC'][mode] = tot_FEC = lca.FEC
+    overall_results_dict[(y,t)] = results_dict = {'Baseline':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}, 
+                                # 'GWP Breakdown':{}, 'FEC Breakdown':{},
+                                },
+                                'Uncertainty':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}, 'Recovery':{}},
+                                'Sensitivity':{'Spearman':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}},
+                                                'p-val Spearman':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}}},}
+    
+    
+    # Initial baseline simulation
+    print('\n\nSimulating baseline ...')
+    
+    baseline_initial = model.metrics_at_baseline()
+    # spec.set_production_capacity()
+    baseline_initial = model.metrics_at_baseline()
+    
+    # baseline = pd.DataFrame(data=np.array([[i for i in baseline_initial.values],]), 
+    #                         columns=baseline_initial.keys())
+    
+    results_dict['Baseline']['MPSP'][mode] = get_adjusted_MSP()
+    results_dict['Baseline']['GWP100a'][mode] = tot_GWP = lca.GWP
+    results_dict['Baseline']['FEC'][mode] = tot_FEC = lca.FEC
 
-        print(f"\nSimulated baseline. MPSP = ${round(results_dict['Baseline']['MPSP'][mode],2)}/kg.")
-        
-        print('\n\nEvaluating ...')
-        model.evaluate(notify=notification_interval, autoload=None, autosave=None, file=None)
-        print('\nFinished evaluation.')
-        
-        # Final baseline simulation
-        print('\n\nRe-simulating baseline ...')
-        
-        baseline_end = model.metrics_at_baseline()
-        # spec.set_production_capacity()
-        baseline_end = model.metrics_at_baseline()
-        
-        print(f"\nRe-simulated baseline. MPSP = ${round(get_adjusted_MSP(),2)}/kg.")
-        
-        
-        table = model.table
-        model.table = model.table.dropna()
+    print(f"\nSimulated baseline. MPSP = ${round(results_dict['Baseline']['MPSP'][mode],2)}/kg.")
+    
+    print('\n\nEvaluating ...')
+    model.evaluate(notify=notification_interval, autoload=None, autosave=None, file=None)
+    print('\nFinished evaluation.')
+    
+    # Final baseline simulation
+    print('\n\nRe-simulating baseline ...')
+    
+    baseline_end = model.metrics_at_baseline()
+    # spec.set_production_capacity()
+    baseline_end = model.metrics_at_baseline()
+    
+    print(f"\nRe-simulated baseline. MPSP = ${round(get_adjusted_MSP(),2)}/kg.")
+    
+    
+    table = model.table
+    model.table = model.table.dropna()
 
-        # results_dict['Uncertainty']['MPSP'][mode] = model.table.Biorefinery['Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
-        results_dict['Uncertainty']['MPSP'][mode] = model.table.Biorefinery['Adjusted minimum selling price [$/kg AA]']
-        results_dict['Uncertainty']['GWP100a'][mode] = model.table.Biorefinery['Total gwp100a [kg-CO2-eq/kg]'] # GWP or gwp
-        results_dict['Uncertainty']['FEC'][mode] = model.table.Biorefinery['Total FEC [MJ/kg]']
-        results_dict['Uncertainty']['Recovery'][mode] = model.table.Biorefinery['Product recovery [%]']
-        df_rho, df_p = model.spearman_r()
+    # results_dict['Uncertainty']['MPSP'][mode] = model.table.Biorefinery['Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
+    results_dict['Uncertainty']['MPSP'][mode] = model.table.Biorefinery['Adjusted minimum selling price [$/kg AA]']
+    results_dict['Uncertainty']['GWP100a'][mode] = model.table.Biorefinery['Total gwp100a [kg-CO2-eq/kg]'] # GWP or gwp
+    results_dict['Uncertainty']['FEC'][mode] = model.table.Biorefinery['Total FEC [MJ/kg]']
+    results_dict['Uncertainty']['Recovery'][mode] = model.table.Biorefinery['Product recovery [%]']
+    df_rho, df_p = model.spearman_r()
+    
+    # results_dict['Sensitivity']['Spearman']['MPSP'][mode] = df_rho['Biorefinery', 'Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
+    results_dict['Sensitivity']['Spearman']['MPSP'][mode] = df_rho['Biorefinery', 'Adjusted minimum selling price [$/kg AA]']
+    results_dict['Sensitivity']['Spearman']['GWP100a'][mode] = df_rho['Biorefinery', 'Total gwp100a [kg-CO2-eq/kg]']
+    results_dict['Sensitivity']['Spearman']['FEC'][mode] = df_rho['Biorefinery', 'Total FEC [MJ/kg]']
+    
+    # results_dict['Sensitivity']['p-val Spearman']['MPSP'][mode] = df_p['Biorefinery', 'Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
+    results_dict['Sensitivity']['p-val Spearman']['MPSP'][mode] = df_p['Biorefinery', 'Adjusted minimum selling price [$/kg AA]']
+    results_dict['Sensitivity']['p-val Spearman']['GWP100a'][mode] = df_p['Biorefinery', 'Total gwp100a [kg-CO2-eq/kg]']
+    results_dict['Sensitivity']['p-val Spearman']['FEC'][mode] = df_p['Biorefinery', 'Total FEC [MJ/kg]']
+    
+    
+    # Parameters
+    parameters = model.get_parameters()
+    index_parameters = len(model.get_baseline_sample())
+    parameter_values = model.table.iloc[:, :index_parameters].copy()
+    
+    results_dict['Parameters'] = parameter_values
         
-        # results_dict['Sensitivity']['Spearman']['MPSP'][mode] = df_rho['Biorefinery', 'Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
-        results_dict['Sensitivity']['Spearman']['MPSP'][mode] = df_rho['Biorefinery', 'Adjusted minimum selling price [$/kg AA]']
-        results_dict['Sensitivity']['Spearman']['GWP100a'][mode] = df_rho['Biorefinery', 'Total gwp100a [kg-CO2-eq/kg]']
-        results_dict['Sensitivity']['Spearman']['FEC'][mode] = df_rho['Biorefinery', 'Total FEC [MJ/kg]']
-        
-        # results_dict['Sensitivity']['p-val Spearman']['MPSP'][mode] = df_p['Biorefinery', 'Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
-        results_dict['Sensitivity']['p-val Spearman']['MPSP'][mode] = df_p['Biorefinery', 'Adjusted minimum selling price [$/kg AA]']
-        results_dict['Sensitivity']['p-val Spearman']['GWP100a'][mode] = df_p['Biorefinery', 'Total gwp100a [kg-CO2-eq/kg]']
-        results_dict['Sensitivity']['p-val Spearman']['FEC'][mode] = df_p['Biorefinery', 'Total FEC [MJ/kg]']
-        
-        
-        # Parameters
-        parameters = model.get_parameters()
-        index_parameters = len(model.get_baseline_sample())
-        parameter_values = model.table.iloc[:, :index_parameters].copy()
-        
-        results_dict['Parameters'] = parameter_values
-        
-    except Exception as e:
-        print(str(e))
-        errors_dict[(y,t)] = e
+    # except Exception as e:
+    #     print(str(e))
+    #     errors_dict[(y,t)] = e
 
 #%% Save results for uncertainty analyses across TRY
 
@@ -368,18 +368,19 @@ fermentation_product_MW = 90.07794
 for i in range(N_simulations_per_TRY_combo):
     MPSPs = []
     recoveries = []
-    yts = []
-    for y in ys:
-        for t in ts:
-            try:
-                results_dict = overall_results_dict[(y,t)]
-                recoveries.append(results_dict['Uncertainty']['Recovery'][mode][i] * final_product_MW/fermentation_product_MW)
-                MPSPs.append(results_dict['Uncertainty']['MPSP'][mode][i])
-                yts.append((y,t))
-            except: # error, likely infeasible region
-                pass
-    yts = np.array(yts)
-    a_fit, b_fit, c_fit, d_fit, r = fit_shifted_rect_hyperbola_two_param((yts[:,0], yts[:,1]), 
+    yts_fit = []
+    for yt in yts:
+        y, t = yt
+        try:
+            results_dict = overall_results_dict[(y,t)]
+            recoveries.append(results_dict['Uncertainty']['Recovery'][mode][i] * final_product_MW/fermentation_product_MW)
+            MPSPs.append(results_dict['Uncertainty']['MPSP'][mode][i])
+            yts_fit.append((y,t))
+        except: # error, likely infeasible region'
+            print('Error for {yt}.')
+            pass
+    yts_fit = np.array(yts_fit)
+    a_fit, b_fit, c_fit, d_fit, r = fit_shifted_rect_hyperbola_two_param((yts_fit[:,0], yts_fit[:,1]), 
                                                                         MPSPs,
                                                                         [1,1,1,1],
                                                                         # [0,0,0,0,0],

@@ -988,9 +988,6 @@ print(get_Rsq(np.array(mpsps_ext3),
               np.array([shifted_rect_hyperbola_two_param(y, t, a_ext3, b_ext3, c_ext3, d_ext3)
                         for y,t in zip(ys_ext3, ts_ext3)])))
 
-
-
-
 #%% Print coefficients again for convenience and save
 print('\n')
 print(filename)

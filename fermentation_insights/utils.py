@@ -368,3 +368,35 @@ def min_sep_energy_based_f(t, m, c,): # assumes no change in target final produc
 #         return min_sep_energy_based_f(t=t, a=a, b=b, substrate_sugars_mol=substrate_sugars_mol, y=y)
 #     ((a, b, substrate_sugars_mol), r) = scipy.optimize.curve_fit(f, tdata, indicatordata, p0=p0)
 #     return a, b, substrate_sugars_mol, r
+
+
+#%% Utils to get evenly distributed samples of feasible TY points
+
+def get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f):
+    titers_lb = titers[0]
+    titers_reverse = np.flip(titers, 0)
+    titers_ubs = []
+    for y, i in zip(yields, range(len(yields))):
+        titer_curr = None
+        for t in titers_reverse:
+            titer_curr = t
+            try:
+                MPSP = MPSP_sim_f(y, t)
+                if not np.isnan(MPSP): 
+                    titers_ubs.append(t)
+                    break
+            except:
+                pass
+        if len(titers_ubs) < i+1:
+            # print(titers_ub, i+1)
+            raise RuntimeError(f'At yield {y}, no titer was identified with non-nan MPSP (lowest titer checked: {titer_curr}).')
+            
+    titer_samples = []
+    yields_samples = np.linspace(yields[0], yields[-1], steps[0])
+    yts = []
+    for y, titers_ub in zip(yields_samples, titers_ubs):
+        titer_samples.append(np.linspace(titers_lb, titers_ub, steps[1]))
+        for t in titer_samples[-1]:
+            yts.append((y, t))
+    
+    return yts
