@@ -372,7 +372,9 @@ def min_sep_energy_based_f(t, m, c,): # assumes no change in target final produc
 
 #%% Utils to get evenly distributed samples of feasible TY points
 
-def get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f):
+# yields given and returned in g/g but loaded to spec in %theoretical using theo_max_yield
+# titers in g/L
+def get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f, theo_max_yield):
     titers_lb = titers[0]
     titers_reverse = np.flip(titers, 0)
     titers_ubs = []
@@ -381,7 +383,7 @@ def get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f):
         for t in titers_reverse:
             titer_curr = t
             try:
-                MPSP = MPSP_sim_f(y, t)
+                MPSP = MPSP_sim_f(y/theo_max_yield, t)
                 if not np.isnan(MPSP): 
                     titers_ubs.append(t)
                     break
