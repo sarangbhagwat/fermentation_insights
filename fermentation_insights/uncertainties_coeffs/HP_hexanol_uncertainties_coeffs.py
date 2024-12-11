@@ -15,10 +15,10 @@ from fermentation_insights.utils import fit_shifted_rect_hyperbola_two_param, ge
 #%% Load baseline TRY
 os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 
-product = product_ID = 'TAL'
+product = product_ID = 'HP'
 # additional_tag = '0.5x_baselineprod'
-additional_tag = ''
-feedstock = 'sugarcane'
+additional_tag = 'hexanol'
+feedstock = 'cornstover'
 
 filename = None
 if additional_tag: 
@@ -53,27 +53,35 @@ true_g = recovery
 from warnings import filterwarnings
 filterwarnings('ignore')
 import numpy as np
+import pandas as pd
+import contourplots
 import biosteam as bst
 print('\n\nLoading system ...')
-from biorefineries import TAL
-# from biorefineries.TAL.models import models_TAL_solubility_exploit_glucose as models
-from biorefineries.TAL.models import models_TAL_solubility_exploit_sugarcane as models
-# from biorefineries.TAL.models import models_TAL_solubility_exploit_corn as models
-# from biorefineries.TAL.models import models_TAL_solubility_exploit_cornstover as models
+from biorefineries import HP
+# from biorefineries.HP.models.glucose import models_glucose_hexanol as models
+# from biorefineries.HP.models.sugarcane import models_sc_hexanol as models
+# from biorefineries.HP.models.corn import models_corn_hexanol as models
+from biorefineries.HP.models.cornstover import models_cs_hexanol as models
 
 print('\nLoaded system.')
+from datetime import datetime
+from biosteam.utils import TicToc
+import os
+
+from biorefineries.HP.analyses.full.plot_utils import plot_kde_formatted
+from matplotlib.colors import hex2color
 
 chdir = os.chdir
-TAL_filepath = TAL.__file__.replace('\\__init__.py', '')
-TAL_results_filepath = TAL_filepath + '\\analyses\\results\\'
-model = models.TAL_model
+HP_filepath = HP.__file__.replace('\\__init__.py', '')
+HP_results_filepath = HP_filepath + '\\analyses\\results\\'
+model = models.HP_model
 
-system = TAL_sys = models.TAL_sys
+system = HP_sys = models.HP_sys
 spec = models.spec
 unit_groups = models.unit_groups
 
-tea = models.TAL_tea
-lca = models.TAL_lca
+tea = models.HP_tea
+lca = models.HP_lca
 get_adjusted_MSP = models.get_adjusted_MSP
 run_bugfix_barrage = models.run_bugfix_barrage
 
@@ -92,15 +100,17 @@ percentiles = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 1]
 notification_interval = 10
 
 feedstock_tag = feedstock
-product_tag = 'Sorbate' if product=='TAL_SA' else product
+product_tag = 'Acrylic' if product=='HP' else product
 
-mode = 'A_FGI'
+mode = '300L_FGI'
 
 scenario_name = mode
 
-parameter_distributions_filename = TAL_filepath+\
-        f'\\analyses\\full\\parameter_distributions\\'+\
-        f'parameter-distributions_{product_tag}_' + mode + f'_{feedstock_tag}'+'.xlsx' 
+product_folder = 'acrylic_acid_product' if product_tag=='Acrylic' else 'HP_salt_product'
+
+parameter_distributions_filename = HP_filepath+\
+        f'\\analyses\\full\\parameter_distributions\\{product_folder}\\'+\
+        f'parameter-distributions_{feedstock_tag}_{product_tag}_' + mode + '.xlsx' 
 
 #%% Bugfix barrage (without set_production_capacity)
 baseline_spec = {'spec_1': spec.baseline_yield,
@@ -109,28 +119,37 @@ baseline_spec = {'spec_1': spec.baseline_yield,
 
 system=model._system
 def reset_and_reload():
-    print('Resetting cache and emptying recycles ...')
-    system.reset_cache()
-    system.empty_recycles()
-    print('Loading and simulating with baseline specifications ...')
     spec_1, spec_2, spec_3 = spec.spec_1, spec.spec_2, spec.spec_3
-    spec.load_specifications(**baseline_spec)
-    # spec.set_production_capacity(spec.desired_annual_production)
-    system.simulate()
-    print('Loading and simulating with required specifications ...')
-    spec.load_specifications(spec_1=spec_1, spec_2=spec_2, spec_3=spec_3)
-    # spec.set_production_capacity(spec.desired_annual_production)
-    system.simulate()
+    try:
+        print('Resetting cache and emptying recycles ...')
+        system.reset_cache()
+        system.empty_recycles()
+        print('Loading and simulating with baseline specifications ...')
+        spec.load_specifications(**baseline_spec)
+        # spec.load_specifications(spec_1=spec_1, spec_2=spec_2, spec_3=spec_3)
+        # spec.set_production_capacity(spec.desired_annual_production)
+        system.simulate()
+        print('Loading and simulating with required specifications ...')
+        spec.load_specifications(spec_1=spec_1, spec_2=spec_2, spec_3=spec_3)
+        # spec.set_production_capacity(spec.desired_annual_production)
+        system.simulate()
+    except:
+        spec.spec_1, spec.spec_2, spec.spec_3 = spec_1, spec_2, spec_3
+        spec.load_specifications(spec_1=spec_1, spec_2=spec_2, spec_3=spec_3)
+        # spec.set_production_capacity(spec.desired_annual_production)
+        system.simulate()
+        
     
 def reset_and_switch_solver(solver_ID):
     system.reset_cache()
     system.empty_recycles()
     system.converge_method = solver_ID
     print(f"Trying {solver_ID} ...")
-    spec.load_specifications(spec_1=spec.spec_1, spec_2=spec.spec_2, spec_3=spec.spec_3)
+    # spec.load_specifications(spec_1=spec.spec_1, spec_2=spec.spec_2, spec_3=spec.spec_3)
     # spec.set_production_capacity(spec.desired_annual_production)
     system.simulate()
-    
+
+# F403 = u.F403
 def run_bugfix_barrage():
     try:
         reset_and_reload()
@@ -148,31 +167,36 @@ def run_bugfix_barrage():
                 print("Bugfix barrage failed.\n")
                 # breakpoint()
                 raise e
-###############################
 
 #%% Model specification (without set_production_capacity)
 pre_fermenter_units_path = list(spec.reactor.get_upstream_units())
 pre_fermenter_units_path.reverse()
 def model_specification():
+    # for i in system.products: i.empty()
     try:
         for i in pre_fermenter_units_path: i.simulate()
         spec.load_specifications(spec_1=spec.spec_1, spec_2=spec.spec_2, spec_3=spec.spec_3)
         # spec.set_production_capacity(spec.desired_annual_production)
-        # system.simulate()
         model._system.simulate()
-    
 
     except Exception as e:
         str_e = str(e).lower()
         print('Error in model spec: %s'%str_e)
+        # breakpoint()
         # raise e
         if 'sugar concentration' in str_e:
             # flowsheet('AcrylicAcid').F_mass /= 1000.
             raise e
+        elif 'length' in str(e).lower() or 'in subtract' in str(e).lower() or 'in log' in str(e).lower():
+            raise e
         else:
+            # breakpoint()
             run_bugfix_barrage()
             
 model.specification = model_specification
+spec.reactor.neutralization = False
+model.specification()
+print(get_adjusted_MSP())
 
 #%% Create TRY combinations 
 
@@ -219,94 +243,101 @@ samples = model.sample(N=N_simulations_per_TRY_combo, rule='L')
 model.load_samples(samples)
 print('\nLoaded samples.')
 
+# ## Change working directory to biorefineries\\HP\\analyses\\results
+# chdir(HP.__file__.replace('\\__init__.py', '')+'\\analyses\\results')
+# ##
+
 model.exception_hook = 'warn'
+
 
 #%% Run uncertainty analyses across TRY
 
 errors_dict = {}
 
 for yt in yts:
-    y, t = yt
-    print('\n\n------------------------------------------------------------------------------------')
-    print(f'\nPerforming uncertainty analysis at yield = {np.round(y,2)} and titer = {np.round(t,2)} ...')
-    spec.spec_1 = y/theo_max_yield
-    spec.spec_2 = t
-    # try:
-        # results_dict = overall_results_dict[(y,t)]
-    overall_results_dict[(y,t)] = results_dict = {'Baseline':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}, 
-                                # 'GWP Breakdown':{}, 'FEC Breakdown':{},
-                                },
-                                'Uncertainty':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}, 'Recovery':{}},
-                                'Sensitivity':{'Spearman':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}},
-                                                'p-val Spearman':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}}},}
-    
-    
-    model.load_samples(samples)
-    # Initial baseline simulation
-    print('\n\nSimulating baseline ...')
-    
-    baseline_initial = model.metrics_at_baseline()
-    # spec.set_production_capacity()
-    baseline_initial = model.metrics_at_baseline()
-    
-    # baseline = pd.DataFrame(data=np.array([[i for i in baseline_initial.values],]), 
-    #                         columns=baseline_initial.keys())
-    
-    results_dict['Baseline']['MPSP'][mode] = get_adjusted_MSP()
-    results_dict['Baseline']['GWP100a'][mode] = tot_GWP = lca.GWP
-    results_dict['Baseline']['FEC'][mode] = tot_FEC = lca.FEC
-
-    print(f"\nSimulated baseline. MPSP = ${round(results_dict['Baseline']['MPSP'][mode],2)}/kg.")
-    
-    print('\n\nEvaluating ...')
     try:
-        model.evaluate(notify=notification_interval, autoload=None, autosave=None, file=None)
-    except Exception as e:
-        # print('\n'+str(e))
-        # breakpoint()
-        raise(e)
+        y, t = yt
+        print('\n\n------------------------------------------------------------------------------------')
+        print(f'\nPerforming uncertainty analysis at yield = {np.round(y,2)} and titer = {np.round(t,2)} ...')
+        spec.spec_1 = y/theo_max_yield
+        spec.spec_2 = t
+        # try:
+            # results_dict = overall_results_dict[(y,t)]
+        overall_results_dict[(y,t)] = results_dict = {'Baseline':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}, 
+                                    # 'GWP Breakdown':{}, 'FEC Breakdown':{},
+                                    },
+                                    'Uncertainty':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}, 'Recovery':{}},
+                                    'Sensitivity':{'Spearman':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}},
+                                                    'p-val Spearman':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}}},}
         
-    print('\nFinished evaluation.')
-    
-    
-    # Final baseline simulation
-    print('\n\nRe-simulating baseline ...')
-    
-    baseline_end = model.metrics_at_baseline()
-    # spec.set_production_capacity()
-    baseline_end = model.metrics_at_baseline()
-    
-    print(f"\nRe-simulated baseline. MPSP = ${round(get_adjusted_MSP(),2)}/kg.")
-    
-    
-    table = model.table
-    model.table = model.table.dropna()
-
-    # results_dict['Uncertainty']['MPSP'][mode] = model.table.Biorefinery['Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
-    results_dict['Uncertainty']['MPSP'][mode] = model.table.Biorefinery['Adjusted minimum selling price [$/kg TAL]']
-    results_dict['Uncertainty']['GWP100a'][mode] = model.table.Biorefinery['Total gwp100a [kg-CO2-eq/kg]'] # GWP or gwp
-    results_dict['Uncertainty']['FEC'][mode] = model.table.Biorefinery['Total FEC [MJ/kg]']
-    results_dict['Uncertainty']['Recovery'][mode] = model.table.Biorefinery['Product recovery [%]']
-    df_rho, df_p = model.spearman_r()
-    
-    # results_dict['Sensitivity']['Spearman']['MPSP'][mode] = df_rho['Biorefinery', 'Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
-    results_dict['Sensitivity']['Spearman']['MPSP'][mode] = df_rho['Biorefinery', 'Adjusted minimum selling price [$/kg TAL]']
-    results_dict['Sensitivity']['Spearman']['GWP100a'][mode] = df_rho['Biorefinery', 'Total gwp100a [kg-CO2-eq/kg]']
-    results_dict['Sensitivity']['Spearman']['FEC'][mode] = df_rho['Biorefinery', 'Total FEC [MJ/kg]']
-    
-    # results_dict['Sensitivity']['p-val Spearman']['MPSP'][mode] = df_p['Biorefinery', 'Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
-    results_dict['Sensitivity']['p-val Spearman']['MPSP'][mode] = df_p['Biorefinery', 'Adjusted minimum selling price [$/kg TAL]']
-    results_dict['Sensitivity']['p-val Spearman']['GWP100a'][mode] = df_p['Biorefinery', 'Total gwp100a [kg-CO2-eq/kg]']
-    results_dict['Sensitivity']['p-val Spearman']['FEC'][mode] = df_p['Biorefinery', 'Total FEC [MJ/kg]']
-    
-    
-    # Parameters
-    parameters = model.get_parameters()
-    index_parameters = len(model.get_baseline_sample())
-    parameter_values = model.table.iloc[:, :index_parameters].copy()
-    
-    results_dict['Parameters'] = parameter_values
         
+        model.load_samples(samples)
+        # Initial baseline simulation
+        print('\n\nSimulating baseline ...')
+        
+        baseline_initial = model.metrics_at_baseline()
+        # spec.set_production_capacity()
+        baseline_initial = model.metrics_at_baseline()
+        
+        # baseline = pd.DataFrame(data=np.array([[i for i in baseline_initial.values],]), 
+        #                         columns=baseline_initial.keys())
+        
+        results_dict['Baseline']['MPSP'][mode] = get_adjusted_MSP()
+        results_dict['Baseline']['GWP100a'][mode] = tot_GWP = lca.GWP
+        results_dict['Baseline']['FEC'][mode] = tot_FEC = lca.FEC
+    
+        print(f"\nSimulated baseline. MPSP = ${round(results_dict['Baseline']['MPSP'][mode],2)}/kg.")
+        
+        print('\n\nEvaluating ...')
+        try:
+            model.evaluate(notify=notification_interval, autoload=None, autosave=None, file=None)
+        except Exception as e:
+            # print('\n'+str(e))
+            # breakpoint()
+            raise(e)
+            
+        print('\nFinished evaluation.')
+        
+        
+        # Final baseline simulation
+        print('\n\nRe-simulating baseline ...')
+        
+        baseline_end = model.metrics_at_baseline()
+        # spec.set_production_capacity()
+        baseline_end = model.metrics_at_baseline()
+        
+        print(f"\nRe-simulated baseline. MPSP = ${round(get_adjusted_MSP(),2)}/kg.")
+        
+        
+        table = model.table
+        model.table = model.table.dropna()
+    
+        # results_dict['Uncertainty']['MPSP'][mode] = model.table.Biorefinery['Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
+        results_dict['Uncertainty']['MPSP'][mode] = model.table.Biorefinery['Adjusted minimum selling price [$/kg AA]']
+        results_dict['Uncertainty']['GWP100a'][mode] = model.table.Biorefinery['Total gwp100a [kg-CO2-eq/kg]'] # GWP or gwp
+        results_dict['Uncertainty']['FEC'][mode] = model.table.Biorefinery['Total FEC [MJ/kg]']
+        results_dict['Uncertainty']['Recovery'][mode] = model.table.Biorefinery['Product recovery [%]']
+        df_rho, df_p = model.spearman_r()
+        
+        # results_dict['Sensitivity']['Spearman']['MPSP'][mode] = df_rho['Biorefinery', 'Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
+        results_dict['Sensitivity']['Spearman']['MPSP'][mode] = df_rho['Biorefinery', 'Adjusted minimum selling price [$/kg AA]']
+        results_dict['Sensitivity']['Spearman']['GWP100a'][mode] = df_rho['Biorefinery', 'Total gwp100a [kg-CO2-eq/kg]']
+        results_dict['Sensitivity']['Spearman']['FEC'][mode] = df_rho['Biorefinery', 'Total FEC [MJ/kg]']
+        
+        # results_dict['Sensitivity']['p-val Spearman']['MPSP'][mode] = df_p['Biorefinery', 'Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
+        results_dict['Sensitivity']['p-val Spearman']['MPSP'][mode] = df_p['Biorefinery', 'Adjusted minimum selling price [$/kg AA]']
+        results_dict['Sensitivity']['p-val Spearman']['GWP100a'][mode] = df_p['Biorefinery', 'Total gwp100a [kg-CO2-eq/kg]']
+        results_dict['Sensitivity']['p-val Spearman']['FEC'][mode] = df_p['Biorefinery', 'Total FEC [MJ/kg]']
+        
+        
+        # Parameters
+        parameters = model.get_parameters()
+        index_parameters = len(model.get_baseline_sample())
+        parameter_values = model.table.iloc[:, :index_parameters].copy()
+        
+        results_dict['Parameters'] = parameter_values
+    except:
+        print(f'\n\nFailed evaluation at y = {y}, t = {t}.')
     # except Exception as e:
     #     print(str(e))
     #     errors_dict[(y,t)] = e
@@ -339,9 +370,9 @@ def get_Rsq(indicator_orig, indicator_fit):
 
 ap, bp, cp, dp, g = [], [], [], [], []
 
-final_product_MW = 126.11004
+final_product_MW = 72.06266
 
-fermentation_product_MW = 126.11004
+fermentation_product_MW = 90.07794
 
 for i in range(N_simulations_per_TRY_combo):
     MPSPs = []
@@ -379,7 +410,7 @@ for i in range(N_simulations_per_TRY_combo):
         bp.append(np.nan)
         cp.append(np.nan)
         dp.append(np.nan)
-        g.append(np.median(np.array(np.nan)))
+        g.append(np.nan)
     
 
 a = np.array(ap)*g
@@ -409,6 +440,8 @@ spearman = df.corr(method='spearman')
 with open(filename+'_dfd_coeffs_uncertainty.pkl', 'wb') as f:
     pickle.dump(df_dict, f)
 
+#%% 
+# filename = 'HP_hexanol_corn'
 with open(filename+'_dfd_coeffs_uncertainty.pkl', 'rb') as f:
     df_dict = pickle.load(f)
     

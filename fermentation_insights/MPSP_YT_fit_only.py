@@ -54,10 +54,10 @@ inflection_product_yields = []
 #%% Load TRY
 os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 
-product = product_ID = 'HP'
+product = product_ID = 'HP_hexanol'
 # additional_tag = '0.5x_baselineprod'
 additional_tag = ''
-feedstock = 'glucose'
+feedstock = 'corn'
 
 filename = None
 if additional_tag: 
@@ -139,7 +139,7 @@ true_g = recovery
 # import os
 # product_ID = 'TAL-SA'
 # if run_simulations:
-#     from biorefineries.TAL.analyses.fermentation.TRY_analysis_SA_glucose import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
+#     from biorefineries.TAL.analyses.fermentation.TRY_analysis_SA_cornstover import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
 #                                                                 yields, titers, titers_mol_per_mol_total, productivities,\
 #                                                                 colors, CABBI_green_colormap, get_rounded_str,\
 #                                                                 R302, spec
@@ -148,23 +148,23 @@ true_g = recovery
 #     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//TRY_results')
 #     inflection_product_yields = np.array([1-R302.regular_microbe_conversion-R302.regular_citric_acid_conversion,
 #                                           1-R302.regular_microbe_conversion])
-#     np.save('TAL_SA_glucose_MPSP', results_metric_1)
-#     np.save('TAL_SA_glucose_GWP', results_metric_2)
-#     np.save('TAL_SA_glucose_FEC', results_metric_3)
-#     np.save('TAL_SA_glucose_AOC', results_metric_5)
-#     np.save('TAL_SA_glucose_TCI', results_metric_6)
-#     np.save('TAL_SA_glucose_recoveries', results_metric_4)
-#     np.save('TAL_SA_glucose_inflection_product_yields', inflection_product_yields)
-#     np.save('TAL_SA_glucose_yields', yields)
-#     np.save('TAL_SA_glucose_titers', titers)
-#     np.save('TAL_SA_glucose_productivities', productivities)
+#     np.save('TAL_SA_cornstover_MPSP', results_metric_1)
+#     np.save('TAL_SA_cornstover_GWP', results_metric_2)
+#     np.save('TAL_SA_cornstover_FEC', results_metric_3)
+#     np.save('TAL_SA_cornstover_AOC', results_metric_5)
+#     np.save('TAL_SA_cornstover_TCI', results_metric_6)
+#     np.save('TAL_SA_cornstover_recoveries', results_metric_4)
+#     np.save('TAL_SA_cornstover_inflection_product_yields', inflection_product_yields)
+#     np.save('TAL_SA_cornstover_yields', yields)
+#     np.save('TAL_SA_cornstover_titers', titers)
+#     np.save('TAL_SA_cornstover_productivities', productivities)
 # else:
-#     results_metric_1 = np.load('TAL_SA_glucose_MPSP')
-#     results_metric_2 = np.load('TAL_SA_glucose_GWP')
-#     results_metric_3 = np.load('TAL_SA_glucose_FEC')
-#     results_metric_5 = np.load('TAL_SA_glucose_AOC')
-#     results_metric_6 = np.load('TAL_SA_glucose_TCI')
-#     inflection_product_yields = np.load('TAL_SA_glucose_inflection_product_yields')
+#     results_metric_1 = np.load('TAL_SA_cornstover_MPSP')
+#     results_metric_2 = np.load('TAL_SA_cornstover_GWP')
+#     results_metric_3 = np.load('TAL_SA_cornstover_FEC')
+#     results_metric_5 = np.load('TAL_SA_cornstover_AOC')
+#     results_metric_6 = np.load('TAL_SA_cornstover_TCI')
+#     inflection_product_yields = np.load('TAL_SA_cornstover_inflection_product_yields')
             
 
 # #%% 3-HP TRY

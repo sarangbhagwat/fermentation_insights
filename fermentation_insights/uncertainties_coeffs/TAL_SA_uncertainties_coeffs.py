@@ -355,8 +355,8 @@ for i in range(N_simulations_per_TRY_combo):
             MPSPs.append(results_dict['Uncertainty']['MPSP'][mode][i])
             yts_fit.append((y,t))
         except: # error, likely infeasible region'
-            # print(f'Error for {yt}.')
-            pass
+            print(f'Error for {yt}.')
+            # pass
         
     try:
         yts_fit = np.array(yts_fit)
@@ -367,7 +367,7 @@ for i in range(N_simulations_per_TRY_combo):
                                                                             )
         print(get_Rsq(np.array(MPSPs), 
                       np.array([shifted_rect_hyperbola_two_param(y, t, a_fit, b_fit, c_fit, d_fit) 
-                                  for y,t in yts])))
+                                  for y,t in yts_fit])))
         ap.append(a_fit)
         bp.append(b_fit)
         cp.append(c_fit)

@@ -62,7 +62,7 @@ positive_edge_attributes = {'color': dark_color['pink']}
 negative_edge_attributes = {'color': dark_color['blue']}
 
 ambiguous_direction_edge_attributes = {'arrowhead':'None', 'color': dark_color['gray'], 'style':'dotted'}
-ambiguous_color_edge_attributes = {'color': dark_color['gray'], 'style':'dotted'}
+ambiguous_color_edge_attributes = {'color': dark_color['gray'], 'style':'dashed'}
 
 # Clusters
 show_cluster_labels = True
@@ -78,12 +78,14 @@ show_cluster_labels = True
 # chp_linecolor = 'transparent'
 # systemlevel_linecolor = 'transparent'
 
+feedstock_fillcolor = 'transparent'
 fermentation_fillcolor = 'transparent'
 separation_fillcolor = 'transparent'
 wwrr_fillcolor = 'transparent'
 chp_fillcolor = 'transparent'
 systemlevel_fillcolor = 'transparent'
 
+feedstock_linecolor = dark_color['gray']
 fermentation_linecolor = dark_color['gray']
 separation_linecolor = dark_color['gray']
 wwrr_linecolor = dark_color['gray']
@@ -93,6 +95,7 @@ systemlevel_linecolor = 'transparent'
 cluster_label = defaultdict(lambda: None)
 if show_cluster_labels:
     cluster_label.update({
+        'feedstock': 'feedstock acquisition, pretreatment, saccharification',
         'fermentation': 'fermentation',
         'separation': 'separation',
         'wwrr': 'WWRR',
@@ -160,9 +163,35 @@ G = Digraph(graph_attr={
                        'fontname': overall_fontname,
                        'fontsize': str(overall_fontsize),
                        'fillcolor':'transparent', 
-                       'style':'filled'})
+                       'style':'filled',
+                       # 'newrank': 'True',
+                       })
 
 #%% Nodes
+# Feedstock nodes
+with G.subgraph(name='cluster feedstock', 
+                node_attr={'shape': overall_nodeshape, 
+                           },
+                graph_attr={'fillcolor': feedstock_fillcolor, 
+                            'color': feedstock_linecolor,
+                            'style': 'filled',
+                            'label': cluster_label['feedstock'],
+                            'fontname': cluster_fontname,
+                            # 'rank': 'same',
+                            }) as c:
+    indep_vars = ['composition',
+             'capacity',
+             'price',]
+    
+    dep_vars = []
+    
+    for i in indep_vars: c.node(i, fontname=indep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i], shape=indep_nodeshape)
+    for i in dep_vars: c.node(i, fontname=dep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i],)
+    
+    c.node('fs-m', 'material & energy costs', fontname=dep_fontname, fillcolor=box_color['f-m'], style='filled', fontcolor=text_color['f-m'],)
+    c.node('fs-e', 'equipment purchase costs', fontname=dep_fontname, fillcolor=box_color['f-e'], style='filled', fontcolor=text_color['f-e'],)
+    
+    
 # Fermentation nodes
 with G.subgraph(name='cluster fermentation', 
                 node_attr={'shape': overall_nodeshape, 
@@ -172,7 +201,7 @@ with G.subgraph(name='cluster fermentation',
                             'style': 'filled',
                             'label': cluster_label['fermentation'],
                             'fontname': cluster_fontname,
-                            # 'label': 'fermentation',
+                            # 'rank': 'same',
                             }) as c:
     indep_vars = ['product yield',
              'product titer',
@@ -186,7 +215,7 @@ with G.subgraph(name='cluster fermentation',
     for i in indep_vars: c.node(i, fontname=indep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i], shape=indep_nodeshape)
     for i in dep_vars: c.node(i, fontname=dep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i],)
     
-    c.node('f-m', 'material & energy inputs', fontname=dep_fontname, fillcolor=box_color['f-m'], style='filled', fontcolor=text_color['f-m'],)
+    c.node('f-m', 'material & energy costs', fontname=dep_fontname, fillcolor=box_color['f-m'], style='filled', fontcolor=text_color['f-m'],)
     c.node('f-e', 'equipment purchase costs', fontname=dep_fontname, fillcolor=box_color['f-e'], style='filled', fontcolor=text_color['f-e'],)
     
 # Separation nodes
@@ -196,7 +225,9 @@ with G.subgraph(name='cluster separation',
                             'color': separation_linecolor,
                             'style': 'filled',
                             'label': cluster_label['separation'],
-                            'fontname': cluster_fontname,}) as c:
+                            'fontname': cluster_fontname,
+                            # 'rank': 'same',
+                            }) as c:
     indep_vars = []
     dep_vars = ['water to remove',
                 'organic impurities to remove',
@@ -205,7 +236,7 @@ with G.subgraph(name='cluster separation',
     for i in indep_vars: c.node(i, fontname=indep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i],)
     for i in dep_vars: c.node(i, fontname=dep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i],)
     
-    c.node('s-m', 'material & energy inputs', fontname=dep_fontname, fillcolor=box_color['s-m'], style='filled', fontcolor=text_color['s-m'],)
+    c.node('s-m', 'material & energy costs', fontname=dep_fontname, fillcolor=box_color['s-m'], style='filled', fontcolor=text_color['s-m'],)
     c.node('s-e', 'equipment purchase costs', fontname=dep_fontname, fillcolor=box_color['s-e'], style='filled', fontcolor=text_color['s-e'],)
     
 # WWRR nodes
@@ -215,7 +246,9 @@ with G.subgraph(name='cluster wastewater resource recovery',
                             'color': wwrr_linecolor,
                             'style': 'filled',
                             'label': cluster_label['wwrr'],
-                            'fontname': cluster_fontname,}) as c:
+                            'fontname': cluster_fontname,
+                            # 'rank': 'same',
+                            }) as c:
     indep_vars = []
     dep_vars = ['water in waste streams',
                 'recoverable energy in waste streams',
@@ -224,7 +257,7 @@ with G.subgraph(name='cluster wastewater resource recovery',
     for i in indep_vars: c.node(i, fontname=indep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i],)
     for i in dep_vars: c.node(i, fontname=dep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i],)
 
-    c.node('w-m', 'material & energy inputs', fontname=dep_fontname, fillcolor=box_color['w-m'], style='filled', fontcolor=text_color['w-m'],)
+    c.node('w-m', 'material & energy costs', fontname=dep_fontname, fillcolor=box_color['w-m'], style='filled', fontcolor=text_color['w-m'],)
     c.node('w-e', 'equipment purchase costs', fontname=dep_fontname, fillcolor=box_color['w-e'], style='filled', fontcolor=text_color['w-e'],)
     
 # CHP nodes
@@ -234,14 +267,16 @@ with G.subgraph(name='cluster combined heat & power generation',
                             'color': chp_linecolor,
                             'style': 'filled',
                             'label': cluster_label['chp'],
-                            'fontname': cluster_fontname,}) as c:
+                            'fontname': cluster_fontname,
+                            # 'rank': 'same',
+                            }) as c:
     indep_vars = []
     dep_vars = ['heating, cooling, and power utilities produced',]
     
     for i in indep_vars: c.node(i, fontname=indep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i],)
     for i in dep_vars: c.node(i, fontname=dep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i],)
     
-    c.node('c-m', 'material & energy inputs', fontname=dep_fontname, fillcolor=box_color['c-m'], style='filled', fontcolor=text_color['c-m'],)
+    c.node('c-m', 'material & energy costs', fontname=dep_fontname, fillcolor=box_color['c-m'], style='filled', fontcolor=text_color['c-m'],)
     c.node('c-e', 'equipment purchase costs', fontname=dep_fontname, fillcolor=box_color['c-e'], style='filled', fontcolor=text_color['c-e'],)
     
 # System-level nodes
@@ -251,7 +286,9 @@ with G.subgraph(name='cluster systemlevel',
                             'color': systemlevel_linecolor,
                             'style': 'filled',
                             'label': cluster_label['system-level'],
-                            'fontname': cluster_fontname,},
+                            'fontname': cluster_fontname,
+                            # 'rank': 'same',
+                            },
                 ) as c:
     indep_vars = []
     dep_vars = ['system cost & environmental impacts',
@@ -266,6 +303,11 @@ with G.subgraph(name='cluster systemlevel',
 
 #%% Edges
 positive_edges, negative_edges = [], []
+
+# Feedstock origin edges
+positive_edges.append(('price', 'fs-m'))
+positive_edges.append(('capacity', 'fs-m'))
+positive_edges.append(('capacity', 'fs-e'))
 
 # Fermentation origin edges
 positive_edges.append(('product yield', 'dilution water'))
@@ -322,16 +364,24 @@ for i in positive_edges: G.edge(i[0], i[1], _attributes=positive_edge_attributes
 for i in negative_edges: G.edge(i[0], i[1], _attributes=negative_edge_attributes)
 
 # Connect (Process-level inputs & eq costs) -> (System-level inputs & eq costs) edges
-for i in list(itertools.product(['f-', 's-', 'w-', 'c-'], ['m','e'])):
+for i in list(itertools.product(['fs-', 'f-', 's-', 'w-', 'c-'], ['m','e'])):
     G.edge(i[0]+i[1], 'system cost & environmental impacts', _attributes=positive_edge_attributes)
     
 # Connect ambiguous direction and color edges
 ambiguous_direction_edges = [
+    
     ('product yield', 'coproduct yield'),
     ('product yield', 'cell mass yield'),
     ('coproduct yield', 'cell mass yield'),
     ]
 ambiguous_color_edges = [
+    ('composition', 'fs-m'),
+    ('composition', 'fs-e'),
+    ('composition', 'recoverable energy in waste streams'),
+    ('composition', 'dilution water'),
+    ('capacity', 'recoverable energy in waste streams'),
+    ('composition', 'organic impurities to remove'),
+    ('capacity', 'organic impurities to remove'),
     ('product titer', 'product recovery'),
     ('product yield', 'product recovery'),
     ('coproduct yield', 'product recovery'),
