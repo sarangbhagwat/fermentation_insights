@@ -54,10 +54,10 @@ inflection_product_yields = []
 #%% Load TRY
 os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 
-product = product_ID = 'HP_hexanol'
+product = product_ID = 'TAL'
 # additional_tag = '0.5x_baselineprod'
 additional_tag = ''
-feedstock = 'corn'
+feedstock = 'sugarcane'
 
 filename = None
 if additional_tag: 
@@ -106,32 +106,32 @@ true_g = recovery
 # import os
 # product_ID = 'TAL'
 # if run_simulations:
-#     from biorefineries.TAL.analyses.fermentation.TRY_analysis_TAL_glucose import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
+#     from biorefineries.TAL.analyses.fermentation.TRY_analysis_TAL_sugarcane import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
 #                                                                 yields, titers, titers_mol_per_mol_total, productivities,\
 #                                                                 colors, CABBI_green_colormap, get_rounded_str,\
 #                                                                 R302, spec,\
 #                                                                 TAL_maximum_viable_market_range as market_range
     
-#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//TRY_results')
+#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 #     inflection_product_yields = np.array([1-R302.regular_microbe_conversion-R302.regular_citric_acid_conversion,
 #                                           1-R302.regular_microbe_conversion])
-#     np.save('TAL_glucose_MPSP', results_metric_1)
-#     np.save('TAL_glucose_GWP', results_metric_2)
-#     np.save('TAL_glucose_FEC', results_metric_3)
-#     np.save('TAL_glucose_AOC', results_metric_5)
-#     np.save('TAL_glucose_TCI', results_metric_6)
-#     np.save('TAL_glucose_recoveries', results_metric_4)
-#     np.save('TAL_glucose_inflection_product_yields', inflection_product_yields)
-#     np.save('TAL_glucose_yields', yields)
-#     np.save('TAL_glucose_titers', titers)
-#     np.save('TAL_glucose_productivities', productivities)
+#     np.save('TAL_sugarcane_MPSP', results_metric_1)
+#     np.save('TAL_sugarcane_GWP', results_metric_2)
+#     np.save('TAL_sugarcane_FEC', results_metric_3)
+#     np.save('TAL_sugarcane_AOC', results_metric_5)
+#     np.save('TAL_sugarcane_TCI', results_metric_6)
+#     np.save('TAL_sugarcane_recoveries', results_metric_4)
+#     np.save('TAL_sugarcane_inflection_product_yields', inflection_product_yields)
+#     np.save('TAL_sugarcane_yields', yields)
+#     np.save('TAL_sugarcane_titers', titers)
+#     np.save('TAL_sugarcane_productivities', productivities)
 # else:
-#     results_metric_1 = np.load('TAL_glucose_MPSP')
-#     results_metric_2 = np.load('TAL_glucose_GWP')
-#     results_metric_3 = np.load('TAL_glucose_FEC')
-#     results_metric_5 = np.load('TAL_glucose_AOC')
-#     results_metric_6 = np.load('TAL_glucose_TCI')
-#     inflection_product_yields = np.load('TAL_glucose_inflection_product_yields')
+#     results_metric_1 = np.load('TAL_sugarcane_MPSP')
+#     results_metric_2 = np.load('TAL_sugarcane_GWP')
+#     results_metric_3 = np.load('TAL_sugarcane_FEC')
+#     results_metric_5 = np.load('TAL_sugarcane_AOC')
+#     results_metric_6 = np.load('TAL_sugarcane_TCI')
+#     inflection_product_yields = np.load('TAL_sugarcane_inflection_product_yields')
             
 # #%% TAL TRY - SA
 # run_simulations = True
@@ -139,32 +139,32 @@ true_g = recovery
 # import os
 # product_ID = 'TAL-SA'
 # if run_simulations:
-#     from biorefineries.TAL.analyses.fermentation.TRY_analysis_SA_cornstover import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
+#     from biorefineries.TAL.analyses.fermentation.TRY_analysis_SA_sugarcane import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
 #                                                                 yields, titers, titers_mol_per_mol_total, productivities,\
 #                                                                 colors, CABBI_green_colormap, get_rounded_str,\
 #                                                                 R302, spec
                                                                 
     
-#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//TRY_results')
+#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 #     inflection_product_yields = np.array([1-R302.regular_microbe_conversion-R302.regular_citric_acid_conversion,
 #                                           1-R302.regular_microbe_conversion])
-#     np.save('TAL_SA_cornstover_MPSP', results_metric_1)
-#     np.save('TAL_SA_cornstover_GWP', results_metric_2)
-#     np.save('TAL_SA_cornstover_FEC', results_metric_3)
-#     np.save('TAL_SA_cornstover_AOC', results_metric_5)
-#     np.save('TAL_SA_cornstover_TCI', results_metric_6)
-#     np.save('TAL_SA_cornstover_recoveries', results_metric_4)
-#     np.save('TAL_SA_cornstover_inflection_product_yields', inflection_product_yields)
-#     np.save('TAL_SA_cornstover_yields', yields)
-#     np.save('TAL_SA_cornstover_titers', titers)
-#     np.save('TAL_SA_cornstover_productivities', productivities)
+#     np.save('TAL_SA_sugarcane_MPSP', results_metric_1)
+#     np.save('TAL_SA_sugarcane_GWP', results_metric_2)
+#     np.save('TAL_SA_sugarcane_FEC', results_metric_3)
+#     np.save('TAL_SA_sugarcane_AOC', results_metric_5)
+#     np.save('TAL_SA_sugarcane_TCI', results_metric_6)
+#     np.save('TAL_SA_sugarcane_recoveries', results_metric_4)
+#     np.save('TAL_SA_sugarcane_inflection_product_yields', inflection_product_yields)
+#     np.save('TAL_SA_sugarcane_yields', yields)
+#     np.save('TAL_SA_sugarcane_titers', titers)
+#     np.save('TAL_SA_sugarcane_productivities', productivities)
 # else:
-#     results_metric_1 = np.load('TAL_SA_cornstover_MPSP')
-#     results_metric_2 = np.load('TAL_SA_cornstover_GWP')
-#     results_metric_3 = np.load('TAL_SA_cornstover_FEC')
-#     results_metric_5 = np.load('TAL_SA_cornstover_AOC')
-#     results_metric_6 = np.load('TAL_SA_cornstover_TCI')
-#     inflection_product_yields = np.load('TAL_SA_cornstover_inflection_product_yields')
+#     results_metric_1 = np.load('TAL_SA_sugarcane_MPSP')
+#     results_metric_2 = np.load('TAL_SA_sugarcane_GWP')
+#     results_metric_3 = np.load('TAL_SA_sugarcane_FEC')
+#     results_metric_5 = np.load('TAL_SA_sugarcane_AOC')
+#     results_metric_6 = np.load('TAL_SA_sugarcane_TCI')
+#     inflection_product_yields = np.load('TAL_SA_sugarcane_inflection_product_yields')
             
 
 # #%% 3-HP TRY
@@ -178,7 +178,7 @@ true_g = recovery
 #                                                                 colors, CABBI_green_colormap, get_rounded_str,\
 #                                                                 AA_market_range as market_range,\
 #                                                                 R302, spec, get_AA_MPSP
-#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//TRY_results')
+#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 #     inflection_product_yields = np.array([1-R302.regular_biomass_conversion])
     
 #     np.save('HP_glucose_MPSP', results_metric_1)
@@ -210,7 +210,7 @@ true_g = recovery
 #                                                                 colors, CABBI_green_colormap, get_rounded_str,\
 #                                                                 AA_market_range as market_range,\
 #                                                                 R302, spec, get_AA_MPSP
-#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//TRY_results')
+#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 #     inflection_product_yields = np.array([1-R302.regular_biomass_conversion])
     
 #     np.save('HP_neutral_glucose_MPSP', results_metric_1)
@@ -231,40 +231,71 @@ true_g = recovery
 #     results_metric_5 = np.load('HP_neutral_glucose_TCI')
 #     inflection_product_yields = np.load('HP_neutral_glucose_inflection_product_yields')
 
-# #%% Succinic TRY
+# #%% 3-HP Hexanol TRY
 # run_simulations = True
 # import numpy as np
 # import os
-# product_ID = 'succinic'
+# product_ID = 'HP'
 # if run_simulations:
-#     from biorefineries.succinic.analyses.TRY_analysis_glucose import results_metric_1, results_metric_2, results_metric_3, results_metric_4,\
+#     from biorefineries.HP.analyses.fermentation.TRY_analysis_cornstover_Acrylic_hexanol import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
 #                                                                 yields, titers, productivities,\
-#                                                                 colors, CABBI_green_colormap,\
-#                                                                 R302, spec, get_product_MPSP
-#                                                                 # SA_price_range as market_range,\
-#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//TRY_results')
-#     market_range = []
-#     inflection_product_yields = np.array([1-0.186])
-#     np.save('succinic_glucose_MPSP', results_metric_1)
-#     np.save('succinic_glucose_GWP', results_metric_2)
-#     np.save('succinic_glucose_FEC', results_metric_3)
-#     # np.save('succinic_glucose_AOC', results_metric_4)
-#     # np.save('succinic_glucose_TCI', results_metric_5)
-#     np.save('succinic_glucose_recoveries', results_metric_4)
-#     np.save('succinic_glucose_inflection_product_yields', inflection_product_yields)
-#     np.save('succinic_glucose_yields', yields)
-#     np.save('succinic_glucose_titers', titers)
-#     np.save('succinic_glucose_productivities', productivities)
-# else:
-#     results_metric_1 = np.load('succinic_glucose_MPSP')
-#     results_metric_2 = np.load('succinic_glucose_GWP')
-#     results_metric_3 = np.load('succinic_glucose_FEC')
-#     recoveries = np.load('succinic_glucose_recoveries')
-#     # results_metric_4 = np.load('succinic_glucose_AOC')
-#     # results_metric_5 = np.load('succinic_glucose_TCI')
-#     inflection_product_yields = np.load('succinic_glucose_inflection_product_yields')
+#                                                                 colors, CABBI_green_colormap, get_rounded_str,\
+#                                                                 AA_market_range as market_range,\
+#                                                                 R302, spec, get_AA_MPSP
+#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+#     inflection_product_yields = np.array([1-R302.regular_biomass_conversion])
     
-# #%% Succinic Neutral TRY
+#     np.save('HP_hexanol_cornstover_MPSP', results_metric_1)
+#     np.save('HP_hexanol_cornstover_GWP', results_metric_2)
+#     np.save('HP_hexanol_cornstover_FEC', results_metric_3)
+#     np.save('HP_hexanol_cornstover_AOC', results_metric_4)
+#     np.save('HP_hexanol_cornstover_TCI', results_metric_5)
+#     np.save('HP_hexanol_cornstover_recoveries', results_metric_6)
+#     np.save('HP_hexanol_cornstover_inflection_product_yields', inflection_product_yields)
+#     np.save('HP_hexanol_cornstover_yields', yields)
+#     np.save('HP_hexanol_cornstover_titers', titers)
+#     np.save('HP_hexanol_cornstover_productivities', productivities)
+# else:
+#     results_metric_1 = np.load('HP_hexanol_cornstover_MPSP')
+#     results_metric_2 = np.load('HP_hexanol_cornstover_GWP')
+#     results_metric_3 = np.load('HP_hexanol_cornstover_FEC')
+#     results_metric_4 = np.load('HP_hexanol_cornstover_AOC')
+#     results_metric_5 = np.load('HP_hexanol_cornstover_TCI')
+#     inflection_product_yields = np.load('HP_hexanol_cornstover_inflection_product_yields')
+
+# #%% 3-HP Hexanol Neutral TRY
+# run_simulations = True
+# import numpy as np
+# import os
+# product_ID = 'HP'
+# if run_simulations:
+#     from biorefineries.HP.analyses.fermentation.TRY_analysis_cornstover_Acrylic_hexanol import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
+#                                                                 yields, titers, productivities,\
+#                                                                 colors, CABBI_green_colormap, get_rounded_str,\
+#                                                                 AA_market_range as market_range,\
+#                                                                 R302, spec, get_AA_MPSP
+#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+#     inflection_product_yields = np.array([1-R302.regular_biomass_conversion])
+    
+#     np.save('HP_neutral_hexanol_cornstover_MPSP', results_metric_1)
+#     np.save('HP_neutral_hexanol_cornstover_GWP', results_metric_2)
+#     np.save('HP_neutral_hexanol_cornstover_FEC', results_metric_3)
+#     np.save('HP_neutral_hexanol_cornstover_AOC', results_metric_4)
+#     np.save('HP_neutral_hexanol_cornstover_TCI', results_metric_5)
+#     np.save('HP_neutral_hexanol_cornstover_recoveries', results_metric_6)
+#     np.save('HP_neutral_hexanol_cornstover_inflection_product_yields', inflection_product_yields)
+#     np.save('HP_neutral_hexanol_cornstover_yields', yields)
+#     np.save('HP_neutral_hexanol_cornstover_titers', titers)
+#     np.save('HP_neutral_hexanol_cornstover_productivities', productivities)
+# else:
+#     results_metric_1 = np.load('HP_neutral_hexanol_cornstover_MPSP')
+#     results_metric_2 = np.load('HP_neutral_hexanol_cornstover_GWP')
+#     results_metric_3 = np.load('HP_neutral_hexanol_cornstover_FEC')
+#     results_metric_4 = np.load('HP_neutral_hexanol_cornstover_AOC')
+#     results_metric_5 = np.load('HP_neutral_hexanol_cornstover_TCI')
+#     inflection_product_yields = np.load('HP_neutral_hexanol_cornstover_inflection_product_yields')
+
+# #%% Succinic TRY
 # run_simulations = True
 # import numpy as np
 # import os
@@ -275,27 +306,60 @@ true_g = recovery
 #                                                                 colors, CABBI_green_colormap,\
 #                                                                 R302, spec, get_product_MPSP
 #                                                                 # SA_price_range as market_range,\
-#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//TRY_results')
+#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 #     market_range = []
 #     inflection_product_yields = np.array([1-0.186])
-#     np.save('succinic_neutral_cornstover_MPSP', results_metric_1)
-#     np.save('succinic_neutral_cornstover_GWP', results_metric_2)
-#     np.save('succinic_neutral_cornstover_FEC', results_metric_3)
-#     # np.save('succinic_neutral_cornstover_AOC', results_metric_4)
-#     # np.save('succinic_neutral_cornstover_TCI', results_metric_5)
-#     np.save('succinic_neutral_cornstover_recoveries', results_metric_4)
-#     np.save('succinic_neutral_cornstover_inflection_product_yields', inflection_product_yields)
-#     np.save('succinic_neutral_cornstover_yields', yields)
-#     np.save('succinic_neutral_cornstover_titers', titers)
-#     np.save('succinic_neutral_cornstover_productivities', productivities)
+#     np.save('succinic_cornstover_MPSP', results_metric_1)
+#     np.save('succinic_cornstover_GWP', results_metric_2)
+#     np.save('succinic_cornstover_FEC', results_metric_3)
+#     # np.save('succinic_cornstover_AOC', results_metric_4)
+#     # np.save('succinic_cornstover_TCI', results_metric_5)
+#     np.save('succinic_cornstover_recoveries', results_metric_4)
+#     np.save('succinic_cornstover_inflection_product_yields', inflection_product_yields)
+#     np.save('succinic_cornstover_yields', yields)
+#     np.save('succinic_cornstover_titers', titers)
+#     np.save('succinic_cornstover_productivities', productivities)
 # else:
-#     results_metric_1 = np.load('succinic_neutral_cornstover_MPSP')
-#     results_metric_2 = np.load('succinic_neutral_cornstover_GWP')
-#     results_metric_3 = np.load('succinic_neutral_cornstover_FEC')
-#     recoveries = np.load('succinic_neutral_cornstover_recoveries')
-#     # results_metric_4 = np.load('succinic_neutral_cornstover_AOC')
-#     # results_metric_5 = np.load('succinic_neutral_cornstover_TCI')
-#     inflection_product_yields = np.load('succinic_neutral_cornstover_inflection_product_yields')
+#     results_metric_1 = np.load('succinic_cornstover_MPSP')
+#     results_metric_2 = np.load('succinic_cornstover_GWP')
+#     results_metric_3 = np.load('succinic_cornstover_FEC')
+#     recoveries = np.load('succinic_cornstover_recoveries')
+#     # results_metric_4 = np.load('succinic_cornstover_AOC')
+#     # results_metric_5 = np.load('succinic_cornstover_TCI')
+#     inflection_product_yields = np.load('succinic_cornstover_inflection_product_yields')
+    
+# #%% Succinic Neutral TRY
+# run_simulations = True
+# import numpy as np
+# import os
+# product_ID = 'succinic'
+# if run_simulations:
+#     from biorefineries.succinic.analyses.TRY_analysis_glucose import results_metric_1, results_metric_2, results_metric_3, results_metric_4,\
+#                                                                 yields, titers, productivities,\
+#                                                                 colors, CABBI_green_colormap,\
+#                                                                 R302, spec, get_product_MPSP
+#                                                                 # SA_price_range as market_range,\
+#     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+#     market_range = []
+#     inflection_product_yields = np.array([1-0.186])
+#     np.save('succinic_neutral_glucose_MPSP', results_metric_1)
+#     np.save('succinic_neutral_glucose_GWP', results_metric_2)
+#     np.save('succinic_neutral_glucose_FEC', results_metric_3)
+#     # np.save('succinic_neutral_glucose_AOC', results_metric_4)
+#     # np.save('succinic_neutral_glucose_TCI', results_metric_5)
+#     np.save('succinic_neutral_glucose_recoveries', results_metric_4)
+#     np.save('succinic_neutral_glucose_inflection_product_yields', inflection_product_yields)
+#     np.save('succinic_neutral_glucose_yields', yields)
+#     np.save('succinic_neutral_glucose_titers', titers)
+#     np.save('succinic_neutral_glucose_productivities', productivities)
+# else:
+#     results_metric_1 = np.load('succinic_neutral_glucose_MPSP')
+#     results_metric_2 = np.load('succinic_neutral_glucose_GWP')
+#     results_metric_3 = np.load('succinic_neutral_glucose_FEC')
+#     recoveries = np.load('succinic_neutral_glucose_recoveries')
+#     # results_metric_4 = np.load('succinic_neutral_glucose_AOC')
+#     # results_metric_5 = np.load('succinic_neutral_glucose_TCI')
+#     inflection_product_yields = np.load('succinic_neutral_glucose_inflection_product_yields')
     
     
 # #%% 2,3-BDO TRY
@@ -318,7 +382,7 @@ true_g = recovery
 # #     # 1-0.055,
 # #     ]
 
-# # os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//TRY_results//BDO')
+# # os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results//BDO')
 
 # # arr = np.load('BDO_TRY_2021.11.9.18.57'+'.npy')
 
@@ -372,6 +436,10 @@ yield_upper_bound_index_for_eval = indices_inflection_product_yields[0]+1 # only
 indicator_array_for_eval = indicator_array[:, :, :yield_upper_bound_index_for_eval]
 yields_for_eval = yields[:yield_upper_bound_index_for_eval]
 titers_for_eval = titers
+
+np.save(f'{filename}_yields_for_eval.npy', yields_for_eval)
+np.save(f'{filename}_titers_for_eval.npy', titers_for_eval)
+np.save(f'{filename}_MPSP_for_eval.npy', indicator_array_for_eval)
 
 #%%
 def MPSP_f(y, t, avals, bvals, cvals, dvals): # use the coefficients solved for the corresponding yield regime
@@ -554,6 +622,8 @@ indicator_array_for_plot = np.array(indicator_array_for_plot)
 fit_indicator_array_for_plot = np.array(fit_indicator_array_for_plot)
 fit_indicator_array_for_plot[np.where(np.isnan(indicator_array_for_plot))] = np.nan
 
+np.save(f'{filename}_MPSP_fit.npy', fit_indicator_array_for_plot)
+
 if plot_MPSP_y_t:
     # Parameters analyzed across
 
@@ -629,7 +699,7 @@ if plot_MPSP_y_t:
     # MPSP_w_levels, MPSP_w_ticks, MPSP_cbar_ticks = get_contour_info_from_metric_data(results_metric_1, lb=3)
     MPSP_w_levels = np.arange(0., 8.25, 0.25)
     MPSP_cbar_ticks = np.arange(0., 8.1, 1.)
-    MPSP_w_ticks = [1., 1.5, 1.75, 2., 2.5,  3., 3.5, 4, 6, 8,]
+    MPSP_w_ticks = [1., 1.25, 1.5, 1.75, 2., 2.5,  3., 4, 5, 6, 8,]
     # MPSP_w_levels = np.arange(0., 15.5, 0.5)
     
     contourplots.animated_contourplot(w_data_vs_x_y_at_multiple_z=indicator_array_for_plot, # shape = z * x * y # values of the metric you want to plot on the color axis; e.g., MPSP

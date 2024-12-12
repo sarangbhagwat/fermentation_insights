@@ -17,8 +17,8 @@ os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation
 
 product = product_ID = 'HP'
 # additional_tag = '0.5x_baselineprod'
-additional_tag = ''
-feedstock = 'cornstover'
+additional_tag = 'neutral'
+feedstock = 'corn'
 
 filename = None
 if additional_tag: 
@@ -60,8 +60,8 @@ print('\n\nLoading system ...')
 from biorefineries import HP
 # from biorefineries.HP.models.glucose import models_glucose_improved_separations as models
 # from biorefineries.HP.models.sugarcane import models_sc_improved_separations as models
-# from biorefineries.HP.models.corn import models_corn_improved_separations as models
-from biorefineries.HP.models.cornstover import models_cs_improved_separations as models
+from biorefineries.HP.models.corn import models_corn_improved_separations as models
+# from biorefineries.HP.models.cornstover import models_cs_improved_separations as models
 
 print('\nLoaded system.')
 from datetime import datetime
@@ -93,7 +93,7 @@ u, s = f.unit, f.stream
 # %% 
 np.random.seed(4153)
 
-N_simulations_per_TRY_combo = 500 # 6000
+N_simulations_per_TRY_combo = 200 # 6000
 
 percentiles = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 1]
 
@@ -207,7 +207,7 @@ def model_specification():
             run_bugfix_barrage()
             
 model.specification = model_specification
-spec.reactor.neutralization = False
+spec.reactor.neutralization = True
 model.specification()
 print(get_adjusted_MSP())
 
@@ -305,9 +305,9 @@ for yt in yts:
         try:
             model.evaluate(notify=notification_interval, autoload=None, autosave=None, file=None)
         except Exception as e:
-            # print('\n'+str(e))
-            # breakpoint()
-            raise(e)
+            print('\n'+str(e))
+            breakpoint()
+            # raise(e)
             
         print('\nFinished evaluation.')
         

@@ -17,7 +17,7 @@ os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation
 
 product = product_ID = 'HP'
 # additional_tag = '0.5x_baselineprod'
-additional_tag = 'hexanol'
+additional_tag = 'neutral_hexanol'
 feedstock = 'cornstover'
 
 filename = None
@@ -93,7 +93,7 @@ u, s = f.unit, f.stream
 # %% 
 np.random.seed(4153)
 
-N_simulations_per_TRY_combo = 500 # 6000
+N_simulations_per_TRY_combo = 200 # 6000
 
 percentiles = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 1]
 
@@ -301,13 +301,14 @@ for yt in yts:
         
         # Final baseline simulation
         print('\n\nRe-simulating baseline ...')
-        
-        baseline_end = model.metrics_at_baseline()
-        # spec.set_production_capacity()
-        baseline_end = model.metrics_at_baseline()
-        
-        print(f"\nRe-simulated baseline. MPSP = ${round(get_adjusted_MSP(),2)}/kg.")
-        
+        try:
+            baseline_end = model.metrics_at_baseline()
+            # spec.set_production_capacity()
+            baseline_end = model.metrics_at_baseline()
+            
+            print(f"\nRe-simulated baseline. MPSP = ${round(get_adjusted_MSP(),2)}/kg.")
+        except:
+            print('\nFailed to re-simulate baseline.')
         
         table = model.table
         model.table = model.table.dropna()
@@ -336,8 +337,11 @@ for yt in yts:
         parameter_values = model.table.iloc[:, :index_parameters].copy()
         
         results_dict['Parameters'] = parameter_values
-    except:
+    except Exception as e:
         print(f'\n\nFailed evaluation at y = {y}, t = {t}.')
+        print(str(e))
+        # breakpoint()
+        
     # except Exception as e:
     #     print(str(e))
     #     errors_dict[(y,t)] = e
@@ -431,7 +435,18 @@ df_dict = {'a':a,
  'd':d,
  'g':g}
 
-df_dict.update({k:v for k,v in overall_results_dict[(y,t)]['Parameters'].items()})
+k_to_use = None
+for k,v in overall_results_dict.items():
+    for k2, v2 in v['Parameters'].items():
+        if len(v2) == N_simulations_per_TRY_combo:
+            k_to_use = k
+            break
+    if k_to_use is not None:
+        break
+
+if k_to_use is None: print(f'No y,t pair had {N_simulations_per_TRY_combo} successful simulations.')
+
+df_dict.update({k:v for k,v in overall_results_dict[k_to_use]['Parameters'].items()})
 df = pd.DataFrame.from_dict(df_dict)
 spearman = df.corr(method='spearman')
 
