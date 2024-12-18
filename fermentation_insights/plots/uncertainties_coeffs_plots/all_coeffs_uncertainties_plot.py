@@ -16,7 +16,7 @@ from  matplotlib.colors import LinearSegmentedColormap
 #%%
 
 #%%
-os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+os.chdir('C://Users//saran//Documents//Academia//pypi_repositories//fermentation_insights//fermentation_insights//TRY_results')
 
 product_IDs = [
                'TAL', 'TAL_SA', 
@@ -101,18 +101,19 @@ contourplots.box_and_whiskers_plot(uncertainty_data=a_uncertainty,
 
 #%% b
 
-b_unc_rearr, b_base_rearr = [], []
-done_ns = []
-for f in feedstock_IDs:
-    for n in all_filenames:
-        if f in n and not f+'stover' in n and not n in done_ns:
-            print(n)
-            b_unc_rearr.append(coeffs_uncertainty[n]['b'])
-            b_base_rearr.append(coeffs_baseline[n]['b'])
-            done_ns.append(n)
+# b_unc_rearr, b_base_rearr = [], []
+# done_ns = []
+# for f in feedstock_IDs:
+#     for n in all_filenames:
+#         if f in n and not f+'stover' in n and not n in done_ns:
+#             print(n)
+#             b_unc_rearr.append(coeffs_uncertainty[n]['b'])
+#             b_base_rearr.append(coeffs_baseline[n]['b'])
+#             done_ns.append(n)
             
-# a_uncertainty = [coeffs_uncertainty[filename]['b'] for filename in all_filenames]
-# a_baseline = [coeffs_baseline[filename]['b'] for filename in all_filenames]
+b_uncertainty = b_unc_rearr = [coeffs_uncertainty[filename]['b'] for filename in all_filenames]
+b_baseline = b_base_rearr = [coeffs_baseline[filename]['b'] for filename in all_filenames]
+done_ns = all_filenames
 
 contourplots.box_and_whiskers_plot(uncertainty_data=b_unc_rearr, 
                           baseline_values=b_base_rearr,
