@@ -158,31 +158,31 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='', plot_MPSP_y_t=False,
     #     results_metric_6 = np.load('TAL_cornstover_TCI')
     #     inflection_product_yields = np.load('TAL_cornstover_inflection_product_yields')
                 
-    # #%% TAL TRY - SA
-    # run_simulations = True
-    # import numpy as np
-    # import os
-    # product_ID = 'TAL-SA'
-    # if run_simulations:
-    #     from biorefineries.TAL.analyses.fermentation.TRY_analysis_SA_sugarcane import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
-    #                                                                 yields, titers, titers_mol_per_mol_total, productivities,\
-    #                                                                 colors, CABBI_green_colormap, get_rounded_str,\
-    #                                                                 R302, spec
+    #%% TAL TRY - SA
+    run_simulations = True
+    import numpy as np
+    import os
+    product_ID = 'TAL-SA'
+    if run_simulations:
+        from biorefineries.TAL.analyses.fermentation.TRY_analysis_SA_sugarcane import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
+                                                                    yields, titers, titers_mol_per_mol_total, productivities,\
+                                                                    colors, CABBI_green_colormap, get_rounded_str,\
+                                                                    R302, spec
                                                                     
         
-    #     os.chdir('C://Users//saran//Documents//Academia//pypi_repositories//fermentation_insights//fermentation_insights//TRY_results')
-    #     inflection_product_yields = np.array([1-R302.regular_microbe_conversion-R302.regular_citric_acid_conversion,
-    #                                           1-R302.regular_microbe_conversion])
-    #     np.save('TAL_SA_sugarcane_MPSP', results_metric_1)
-    #     np.save('TAL_SA_sugarcane_GWP', results_metric_2)
-    #     np.save('TAL_SA_sugarcane_FEC', results_metric_3)
-    #     np.save('TAL_SA_sugarcane_AOC', results_metric_5)
-    #     np.save('TAL_SA_sugarcane_TCI', results_metric_6)
-    #     np.save('TAL_SA_sugarcane_recoveries', results_metric_4)
-    #     np.save('TAL_SA_sugarcane_inflection_product_yields', inflection_product_yields)
-    #     np.save('TAL_SA_sugarcane_yields', yields)
-    #     np.save('TAL_SA_sugarcane_titers', titers)
-    #     np.save('TAL_SA_sugarcane_productivities', productivities)
+        os.chdir('C://Users//saran//Documents//Academia//pypi_repositories//fermentation_insights//fermentation_insights//TRY_results')
+        inflection_product_yields = np.array([1-R302.regular_microbe_conversion-R302.regular_citric_acid_conversion,
+                                              1-R302.regular_microbe_conversion])
+        np.save('TAL_SA_sugarcane_MPSP', results_metric_1)
+        np.save('TAL_SA_sugarcane_GWP', results_metric_2)
+        np.save('TAL_SA_sugarcane_FEC', results_metric_3)
+        np.save('TAL_SA_sugarcane_AOC', results_metric_5)
+        np.save('TAL_SA_sugarcane_TCI', results_metric_6)
+        np.save('TAL_SA_sugarcane_recoveries', results_metric_4)
+        np.save('TAL_SA_sugarcane_inflection_product_yields', inflection_product_yields)
+        np.save('TAL_SA_sugarcane_yields', yields)
+        np.save('TAL_SA_sugarcane_titers', titers)
+        np.save('TAL_SA_sugarcane_productivities', productivities)
     # else:
     #     results_metric_1 = np.load('TAL_SA_sugarcane_MPSP')
     #     results_metric_2 = np.load('TAL_SA_sugarcane_GWP')

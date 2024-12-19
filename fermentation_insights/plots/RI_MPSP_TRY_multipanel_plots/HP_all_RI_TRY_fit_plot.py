@@ -14,19 +14,29 @@ from  matplotlib.colors import LinearSegmentedColormap
 
 #%%
 
-def CABBI_green_colormap(N_levels=90):
+def GG_orange_white_blue_colormap(N_levels=90):
     """
     Return a matplotlib.colors.LinearSegmentedColormap object
     that serves as CABBI's green colormap theme for contour plots.
 
     """
-    CABBI_colors = (colors.CABBI_orange.RGBn,
-                    colors.CABBI_yellow.RGBn,
+    # CABBI_colors = (colors.CABBI_orange.RGBn,
+    #                 colors.CABBI_yellow.RGBn,
 
-                    colors.CABBI_green.RGBn,
-                    # colors.CABBI_teal_green.shade(50).RGBn,
-                    colors.grey_dark.RGBn)
-    return LinearSegmentedColormap.from_list('CABBI', CABBI_colors, N_levels)
+    #                 colors.CABBI_green.RGBn,
+    #                 # colors.CABBI_teal_green.shade(50).RGBn,
+    #                 colors.grey_dark.RGBn)
+    cmap_colors = np.array((
+                   (99, 198, 206), # GG blue
+                   (138, 227, 235),# lighter GG blue
+                   
+                   (255, 255, 255), # white
+                   
+                   (250, 161, 82), # lighter GG orange
+                   (229, 135, 53), # GG orange
+                   ))/255
+    
+    return LinearSegmentedColormap.from_list('CABBI', cmap_colors, N_levels)
 
 #%%
 os.chdir('C://Users//saran//Documents//Academia//pypi_repositories//fermentation_insights//fermentation_insights//TRY_results')
@@ -266,7 +276,7 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
                                         w_units=rel_impact_units,
                                         # fmt_clabel=lambda cvalue: r"$\mathrm{\$}$"+" {:.1f} ".format(cvalue)+r"$\cdot\mathrm{kg}^{-1}$", # format of contour labels
                                         fmt_clabel = lambda cvalue: get_rounded_str(cvalue, 2),
-                                        cmap=CABBI_green_colormap(), # can use 'viridis' or other default matplotlib colormaps
+                                        cmap=GG_orange_white_blue_colormap(), # can use 'viridis' or other default matplotlib colormaps
                                         cmap_over_color = colors.grey_dark.shade(8).RGBn,
                                         extend_cmap='both',
                                         cbar_ticks=rel_impact_cbar_ticks,

@@ -26,8 +26,8 @@ product_IDs = [
 feedstock_IDs = [
                  'glucose', 
                  'sugarcane', 
-                 'corn', 
                  'cornstover',
+                 'corn', 
                  ]
 
 all_filenames = []
@@ -60,6 +60,17 @@ baseline_marker_sizes=[2]*len(all_filenames)
 # baseline_marker_colors = ['w', '#F8858A']*4
 baseline_marker_colors = ['w']*len(all_filenames)
 
+background_fill_colors = ["#60c1cf"]*4+["#79bf82"]*4+["#90918e"]*4+["#ED586F"]*4+["#a280b9"]*4+["#f98f60"]*4
+background_fill_alphas = [0.5]*24
+
+ylabel_fontsize = 19
+yticks_fontsize = 19
+                         
+# x_tick_labels = all_filenames 
+x_tick_labels = [""]*len(all_filenames)
+
+fig_height = 4
+fig_width = 9
 
 #%% a
 
@@ -86,18 +97,24 @@ contourplots.box_and_whiskers_plot(uncertainty_data=a_uncertainty,
                           # values_for_comparison=[biobased_price],
                           n_minor_ticks=3,
                           show_x_ticks=True,
-                          x_tick_labels=all_filenames,
+                          x_tick_labels=x_tick_labels,
                           x_tick_wrap_width=9,
                           y_label=r"$\bfa$",
                           y_units=a_units,
-                          y_ticks=np.arange(-0.5, 4.01, 0.5),
+                          # y_ticks=[f"{i:.1f}" for i in np.arange(-1, 4.01, 1)],
+                          y_ticks=np.arange(-1, 4.01, 1),
                           save_file=True,
-                          fig_height=8,
-                          fig_width = 12,
+                          fig_height=fig_height,
+                          fig_width=fig_width,
                           box_width=0.45,
                           filename='a_uncertainties',
                           dpi=600,
-                          rotate_xticks=90.,)
+                          rotate_xticks=90.,
+                          background_fill_colors=background_fill_colors,
+                          background_fill_alphas=background_fill_alphas,
+                          ylabel_fontsize=ylabel_fontsize,
+                          yticks_fontsize=yticks_fontsize,
+                          )
 
 #%% b
 
@@ -135,18 +152,26 @@ contourplots.box_and_whiskers_plot(uncertainty_data=b_unc_rearr,
                           # values_for_comparison=[biobased_price],
                           n_minor_ticks=3,
                           show_x_ticks=True,
-                          x_tick_labels=done_ns,
+                          
+                          # x_tick_labels=done_ns,
+                          x_tick_labels=x_tick_labels,
+                          
                           x_tick_wrap_width=9,
                           y_label=r"$\bfb$",
                           y_units=b_units,
+                          # y_ticks=[f"{i:.2f}" for i in np.arange(0, 0.51, 0.1)],
                           y_ticks=np.arange(0, 0.51, 0.1),
                           save_file=True,
-                          fig_height=8,
-                          fig_width = 12,
+                          fig_height=fig_height,
+                          fig_width=fig_width,
                           box_width=0.45,
                           filename='b_uncertainties',
                           dpi=600,
-                          rotate_xticks=90.,)
+                          rotate_xticks=90.,
+                          background_fill_colors=background_fill_colors,
+                          background_fill_alphas=background_fill_alphas,
+                          ylabel_fontsize=ylabel_fontsize,
+                          yticks_fontsize=yticks_fontsize,)
 
 #%% c
 
@@ -173,18 +198,22 @@ contourplots.box_and_whiskers_plot(uncertainty_data=a_uncertainty,
                           # values_for_comparison=[biobased_price],
                           n_minor_ticks=3,
                           show_x_ticks=True,
-                          x_tick_labels=all_filenames,
+                          x_tick_labels=x_tick_labels,
                           x_tick_wrap_width=9,
                           y_label=r"$\bfc$",
                           y_units=c_units,
                           y_ticks=np.arange(0, 51, 10),
                           save_file=True,
-                          fig_height=8,
-                          fig_width = 12,
+                          fig_height=fig_height,
+                          fig_width=fig_width,
                           box_width=0.45,
                           filename='c_uncertainties',
                           dpi=600,
-                          rotate_xticks=90.,)
+                          rotate_xticks=90.,
+                          background_fill_colors=background_fill_colors,
+                          background_fill_alphas=background_fill_alphas,
+                          ylabel_fontsize=ylabel_fontsize,
+                          yticks_fontsize=yticks_fontsize,)
 
 #%% d
 
@@ -211,15 +240,19 @@ contourplots.box_and_whiskers_plot(uncertainty_data=a_uncertainty,
                           # values_for_comparison=[biobased_price],
                           n_minor_ticks=3,
                           show_x_ticks=True,
-                          x_tick_labels=all_filenames,
+                          x_tick_labels=x_tick_labels,
                           x_tick_wrap_width=9,
                           y_label=r"$\bfd$",
                           y_units=d_units,
-                          y_ticks=np.arange(-2, 2, 0.5),
+                          y_ticks=np.arange(-2, 2.01, 1),
                           save_file=True,
-                          fig_height=8,
-                          fig_width = 12,
+                          fig_height=fig_height,
+                          fig_width=fig_width,
                           box_width=0.45,
                           filename='d_uncertainties',
                           dpi=600,
-                          rotate_xticks=90.,)
+                          rotate_xticks=90.,
+                          background_fill_colors=background_fill_colors,
+                          background_fill_alphas=background_fill_alphas,
+                          ylabel_fontsize=ylabel_fontsize,
+                          yticks_fontsize=yticks_fontsize,)

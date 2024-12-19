@@ -14,19 +14,29 @@ from  matplotlib.colors import LinearSegmentedColormap
 
 #%%
 
-def CABBI_green_colormap(N_levels=90):
+def GG_orange_white_blue_colormap(N_levels=90):
     """
     Return a matplotlib.colors.LinearSegmentedColormap object
     that serves as CABBI's green colormap theme for contour plots.
 
     """
-    CABBI_colors = (colors.CABBI_orange.RGBn,
-                    colors.CABBI_yellow.RGBn,
+    # CABBI_colors = (colors.CABBI_orange.RGBn,
+    #                 colors.CABBI_yellow.RGBn,
 
-                    colors.CABBI_green.RGBn,
-                    # colors.CABBI_teal_green.shade(50).RGBn,
-                    colors.grey_dark.RGBn)
-    return LinearSegmentedColormap.from_list('CABBI', CABBI_colors, N_levels)
+    #                 colors.CABBI_green.RGBn,
+    #                 # colors.CABBI_teal_green.shade(50).RGBn,
+    #                 colors.grey_dark.RGBn)
+    cmap_colors = np.array((
+                   (99, 198, 206), # GG blue
+                   (138, 227, 235),# lighter GG blue
+                   
+                   (255, 255, 255), # white
+                   
+                   (250, 161, 82), # lighter GG orange
+                   (229, 135, 53), # GG orange
+                   ))/255
+    
+    return LinearSegmentedColormap.from_list('CABBI', cmap_colors, N_levels)
 
 #%%
 os.chdir('C://Users//saran//Documents//Academia//pypi_repositories//fermentation_insights//fermentation_insights//TRY_results')
@@ -268,7 +278,7 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
                                         w_units=rel_impact_units,
                                         # fmt_clabel=lambda cvalue: r"$\mathrm{\$}$"+" {:.1f} ".format(cvalue)+r"$\cdot\mathrm{kg}^{-1}$", # format of contour labels
                                         fmt_clabel = lambda cvalue: get_rounded_str(cvalue, 2),
-                                        cmap=CABBI_green_colormap(), # can use 'viridis' or other default matplotlib colormaps
+                                        cmap=GG_orange_white_blue_colormap(), # can use 'viridis' or other default matplotlib colormaps
                                         cmap_over_color = colors.grey_dark.shade(8).RGBn,
                                         extend_cmap='neither',
                                         cbar_ticks=rel_impact_cbar_ticks,
@@ -347,6 +357,10 @@ plt.savefig(f'TAL_all_RI_MPSP_TRY_fit.png',
 #%% Plot for colorbar
 
 
+default_fontsize = 11.
+clabel_fontsize = 9.5
+axis_tick_fontsize = 9.5
+
 rel_impact_w_levels = np.arange(-3, 3.01, 0.25)
 rel_impact_cbar_ticks = np.arange(-3, 3.01, 1)
 rel_impact_w_ticks = [-1, 0, 1, 1.5, 2]
@@ -372,9 +386,9 @@ contourplots.animated_contourplot(w_data_vs_x_y_at_multiple_z=RI_array, # shape 
                                 w_units=rel_impact_units,
                                 # fmt_clabel=lambda cvalue: r"$\mathrm{\$}$"+" {:.1f} ".format(cvalue)+r"$\cdot\mathrm{kg}^{-1}$", # format of contour labels
                                 fmt_clabel = lambda cvalue: get_rounded_str(cvalue, 3),
-                                cmap=CABBI_green_colormap(), # can use 'viridis' or other default matplotlib colormaps
+                                cmap=GG_orange_white_blue_colormap(), # can use 'viridis' or other default matplotlib colormaps
                                 cmap_over_color = colors.grey_dark.shade(8).RGBn,
-                                extend_cmap='max',
+                                extend_cmap='neither',
                                 cbar_ticks=rel_impact_cbar_ticks,
                                 z_marker_color='g', # default matplotlib color names
                                 fps=fps, # animation frames (z values traversed) per second
