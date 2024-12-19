@@ -16,7 +16,7 @@ from  matplotlib.colors import LinearSegmentedColormap
 #%%
 
 #%%
-os.chdir('C://Users//saran//Documents//Academia//pypi_repositories//fermentation_insights//fermentation_insights//TRY_results')
+os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 
 product_IDs = [
                'TAL', 'TAL_SA', 

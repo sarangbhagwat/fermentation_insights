@@ -21,6 +21,11 @@ refinery = {i: {} for i in feedstock_IDs}
 for p,f in list(itertools.product(product_IDs, feedstock_IDs)):
     all_filenames.append(p+'_'+f+'_coefficients'+'.npy')
     refinery[f][p] = np.load(all_filenames[-1])
+    
+for filename in [f'TAL_SA_{str(i)}x_blp_glucose' for i in [0.1, 0.5, 2, 10]]:
+    all_filenames.append(filename+'_coefficients'+'.npy')
+    # refinery[f][p] = np.load(all_filenames[-1])
+    
 coeff = {i: np.load(i) for i in all_filenames}
 
 # a*g, b*g, c*g, d*g, g, Rsq for indicators_eval
