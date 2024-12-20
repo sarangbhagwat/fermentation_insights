@@ -12,6 +12,7 @@ import contourplots
 import itertools
 from biosteam.utils import  colors
 from  matplotlib.colors import LinearSegmentedColormap
+import pandas as pd
 
 #%%
 
@@ -45,7 +46,160 @@ for p,f in list(itertools.product(product_IDs, feedstock_IDs)):
     cb['a'], cb['b'], cb['c'], cb['d'], cb['g'], cb['Rsq'] =\
         np.load(f'{filename}_coefficients.npy')
 
-#%%
+#%% Save baselines and percentiles
+coefficients = ['a', 'b', 'c', 'd', 'g']
+for cf in coefficients:
+    baselines_percentiles = {
+                             'product':[],
+                             'feedstock':[],
+                             'baseline':[],
+                             '5th':[], 
+                             '50th':[], 
+                             '95th':[]}
+    
+    for i, (p, f) in zip(all_filenames, 
+                         list(itertools.product(product_IDs, feedstock_IDs))):
+        unc = coeffs_uncertainty[i][cf]
+        bl = coeffs_baseline[i][cf]
+        baselines_percentiles['product'].append(p)
+        baselines_percentiles['feedstock'].append(f)
+        baselines_percentiles['baseline'].append(bl)
+        baselines_percentiles['5th'].append(np.percentile(unc, 5))
+        baselines_percentiles['50th'].append(np.percentile(unc, 50))
+        baselines_percentiles['95th'].append(np.percentile(unc, 95))
+    baselines_percentiles_df = pd.DataFrame.from_dict(baselines_percentiles)
+    baselines_percentiles_df.to_excel(cf+'_coeff_baselines_percentiles.xlsx')
+
+#%% Save Spearman's rho for coeffs w.r.t. uncertain parameters
+for i in all_filenames:
+    df_dict = None
+    with open(i+'_dfd_coeffs_uncertainty.pkl', 'rb') as f:
+        df_dict = pickle.load(f)
+    df = pd.DataFrame.from_dict(df_dict)
+    spearman = df.corr(method='spearman')
+    spearman.to_excel('spearman_'+i+'.xlsx')
+
+#%% Get percentiles of combined uncertainty distributions of b for biorefineries with the same feedstocks
+uncs_b_feedstock = {f:[] for f in feedstock_IDs}
+for i in all_filenames:
+    for f in feedstock_IDs:
+        if f in i and not f+'stover' in i:
+            uncs_b_feedstock[f] += list(coeffs_uncertainty[i]['b'])
+
+for k in list(uncs_b_feedstock.keys()):
+    uncs_b_feedstock[k] = np.array(uncs_b_feedstock[k])
+
+for k, v in uncs_b_feedstock.items():
+    print('\n\n'+k)
+    print('5th perc: ', np.percentile(v, 5))
+    print('50th perc: ', np.percentile(v, 50))
+    print('95th perc: ', np.percentile(v, 95))
+
+#%% Get percentiles of combined uncertainty distributions of d for all biorefineries
+uncs_d_ = []
+filenames_to_exclude = ['HP_hexanol_corn', 
+                        'HP_neutral_hexanol_sugarcane', 
+                        'HP_neutral_hexanol_cornstover',
+                        'HP_neutral_hexanol_corn',]
+for i in all_filenames:
+    if not i in filenames_to_exclude:
+        uncs_d_ += list(coeffs_uncertainty[i]['d'])
+    
+print('\n\n'+k)
+print('5th perc: ', np.percentile(uncs_d_, 5))
+print('50th perc: ', np.percentile(uncs_d_, 50))
+print('95th perc: ', np.percentile(uncs_d_, 95))
+
+#%% Get general take-aways from sensitivity analyses
+
+def str_in_key(str_to_check, key, case_sensitive=False):
+    if not case_sensitive: 
+        str_to_check = str_to_check.lower()
+    if isinstance(key, tuple):
+        for i in key:
+            if str_to_check in i.lower():
+                return True
+        return False
+    elif isinstance(key, str):
+        if str_to_check in key.lower():
+            return True
+        else:
+            return False
+    else:
+        raise ValueError(f'Key {key} is not tuple or str.')
+
+spearman_takeaways = {i:
+                      {
+                      'product': [i[0] for i in list(itertools.product(product_IDs, feedstock_IDs))],
+                      'feedstock': [i[1] for i in list(itertools.product(product_IDs, feedstock_IDs))],
+                      'fermentation cell mass yield': [],
+                      'feedstock unit price': [],
+                      'feedstock capacity': [],
+                      'operating time': [],
+                      'natural gas unit price':[],
+                      'CSL unit price': [],
+                      'CSL loading': [],
+                      'electricity unit price': [],
+                      'inoculum ratio': [],
+                      'seed train fermentation ratio': [],
+                      'product storage time': [],
+                      'boiler efficiency': [],
+                      'turbogenerator efficiency': [],
+                      }
+                      for i in ['a', 'b', 'c', 'd']
+                      }
+for i in all_filenames:
+    df_dict = None
+    with open(i+'_dfd_coeffs_uncertainty.pkl', 'rb') as f:
+        df_dict = pickle.load(f)
+    df = pd.DataFrame.from_dict(df_dict)
+    spearman = df.corr(method='spearman')
+    for coeff in ['a', 'b', 'c', 'd']:
+        sc = spearman[coeff]
+        for key in sc.keys():
+            if str_in_key('i. orientalis', key) or str_in_key('y. lipolytica', key):
+                spearman_takeaways[coeff]['fermentation cell mass yield'].append(sc[key])
+                
+            elif str_in_key('feedstock unit price', key):
+                spearman_takeaways[coeff]['feedstock unit price'].append(sc[key])
+                
+            elif str_in_key('feedstock capacity', key):
+                spearman_takeaways[coeff]['feedstock capacity'].append(sc[key]) 
+                
+            elif str_in_key('operating days', key):
+                spearman_takeaways[coeff]['operating time'].append(sc[key]) 
+                
+            elif str_in_key('natural gas unit price', key):
+                spearman_takeaways[coeff]['natural gas unit price'].append(sc[key]) 
+                
+            elif str_in_key('CSL unit price', key):
+                spearman_takeaways[coeff]['CSL unit price'].append(sc[key]) 
+                
+            elif str_in_key('CSL loading', key):
+                spearman_takeaways[coeff]['CSL loading'].append(sc[key]) 
+                
+            elif str_in_key('electricity unit price', key):
+                spearman_takeaways[coeff]['electricity unit price'].append(sc[key]) 
+                
+            elif str_in_key('inoculum ratio', key):
+                spearman_takeaways[coeff]['inoculum ratio'].append(sc[key]) 
+                
+            elif str_in_key('seed train fermentation ratio', key):
+                spearman_takeaways[coeff]['seed train fermentation ratio'].append(sc[key]) 
+                
+            elif str_in_key('storage time', key):
+                spearman_takeaways[coeff]['product storage time'].append(sc[key]) 
+                
+            elif str_in_key('boiler efficiency', key):
+                spearman_takeaways[coeff]['boiler efficiency'].append(sc[key]) 
+                
+            elif str_in_key('turbogenerator efficiency', key):
+                spearman_takeaways[coeff]['turbogenerator efficiency'].append(sc[key]) 
+
+for coeff in ['a', 'b', 'c', 'd']:
+    df = pd.DataFrame.from_dict(spearman_takeaways[coeff])
+    df.to_excel(coeff+'_spearman_general_takeaways.xlsx')
+    
 #%% Units
 a_units = r"$\mathrm{\$}\cdot\mathrm{kg-fp}^{-1}$"
 b_units = r"$\mathrm{\$}\cdot\mathrm{kg-sugars}^{-1}$"

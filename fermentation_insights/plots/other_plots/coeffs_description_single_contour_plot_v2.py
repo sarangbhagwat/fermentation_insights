@@ -12,7 +12,7 @@ import contourplots
 import itertools
 from biosteam.utils import  colors
 from  matplotlib.colors import LinearSegmentedColormap
-from fermentation_insights.analyze_all_combinations import coeff
+from fermentation_insights.plots.analyze_all_combinations import coeff
 
 #%%
 
@@ -80,7 +80,7 @@ yields = yields_for_plot = np.linspace(0.01, 200., 100000)
 titers = titers_for_plot = np.linspace(0.2, 200, 50)
 
 refinery = 'succinic_glucose'
-name = refinery+'_coefficients.npy'
+name = refinery
 
 g = coeff[name][4]
 a = coeff[name][0]/g
@@ -123,11 +123,9 @@ d = coeff[name][3]/g
 x_label = r"$\bfYield$" # title of the x axis
 # x_units = r"$\mathrm{\%}$" + " " + r"$\mathrm{theoretical}$"
 x_units =r"$\mathrm{g} \cdot \mathrm{g}^{-1}$"
-x_ticks = [0, 0.2, 0.4, 0.6, 0.8, 1.]
 
 y_label = r"$\bfTiter$" # title of the y axis
 y_units =r"$\mathrm{g} \cdot \mathrm{L}^{-1}$"
-y_ticks = [0, 40, 80, 120, 160, 200]
 
 # Metrics
 MPSP_w_label = r"$\bfMPSP$" # title of the color axis
@@ -197,10 +195,12 @@ plt.rcParams['font.size'] = str(12)
 
 full_x_label = x_label + " [" + x_units + "]"
 full_y_label = y_label + " [" + y_units + "]" + " at which \nMPSP = " + r"$\mathrm{\$}"+f"{round(MPSP,2)}$"+r"$\cdot\mathrm{kg}^{-1}$"
-old_color = '#44464a'
+old_color = 'black'
+# mid_color = '#44464a'
+mid_color = '#c2c0c0'
 new_color = 'blue'
 asymptote_linestyle = 'dashed'
-asymptote_alpha = 0.5
+asymptote_alpha = 1.
 redraw_unchanged_asymptotes = False
 panels_together = False
 
@@ -255,294 +255,115 @@ def format_ax(ax,
         yticks_new[-1] = ''
         ax.set_yticklabels(yticks_new)
 
+def mark_asymptotes(ax, h, k, color, zorder=10):
+    ax.scatter(h, y_ticks[-1]*1.02, color=[color], marker="v", zorder=zorder, clip_on=False, alpha=asymptote_alpha)
+    ax.scatter(x_ticks[-1]*1.02, k, color=[color], marker="<", zorder=zorder, clip_on=False, alpha=asymptote_alpha)
+
 #%% 
-
-round_coeffs_and_le_to = 2
-
-########### When a changes
-a_vals = np.linspace(a, 10*a, 10)
 
 fig, axs = plt.subplots(2, 2, constrained_layout=True)
 # fig = plt.figure()
 # ax = fig.add_subplot(111)
 # plt.xlim(0, 1)
 # plt.ylim(0, 120)
+
+########### When a changes
 ax = axs[0][0]
+
+a_vals = np.linspace(a, 7.5*a, 10)
 
 if panels_together:
     format_ax(ax, label_x=False, label_y=True, label_top_ticks=True,)
 else:
     format_ax(ax)
-    
-ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c, d=d), color=old_color)
-focus_1 = focus(MPSP=MPSP, a=a, b=b, c=c, d=d)
-vertex_1 = vertex(MPSP=MPSP, a=a, b=b, c=c, d=d)
-h1 = h(MPSP=MPSP, a=a, b=b, c=c, d=d)
-k1 = k(MPSP=MPSP, a=a, b=b, c=c, d=d)
-ax.vlines(h1, 0, titers[-1], colors=[old_color], linestyles = asymptote_linestyle, zorder=2, alpha=asymptote_alpha)
-ax.hlines(k1, 0, yields[-1], colors=[old_color], linestyles = asymptote_linestyle, zorder=2, alpha=asymptote_alpha)
-# ax.scatter(focus_1[0], focus_1[1])
-# ax.scatter(vertex_1[0], vertex_1[1])
-le_1 = 2*sqrt(A(MPSP=MPSP, a=a, b=b, c=c, d=d))
 
-ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a*a_change_factor, b=b, c=c, d=d), color=new_color)
-focus_2 = focus(MPSP=MPSP, a=a*a_change_factor, b=b, c=c, d=d)
-vertex_2 = vertex(MPSP=MPSP, a=a*a_change_factor, b=b, c=c, d=d)
-h2 = h(MPSP=MPSP, a=a*a_change_factor, b=b, c=c, d=d)
-k2 = k(MPSP=MPSP, a=a*a_change_factor, b=b, c=c, d=d)
-ax.vlines(h2, 0, titers[-1], colors=[new_color], linestyles = asymptote_linestyle, zorder=1, alpha=asymptote_alpha)
-ax.hlines(k2, 0, yields[-1], colors=[new_color], linestyles = asymptote_linestyle, zorder=1, alpha=asymptote_alpha)
-# ax.scatter(focus_2[0], focus_2[1])
-# ax.scatter(vertex_2[0], vertex_2[1])
-le_2 = 2*sqrt(A(MPSP=MPSP, a=a*a_change_factor, b=b, c=c, d=d))
+ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a_vals[0], b=b, c=c, d=d), color=old_color)
+for a_val in a_vals[1:-1]:
+    ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a_val, b=b, c=c, d=d), color=mid_color)
+ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a_vals[-1], b=b, c=c, d=d), color=new_color)
 
-textstr = f"a = {np.round(a, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[18], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[67], # y-coord
-        textstr, 
-        style = 'italic',
-        color=old_color,
-        )
+h1 = h(MPSP=MPSP, a=a_vals[0], b=b, c=c, d=d)
+k1 = k(MPSP=MPSP, a=a_vals[0], b=b, c=c, d=d)
+mark_asymptotes(ax, h1, k1, old_color)
 
-textstr = f"a = {np.round(a*a_change_factor, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[60], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[67], # y-coord
-        textstr, 
-        style = 'italic',
-        color=new_color,
-        )
-
-
-textstr = f"LE = {np.round(le_1, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[18], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[33], # y-coord
-        textstr, 
-        style = 'italic',
-        color=old_color,
-        )
-
-textstr = f"LE = {np.round(le_2, round_coeffs_and_le_to)}"
-ax.text(
-        # np.linspace(x_ticks[0], x_ticks[-1], 100)[75], # x-coord
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[70], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[33], # y-coord
-        textstr, 
-        style = 'italic',
-        color=new_color,
-        )
+h2 = h(MPSP=MPSP, a=a_vals[-1], b=b, c=c, d=d)
+k2 = k(MPSP=MPSP, a=a_vals[-1], b=b, c=c, d=d)
+mark_asymptotes(ax, h2, k2, new_color, zorder=9)
 
 # plt.show()
 
 ######### When b changes
-
-b_change_factor = 4.
-
 ax = axs[0][1]
+b_vals = np.linspace(b, 4*b, 10)
 
 if panels_together:
-    format_ax(ax, label_x=False, label_y=False, label_top_ticks=True,)
+    format_ax(ax, label_x=False, label_y=True, label_top_ticks=True,)
 else:
     format_ax(ax)
-    
-ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c, d=d), color=old_color)
-focus_1 = focus(MPSP=MPSP, a=a, b=b, c=c, d=d)
-vertex_1 = vertex(MPSP=MPSP, a=a, b=b, c=c, d=d)
-h1 = h(MPSP=MPSP, a=a, b=b, c=c, d=d)
-k1 = k(MPSP=MPSP, a=a, b=b, c=c, d=d)
-ax.vlines(h1, 0, titers[-1], colors=[old_color], linestyles = asymptote_linestyle, zorder=2, alpha=asymptote_alpha)
-ax.hlines(k1, 0, yields[-1], colors=[old_color], linestyles = asymptote_linestyle, zorder=2, alpha=asymptote_alpha)
-# ax.scatter(focus_1[0], focus_1[1])
-# ax.scatter(vertex_1[0], vertex_1[1])
-le_1 = 2*sqrt(A(MPSP=MPSP, a=a, b=b, c=c, d=d))
 
-ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b*b_change_factor, c=c, d=d), color=new_color)
-focus_2 = focus(MPSP=MPSP, a=a, b=b*b_change_factor, c=c, d=d)
-vertex_2 = vertex(MPSP=MPSP, a=a, b=b*b_change_factor, c=c, d=d)
-h2 = h(MPSP=MPSP, a=a, b=b*b_change_factor, c=c, d=d)
-k2 = k(MPSP=MPSP, a=a, b=b*b_change_factor, c=c, d=d)
-ax.vlines(h2, 0, titers[-1], colors=[new_color], linestyles = asymptote_linestyle, zorder=1, alpha=asymptote_alpha)
-if redraw_unchanged_asymptotes: ax.hlines(k2, 0, yields[-1], colors=[new_color], linestyles = asymptote_linestyle, zorder=1, alpha=asymptote_alpha)
-# ax.scatter(focus_2[0], focus_2[1])
-# ax.scatter(vertex_2[0], vertex_2[1])
-le_2 = 2*sqrt(A(MPSP=MPSP, a=a, b=b*b_change_factor, c=c, d=d))
+ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b_vals[0], c=c, d=d), color=old_color)
+for b_val in b_vals[1:-1]:
+    ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b_val, c=c, d=d), color=mid_color)
+ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b_vals[-1], c=c, d=d), color=new_color)
 
-textstr = f"b = {np.round(b, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[18], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[67], # y-coord
-        textstr, 
-        style = 'italic',
-        color=old_color,
-        )
+h1 = h(MPSP=MPSP, a=a, b=b_vals[0], c=c, d=d)
+k1 = k(MPSP=MPSP, a=a, b=b_vals[0], c=c, d=d)
+mark_asymptotes(ax, h1, k1, old_color)
 
-textstr = f"b = {np.round(b*b_change_factor, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[60], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[67], # y-coord
-        textstr, 
-        style = 'italic',
-        color=new_color,
-        )
+h2 = h(MPSP=MPSP, a=a, b=b_vals[-1], c=c, d=d)
+k2 = k(MPSP=MPSP, a=a, b=b_vals[-1], c=c, d=d)
+mark_asymptotes(ax, h2, k2, new_color, zorder=9)
 
-
-# textstr = f"LE = {np.round(le_1, 2)}"
-# ax.text(
-#         np.linspace(x_ticks[0], x_ticks[-1], 100)[18], # x-coord
-#         np.linspace(y_ticks[0], y_ticks[-1], 100)[33], # y-coord
-#         textstr, 
-#         style = 'italic',
-#         color=old_color,
-#         )
-
-textstr = f"LE = {np.round(le_2, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[65], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[33], # y-coord
-        textstr, 
-        style = 'italic',
-        color=new_color,
-        )
-
+# plt.show()
 ########### When c changes
-c_change_factor = 15.
-
 ax = axs[1][0]
 
+c_vals = np.linspace(c, 15*c, 10)
+
 if panels_together:
-    format_ax(ax, label_x=True, label_y=True, label_top_ticks=False,)
+    format_ax(ax, label_x=False, label_y=True, label_top_ticks=True,)
 else:
     format_ax(ax)
-ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c, d=d), color=old_color)
-focus_1 = focus(MPSP=MPSP, a=a, b=b, c=c, d=d)
-vertex_1 = vertex(MPSP=MPSP, a=a, b=b, c=c, d=d)
-h1 = h(MPSP=MPSP, a=a, b=b, c=c, d=d)
-k1 = k(MPSP=MPSP, a=a, b=b, c=c, d=d)
-ax.vlines(h1, 0, titers[-1], colors=[old_color], linestyles = asymptote_linestyle, zorder=2, alpha=asymptote_alpha)
-ax.hlines(k1, 0, yields[-1], colors=[old_color], linestyles = asymptote_linestyle, zorder=2, alpha=asymptote_alpha)
-# ax.scatter(focus_1[0], focus_1[1])
-# ax.scatter(vertex_1[0], vertex_1[1])
-le_1 = 2*sqrt(A(MPSP=MPSP, a=a, b=b, c=c, d=d))
 
-ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c*c_change_factor, d=d), color=new_color)
-focus_2 = focus(MPSP=MPSP, a=a, b=b, c=c*c_change_factor, d=d)
-vertex_2 = vertex(MPSP=MPSP, a=a, b=b, c=c*c_change_factor, d=d)
-h2 = h(MPSP=MPSP, a=a, b=b, c=c*c_change_factor, d=d)
-k2 = k(MPSP=MPSP, a=a, b=b, c=c*c_change_factor, d=d)
-if redraw_unchanged_asymptotes: ax.vlines(h2, 0, titers[-1], colors=[new_color], linestyles = asymptote_linestyle, zorder=1, alpha=asymptote_alpha)
-ax.hlines(k2, 0, yields[-1], colors=[new_color], linestyles = asymptote_linestyle, zorder=1, alpha=asymptote_alpha)
-# ax.scatter(focus_2[0], focus_2[1])
-# ax.scatter(vertex_2[0], vertex_2[1])
-le_2 = 2*sqrt(A(MPSP=MPSP, a=a, b=b, c=c*c_change_factor, d=d))
+ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c_vals[0], d=d), color=old_color)
+for c_val in c_vals[1:-1]:
+    ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c_val, d=d), color=mid_color)
+ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c_vals[-1], d=d), color=new_color)
 
-textstr = f"c = {np.round(c, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[40], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[8], # y-coord
-        textstr, 
-        style = 'italic',
-        color=old_color,
-        )
+h1 = h(MPSP=MPSP, a=a, b=b, c=c_vals[0], d=d)
+k1 = k(MPSP=MPSP, a=a, b=b, c=c_vals[0], d=d)
+mark_asymptotes(ax, h1, k1, old_color)
 
-textstr = f"c = {np.round(c*c_change_factor, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[40], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[80], # y-coord
-        textstr, 
-        style = 'italic',
-        color=new_color,
-        )
+h2 = h(MPSP=MPSP, a=a, b=b, c=c_vals[-1], d=d)
+k2 = k(MPSP=MPSP, a=a, b=b, c=c_vals[-1], d=d)
+mark_asymptotes(ax, h2, k2, new_color, zorder=9)
 
-
-# textstr = f"LE = {np.round(le_1, 2)}"
-# ax.text(
-#         np.linspace(x_ticks[0], x_ticks[-1], 100)[18], # x-coord
-#         np.linspace(y_ticks[0], y_ticks[-1], 100)[33], # y-coord
-#         textstr, 
-#         style = 'italic',
-#         color=old_color,
-#         )
-
-textstr = f"LE = {np.round(le_2, round_coeffs_and_le_to)}"
-ax.text(
-        # np.linspace(x_ticks[0], x_ticks[-1], 100)[75], # x-coord
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[70], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[65], # y-coord
-        textstr, 
-        style = 'italic',
-        color=new_color,
-        )
-
+# plt.show()
 ############ When d changes
-d_change_factor = 30.
 
 ax = axs[1][1]
 
+d_vals = np.linspace(d, 30*d, 10)
+
 if panels_together:
-    format_ax(ax, label_x=True, label_y=False, label_top_ticks=True,)
+    format_ax(ax, label_x=False, label_y=True, label_top_ticks=True,)
 else:
     format_ax(ax)
-plt.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c, d=d), color=old_color)
-focus_1 = focus(MPSP=MPSP, a=a, b=b, c=c, d=d)
-vertex_1 = vertex(MPSP=MPSP, a=a, b=b, c=c, d=d)
-h1 = h(MPSP=MPSP, a=a, b=b, c=c, d=d)
-k1 = k(MPSP=MPSP, a=a, b=b, c=c, d=d)
-plt.vlines(h1, 0, titers[-1], colors=[old_color], linestyles = asymptote_linestyle, zorder=2, alpha=asymptote_alpha)
-plt.hlines(k1, 0, yields[-1], colors=[old_color], linestyles = asymptote_linestyle, zorder=2, alpha=asymptote_alpha)
-# plt.scatter(focus_1[0], focus_1[1])
-# plt.scatter(vertex_1[0], vertex_1[1])
-le_1 = 2*sqrt(A(MPSP=MPSP, a=a, b=b, c=c, d=d))
 
-plt.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c, d=d*d_change_factor), color=new_color)
-focus_2 = focus(MPSP=MPSP, a=a, b=b, c=c, d=d*d_change_factor)
-vertex_2 = vertex(MPSP=MPSP, a=a, b=b, c=c, d=d*d_change_factor)
-h2 = h(MPSP=MPSP, a=a, b=b, c=c, d=d*d_change_factor)
-k2 = k(MPSP=MPSP, a=a, b=b, c=c, d=d*d_change_factor)
-if redraw_unchanged_asymptotes: plt.vlines(h2, 0, titers[-1], colors=[new_color], linestyles = asymptote_linestyle, zorder=1, alpha=asymptote_alpha)
-if redraw_unchanged_asymptotes: plt.hlines(k2, 0, yields[-1], colors=[new_color], linestyles = asymptote_linestyle, zorder=1, alpha=asymptote_alpha)
-# plt.scatter(focus_2[0], focus_2[1])
-# plt.scatter(vertex_2[0], vertex_2[1])
-le_2 = 2*sqrt(A(MPSP=MPSP, a=a, b=b, c=c, d=d*d_change_factor))
+ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c, d=d_vals[0]), color=old_color)
+for d_val in d_vals[1:-1]:
+    ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c, d=d_val), color=mid_color)
+ax.plot(yields, titer_f(yields, MPSP=MPSP, a=a, b=b, c=c, d=d_vals[-1]), color=new_color)
 
-textstr = f"d = {np.round(d, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[25], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[12], # y-coord
-        textstr, 
-        style = 'italic',
-        color=old_color,
-        )
+h1 = h(MPSP=MPSP, a=a, b=b, c=c, d=d_vals[0])
+k1 = k(MPSP=MPSP, a=a, b=b, c=c, d=d_vals[0])
+mark_asymptotes(ax, h1, k1, old_color)
 
-textstr = f"d = {np.round(d*d_change_factor, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[26], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[65], # y-coord
-        textstr, 
-        style = 'italic',
-        color=new_color,
-        )
+h2 = h(MPSP=MPSP, a=a, b=b, c=c, d=d_vals[-1])
+k2 = k(MPSP=MPSP, a=a, b=b, c=c, d=d_vals[-1])
+mark_asymptotes(ax, h2, k2, new_color, zorder=9)
 
-
-# textstr = f"LE = {np.round(le_1, 2)}"
-# ax.text(
-#         np.linspace(x_ticks[0], x_ticks[-1], 100)[18], # x-coord
-#         np.linspace(y_ticks[0], y_ticks[-1], 100)[33], # y-coord
-#         textstr, 
-#         style = 'italic',
-#         color=old_color,
-#         )
-
-textstr = f"LE = {np.round(le_2, round_coeffs_and_le_to)}"
-ax.text(
-        np.linspace(x_ticks[0], x_ticks[-1], 100)[35], # x-coord
-        np.linspace(y_ticks[0], y_ticks[-1], 100)[35], # y-coord
-        textstr, 
-        style = 'italic',
-        color=new_color,
-        )
-
+# plt.show()
 ######### final formatting and save
 if panels_together: plt.subplots_adjust(wspace=0, hspace=0)
 fig.set_figheight(8.5)

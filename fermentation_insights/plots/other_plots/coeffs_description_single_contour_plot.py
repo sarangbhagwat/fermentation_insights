@@ -12,7 +12,7 @@ import contourplots
 import itertools
 from biosteam.utils import  colors
 from  matplotlib.colors import LinearSegmentedColormap
-from fermentation_insights.analyze_all_combinations import coeff
+from fermentation_insights.plots.analyze_all_combinations import coeff
 
 #%%
 
@@ -80,7 +80,7 @@ yields = yields_for_plot = np.linspace(0.01, 200., 100000)
 titers = titers_for_plot = np.linspace(0.2, 200, 50)
 
 refinery = 'succinic_glucose'
-name = refinery+'_coefficients.npy'
+name = refinery
 
 g = coeff[name][4]
 a = coeff[name][0]/g
