@@ -12,13 +12,15 @@ import pickle
 import os
 from fermentation_insights.utils import fit_shifted_rect_hyperbola_two_param, get_feasible_TY_samples
 
+np.random.seed(4153)
+
 #%% Load baseline TRY
 os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 
 product = product_ID = 'TAL'
 # additional_tag = '0.5x_baselineprod'
 additional_tag = ''
-feedstock = 'sugarcane'
+feedstock = 'cornstover'
 
 filename = None
 if additional_tag: 
@@ -55,11 +57,24 @@ filterwarnings('ignore')
 import numpy as np
 import biosteam as bst
 print('\n\nLoading system ...')
+
 from biorefineries import TAL
-# from biorefineries.TAL.models import models_TAL_solubility_exploit_glucose as models
-from biorefineries.TAL.models import models_TAL_solubility_exploit_sugarcane as models
-# from biorefineries.TAL.models import models_TAL_solubility_exploit_corn as models
-# from biorefineries.TAL.models import models_TAL_solubility_exploit_cornstover as models
+
+models = None
+
+if feedstock=='glucose':
+    from biorefineries.TAL.models import models_TAL_solubility_exploit_glucose
+    models = models_TAL_solubility_exploit_glucose
+elif feedstock=='sugarcane':
+    from biorefineries.TAL.models import models_TAL_solubility_exploit_sugarcane
+    models = models_TAL_solubility_exploit_sugarcane
+elif feedstock=='corn':
+    from biorefineries.TAL.models import models_TAL_solubility_exploit_corn
+    models = models_TAL_solubility_exploit_corn
+elif feedstock=='cornstover':
+    from biorefineries.TAL.models import models_TAL_solubility_exploit_cornstover
+    models = models_TAL_solubility_exploit_cornstover
+
 
 print('\nLoaded system.')
 
@@ -83,8 +98,6 @@ f = bst.main_flowsheet
 u, s = f.unit, f.stream
 
 # %% 
-np.random.seed(4153)
-
 N_simulations_per_TRY_combo = 500 # 6000
 
 percentiles = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 1]
@@ -108,30 +121,56 @@ baseline_spec = {'spec_1': spec.baseline_yield,
                  'spec_3': spec.baseline_productivity,}
 
 system=model._system
+def reset_V_first_effect_evaporators(system):
+    for unit in system.units:
+        if isinstance(unit, MultiEffectEvaporator): 
+            unit._V_first_effect = None
+
+def run_evaporators(system):
+    for unit in system.units:
+        if isinstance(unit, MultiEffectEvaporator): 
+            try:
+                unit._run()
+            except:
+                pass
+            finally:
+                unit._run()
+
 def reset_and_reload():
-    print('Resetting cache and emptying recycles ...')
-    system.reset_cache()
-    system.empty_recycles()
-    print('Loading and simulating with baseline specifications ...')
     spec_1, spec_2, spec_3 = spec.spec_1, spec.spec_2, spec.spec_3
-    spec.load_specifications(**baseline_spec)
-    # spec.set_production_capacity(spec.desired_annual_production)
-    system.simulate()
-    print('Loading and simulating with required specifications ...')
-    spec.load_specifications(spec_1=spec_1, spec_2=spec_2, spec_3=spec_3)
-    # spec.set_production_capacity(spec.desired_annual_production)
-    system.simulate()
+    try:
+        print('Resetting cache and emptying recycles ...')
+        system.reset_cache()
+        system.empty_recycles()
+        run_evaporators(system)
+        print('Loading and simulating with baseline specifications ...')
+        spec.load_specifications(**baseline_spec)
+        # spec.load_specifications(spec_1=spec_1, spec_2=spec_2, spec_3=spec_3)
+        # spec.set_production_capacity(spec.desired_annual_production)
+        system.simulate()
+        print('Loading and simulating with required specifications ...')
+        spec.load_specifications(spec_1=spec_1, spec_2=spec_2, spec_3=spec_3)
+        # spec.set_production_capacity(spec.desired_annual_production)
+        system.simulate()
+    except:
+        spec.spec_1, spec.spec_2, spec.spec_3 = spec_1, spec_2, spec_3
+        spec.load_specifications(spec_1=spec_1, spec_2=spec_2, spec_3=spec_3)
+        # spec.set_production_capacity(spec.desired_annual_production)
+        system.simulate()
+        
     
 def reset_and_switch_solver(solver_ID):
     system.reset_cache()
     system.empty_recycles()
+    run_evaporators(system)
     system.converge_method = solver_ID
     print(f"Trying {solver_ID} ...")
-    spec.load_specifications(spec_1=spec.spec_1, spec_2=spec.spec_2, spec_3=spec.spec_3)
+    # spec.load_specifications(spec_1=spec.spec_1, spec_2=spec.spec_2, spec_3=spec.spec_3)
     # spec.set_production_capacity(spec.desired_annual_production)
     system.simulate()
-    
-def run_bugfix_barrage():
+
+# F403 = u.F403
+def traditional_bugfix_sequence():
     try:
         reset_and_reload()
     except Exception as e:
@@ -146,8 +185,26 @@ def run_bugfix_barrage():
                 print(str(e))
                 # print(_yellow_text+"Bugfix barrage failed.\n"+_reset_text)
                 print("Bugfix barrage failed.\n")
+                system.simulate()
                 # breakpoint()
                 raise e
+            finally:
+                system.simulate()
+                
+def run_bugfix_barrage(e):
+    if 'multieffectevaporator' in str(e).lower():
+        try:
+            print('Resetting _V_first_effect of all evaporators to None ...')
+            reset_V_first_effect_evaporators(system)
+            print('Running all evaporators ...')
+            run_evaporators(system)
+            print('Simulating ...')
+            system.simulate()
+            
+        except:
+            traditional_bugfix_sequence()
+    else:
+        traditional_bugfix_sequence()
 ###############################
 
 #%% Model specification (without set_production_capacity)

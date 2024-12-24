@@ -38,9 +38,9 @@ product_IDs = [
                ]
 feedstock_IDs = [
                  'glucose', 
+                 'cornstover',
                  'sugarcane', 
                  'corn', 
-                 'cornstover',
                  ]
 
 all_filenames = []

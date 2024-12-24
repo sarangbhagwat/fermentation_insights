@@ -39,7 +39,7 @@ def GG_orange_white_blue_colormap(N_levels=90):
     return LinearSegmentedColormap.from_list('CABBI', cmap_colors, N_levels)
 
 #%%
-os.chdir('C://Users//saran//Documents//Academia//pypi_repositories//fermentation_insights//fermentation_insights//TRY_results')
+os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 
 product_IDs = [
                 'TAL', 'TAL_SA', 
@@ -48,9 +48,9 @@ product_IDs = [
                ]
 feedstock_IDs = [
                  'glucose', 
+                 'cornstover',
                  'sugarcane', 
                  'corn', 
-                 'cornstover',
                  ]
 
 all_filenames = []

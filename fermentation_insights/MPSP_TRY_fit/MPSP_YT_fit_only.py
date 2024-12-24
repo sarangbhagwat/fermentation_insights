@@ -164,7 +164,7 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='', plot_MPSP_y_t=False,
     # import os
     # product_ID = 'TAL-SA'
     # if run_simulations:
-    #     from biorefineries.TAL.analyses.fermentation.TRY_analysis_SA_glucose import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
+    #     from biorefineries.TAL.analyses.fermentation.TRY_analysis_SA_sugarcane import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
     #                                                                 yields, titers, titers_mol_per_mol_total, productivities,\
     #                                                                 colors, CABBI_green_colormap, get_rounded_str,\
     #                                                                 R302, spec
@@ -173,16 +173,16 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='', plot_MPSP_y_t=False,
     #     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
     #     inflection_product_yields = np.array([1-R302.regular_microbe_conversion-R302.regular_citric_acid_conversion,
     #                                           1-R302.regular_microbe_conversion])
-    #     np.save('TAL_SA_10x_blp_glucose_MPSP', results_metric_1)
-    #     np.save('TAL_SA_10x_blp_glucose_GWP', results_metric_2)
-    #     np.save('TAL_SA_10x_blp_glucose_FEC', results_metric_3)
-    #     np.save('TAL_SA_10x_blp_glucose_AOC', results_metric_5)
-    #     np.save('TAL_SA_10x_blp_glucose_TCI', results_metric_6)
-    #     np.save('TAL_SA_10x_blp_glucose_recoveries', results_metric_4)
-    #     np.save('TAL_SA_10x_blp_glucose_inflection_product_yields', inflection_product_yields)
-    #     np.save('TAL_SA_10x_blp_glucose_yields', yields)
-    #     np.save('TAL_SA_10x_blp_glucose_titers', titers)
-    #     np.save('TAL_SA_10x_blp_glucose_productivities', productivities)
+    #     np.save('TAL_SA_sugarcane_MPSP', results_metric_1)
+    #     np.save('TAL_SA_sugarcane_GWP', results_metric_2)
+    #     np.save('TAL_SA_sugarcane_FEC', results_metric_3)
+    #     np.save('TAL_SA_sugarcane_AOC', results_metric_5)
+    #     np.save('TAL_SA_sugarcane_TCI', results_metric_6)
+    #     np.save('TAL_SA_sugarcane_recoveries', results_metric_4)
+    #     np.save('TAL_SA_sugarcane_inflection_product_yields', inflection_product_yields)
+    #     np.save('TAL_SA_sugarcane_yields', yields)
+    #     np.save('TAL_SA_sugarcane_titers', titers)
+    #     np.save('TAL_SA_sugarcane_productivities', productivities)
         
     # else:
     #     results_metric_1 = np.load('TAL_SA_sugarcane_MPSP')
@@ -263,7 +263,7 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='', plot_MPSP_y_t=False,
     # import os
     # product_ID = 'HP'
     # if run_simulations:
-    #     from biorefineries.HP.analyses.fermentation.TRY_analysis_sugarcane_Acrylic_hexanol import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
+    #     from biorefineries.HP.analyses.fermentation.TRY_analysis_corn_Acrylic_hexanol import results_metric_1, results_metric_2, results_metric_3, results_metric_4, results_metric_5, results_metric_6,\
     #                                                                 yields, titers, productivities,\
     #                                                                 colors, CABBI_green_colormap, get_rounded_str,\
     #                                                                 AA_market_range as market_range,\
@@ -271,23 +271,23 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='', plot_MPSP_y_t=False,
     #     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
     #     inflection_product_yields = np.array([1-R302.regular_biomass_conversion])
         
-    #     np.save('HP_hexanol_sugarcane_MPSP', results_metric_1)
-    #     np.save('HP_hexanol_sugarcane_GWP', results_metric_2)
-    #     np.save('HP_hexanol_sugarcane_FEC', results_metric_3)
-    #     np.save('HP_hexanol_sugarcane_AOC', results_metric_4)
-    #     np.save('HP_hexanol_sugarcane_TCI', results_metric_5)
-    #     np.save('HP_hexanol_sugarcane_recoveries', results_metric_6)
-    #     np.save('HP_hexanol_sugarcane_inflection_product_yields', inflection_product_yields)
-    #     np.save('HP_hexanol_sugarcane_yields', yields)
-    #     np.save('HP_hexanol_sugarcane_titers', titers)
-    #     np.save('HP_hexanol_sugarcane_productivities', productivities)
+    #     np.save('HP_hexanol_corn_MPSP', results_metric_1)
+    #     np.save('HP_hexanol_corn_GWP', results_metric_2)
+    #     np.save('HP_hexanol_corn_FEC', results_metric_3)
+    #     np.save('HP_hexanol_corn_AOC', results_metric_4)
+    #     np.save('HP_hexanol_corn_TCI', results_metric_5)
+    #     np.save('HP_hexanol_corn_recoveries', results_metric_6)
+    #     np.save('HP_hexanol_corn_inflection_product_yields', inflection_product_yields)
+    #     np.save('HP_hexanol_corn_yields', yields)
+    #     np.save('HP_hexanol_corn_titers', titers)
+    #     np.save('HP_hexanol_corn_productivities', productivities)
     # else:
-    #     results_metric_1 = np.load('HP_hexanol_sugarcane_MPSP')
-    #     results_metric_2 = np.load('HP_hexanol_sugarcane_GWP')
-    #     results_metric_3 = np.load('HP_hexanol_sugarcane_FEC')
-    #     results_metric_4 = np.load('HP_hexanol_sugarcane_AOC')
-    #     results_metric_5 = np.load('HP_hexanol_sugarcane_TCI')
-    #     inflection_product_yields = np.load('HP_hexanol_sugarcane_inflection_product_yields')
+    #     results_metric_1 = np.load('HP_hexanol_corn_MPSP')
+    #     results_metric_2 = np.load('HP_hexanol_corn_GWP')
+    #     results_metric_3 = np.load('HP_hexanol_corn_FEC')
+    #     results_metric_4 = np.load('HP_hexanol_corn_AOC')
+    #     results_metric_5 = np.load('HP_hexanol_corn_TCI')
+    #     inflection_product_yields = np.load('HP_hexanol_corn_inflection_product_yields')
     
     # #%% 3-HP Hexanol Neutral TRY
     # run_simulations = True

@@ -40,9 +40,9 @@ product_IDs = [
                ]
 feedstock_IDs = [
                  'glucose', 
+                 'cornstover',
                  'sugarcane', 
                  'corn', 
-                 'cornstover',
                  ]
 
 all_filenames = []
@@ -115,7 +115,7 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
         show_yields = product_ID in ['TAL_SA', 'HP_neutral_hexanol', 'succinic_neutral']
         show_titers = feedstock_ID in['glucose']
         show_top_ticklabels = ((product_ID in ['TAL', 'HP', 'succinic'] and feedstock_ID in ['glucose'])
-                               or product_ID in ['TAL_SA', 'HP_neutral_hexanol', 'succinic_neutral'] and feedstock_ID in ['cornstover'])
+                               or product_ID in ['TAL_SA', 'HP_neutral_hexanol', 'succinic_neutral'] and feedstock_ID in ['corn'])
         
         ########
         # corners of triangular infeasible region

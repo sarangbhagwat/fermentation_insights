@@ -40,6 +40,11 @@ for filename in all_filenames:
 
 # a*g, b*g, c*g, d*g, g, Rsq for indicators_eval
 
+#%% Inflection yields
+inflection_yields = {}
+for filename in all_filenames:
+    inflection_yields[filename] = np.load(f'{filename}_inflection_product_yields.npy')
+    
 #%% Fraction of the feasible theoretical fermentation spaces where RI_MPSP>0
 ri_positive_fractions = []
 for filename in all_filenames:

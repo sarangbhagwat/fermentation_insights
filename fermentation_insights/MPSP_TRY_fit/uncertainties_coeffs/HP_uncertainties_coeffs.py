@@ -12,13 +12,16 @@ import pickle
 import os
 from fermentation_insights.utils import fit_shifted_rect_hyperbola_two_param, get_feasible_TY_samples
 
+np.random.seed(4153)
+
 #%% Load baseline TRY
 os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 
 product = product_ID = 'HP'
 # additional_tag = '0.5x_baselineprod'
-additional_tag = 'neutral'
-feedstock = 'corn'
+# additional_tag = 'neutral'
+additional_tag = ''
+feedstock = 'cornstover'
 
 filename = None
 if additional_tag: 
@@ -58,10 +61,21 @@ import contourplots
 import biosteam as bst
 print('\n\nLoading system ...')
 from biorefineries import HP
-# from biorefineries.HP.models.glucose import models_glucose_improved_separations as models
-# from biorefineries.HP.models.sugarcane import models_sc_improved_separations as models
-from biorefineries.HP.models.corn import models_corn_improved_separations as models
-# from biorefineries.HP.models.cornstover import models_cs_improved_separations as models
+
+models = None
+
+if feedstock=='glucose':
+    from biorefineries.HP.models.glucose import models_glucose_improved_separations
+    models = models_glucose_improved_separations
+elif feedstock=='sugarcane':
+    from biorefineries.HP.models.sugarcane import models_sc_improved_separations
+    models = models_sc_improved_separations
+elif feedstock=='corn':
+    from biorefineries.HP.models.corn import models_corn_improved_separations
+    models = models_corn_improved_separations
+elif feedstock=='cornstover':
+    from biorefineries.HP.models.cornstover import models_cs_improved_separations
+    models = models_cs_improved_separations
 
 print('\nLoaded system.')
 from datetime import datetime
@@ -91,9 +105,8 @@ f = bst.main_flowsheet
 u, s = f.unit, f.stream
 
 # %% 
-np.random.seed(4153)
 
-N_simulations_per_TRY_combo = 200 # 6000
+N_simulations_per_TRY_combo = 500 # 6000
 
 percentiles = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 1]
 
@@ -207,7 +220,7 @@ def model_specification():
             run_bugfix_barrage()
             
 model.specification = model_specification
-spec.reactor.neutralization = True
+spec.reactor.neutralization = False if not 'neutral' in product+additional_tag else True
 model.specification()
 print(get_adjusted_MSP())
 

@@ -11,6 +11,10 @@ import itertools
 import pickle
 import os
 from fermentation_insights.utils import fit_shifted_rect_hyperbola_two_param, get_feasible_TY_samples
+from biosteam.units import MultiEffectEvaporator
+
+#%%
+np.random.seed(4153)
 
 #%% Load baseline TRY
 os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
@@ -18,7 +22,8 @@ os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation
 product = product_ID = 'HP'
 # additional_tag = '0.5x_baselineprod'
 additional_tag = 'neutral_hexanol'
-feedstock = 'cornstover'
+# additional_tag = 'hexanol'
+feedstock = 'corn'
 
 filename = None
 if additional_tag: 
@@ -58,11 +63,22 @@ import contourplots
 import biosteam as bst
 print('\n\nLoading system ...')
 from biorefineries import HP
-# from biorefineries.HP.models.glucose import models_glucose_hexanol as models
-# from biorefineries.HP.models.sugarcane import models_sc_hexanol as models
-# from biorefineries.HP.models.corn import models_corn_hexanol as models
-from biorefineries.HP.models.cornstover import models_cs_hexanol as models
 
+models = None
+
+if feedstock=='glucose':
+    from biorefineries.HP.models.glucose import models_glucose_hexanol
+    models = models_glucose_hexanol
+elif feedstock=='sugarcane':
+    from biorefineries.HP.models.sugarcane import models_sc_hexanol
+    models = models_sc_hexanol
+elif feedstock=='corn':
+    from biorefineries.HP.models.corn import models_corn_hexanol
+    models = models_corn_hexanol
+elif feedstock=='cornstover':
+    from biorefineries.HP.models.cornstover import models_cs_hexanol
+    models = models_cs_hexanol
+    
 print('\nLoaded system.')
 from datetime import datetime
 from biosteam.utils import TicToc
@@ -83,7 +99,7 @@ unit_groups = models.unit_groups
 tea = models.HP_tea
 lca = models.HP_lca
 get_adjusted_MSP = models.get_adjusted_MSP
-run_bugfix_barrage = models.run_bugfix_barrage
+# run_bugfix_barrage = models.run_bugfix_barrage
 
 # per_kg_AA_to_per_kg_SA = models.per_kg_AA_to_per_kg_SA
 
@@ -91,9 +107,8 @@ f = bst.main_flowsheet
 u, s = f.unit, f.stream
 
 # %% 
-np.random.seed(4153)
 
-N_simulations_per_TRY_combo = 200 # 6000
+N_simulations_per_TRY_combo = 500 # 6000
 
 percentiles = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 1]
 
@@ -118,12 +133,29 @@ baseline_spec = {'spec_1': spec.baseline_yield,
                  'spec_3': spec.baseline_productivity,}
 
 system=model._system
+
+def reset_V_first_effect_evaporators(system):
+    for unit in system.units:
+        if isinstance(unit, MultiEffectEvaporator): 
+            unit._V_first_effect = None
+
+def run_evaporators(system):
+    for unit in system.units:
+        if isinstance(unit, MultiEffectEvaporator): 
+            try:
+                unit._run()
+            except:
+                pass
+            finally:
+                unit._run()
+
 def reset_and_reload():
     spec_1, spec_2, spec_3 = spec.spec_1, spec.spec_2, spec.spec_3
     try:
         print('Resetting cache and emptying recycles ...')
         system.reset_cache()
         system.empty_recycles()
+        run_evaporators(system)
         print('Loading and simulating with baseline specifications ...')
         spec.load_specifications(**baseline_spec)
         # spec.load_specifications(spec_1=spec_1, spec_2=spec_2, spec_3=spec_3)
@@ -143,6 +175,7 @@ def reset_and_reload():
 def reset_and_switch_solver(solver_ID):
     system.reset_cache()
     system.empty_recycles()
+    run_evaporators(system)
     system.converge_method = solver_ID
     print(f"Trying {solver_ID} ...")
     # spec.load_specifications(spec_1=spec.spec_1, spec_2=spec.spec_2, spec_3=spec.spec_3)
@@ -150,7 +183,7 @@ def reset_and_switch_solver(solver_ID):
     system.simulate()
 
 # F403 = u.F403
-def run_bugfix_barrage():
+def traditional_bugfix_sequence():
     try:
         reset_and_reload()
     except Exception as e:
@@ -165,8 +198,29 @@ def run_bugfix_barrage():
                 print(str(e))
                 # print(_yellow_text+"Bugfix barrage failed.\n"+_reset_text)
                 print("Bugfix barrage failed.\n")
+                # system.simulate()
                 # breakpoint()
                 raise e
+            finally:
+                system.simulate()
+                
+def run_bugfix_barrage(e):
+    # if 'multieffectevaporator' in str(e).lower():
+    try:
+        print('Resetting _V_first_effect of all evaporators to None ...')
+        reset_V_first_effect_evaporators(system)
+        print('Running all evaporators ...')
+        run_evaporators(system)
+        print('Simulating ...')
+        system.simulate()
+            
+    except Exception as e:
+        print(str(e))
+        traditional_bugfix_sequence()
+    # else:
+    #     traditional_bugfix_sequence()
+    
+    
 
 #%% Model specification (without set_production_capacity)
 pre_fermenter_units_path = list(spec.reactor.get_upstream_units())
@@ -174,27 +228,37 @@ pre_fermenter_units_path.reverse()
 def model_specification():
     # for i in system.products: i.empty()
     try:
-        for i in pre_fermenter_units_path: i.simulate()
+        # for i in pre_fermenter_units_path: i.simulate()
+        model._system.simulate()
+        
         spec.load_specifications(spec_1=spec.spec_1, spec_2=spec.spec_2, spec_3=spec.spec_3)
+        
         # spec.set_production_capacity(spec.desired_annual_production)
         model._system.simulate()
 
     except Exception as e:
         str_e = str(e).lower()
         print('Error in model spec: %s'%str_e)
-        # breakpoint()
+        
+        if 'undefined composition; cannot set flow rate' in str_e:
+            # breakpoint()
+            pass
+        elif 'invalid value encountered in scalar divide' in str_e:
+            # breakpoint()
+            pass
+        
         # raise e
         if 'sugar concentration' in str_e:
             # flowsheet('AcrylicAcid').F_mass /= 1000.
             raise e
-        elif 'length' in str(e).lower() or 'in subtract' in str(e).lower() or 'in log' in str(e).lower():
-            raise e
+        # elif 'length' in str(e).lower() or 'in subtract' in str(e).lower() or 'in log' in str(e).lower():
+        #     raise e
         else:
             # breakpoint()
-            run_bugfix_barrage()
+            run_bugfix_barrage(e)
             
 model.specification = model_specification
-spec.reactor.neutralization = False
+spec.reactor.neutralization = False if not 'neutral' in product+additional_tag else True
 model.specification()
 print(get_adjusted_MSP())
 
@@ -275,10 +339,16 @@ for yt in yts:
         # Initial baseline simulation
         print('\n\nSimulating baseline ...')
         
-        baseline_initial = model.metrics_at_baseline()
-        # spec.set_production_capacity()
-        baseline_initial = model.metrics_at_baseline()
-        
+        try:
+            baseline_initial = model.metrics_at_baseline()
+            # spec.set_production_capacity()
+            baseline_initial = model.metrics_at_baseline()
+        except:
+            model.specification()
+            baseline_initial = model.metrics_at_baseline()
+            # spec.set_production_capacity()
+            baseline_initial = model.metrics_at_baseline()
+            
         # baseline = pd.DataFrame(data=np.array([[i for i in baseline_initial.values],]), 
         #                         columns=baseline_initial.keys())
         
@@ -302,13 +372,17 @@ for yt in yts:
         # Final baseline simulation
         print('\n\nRe-simulating baseline ...')
         try:
-            baseline_end = model.metrics_at_baseline()
+            baseline_initial = model.metrics_at_baseline()
             # spec.set_production_capacity()
-            baseline_end = model.metrics_at_baseline()
-            
-            print(f"\nRe-simulated baseline. MPSP = ${round(get_adjusted_MSP(),2)}/kg.")
+            baseline_initial = model.metrics_at_baseline()
         except:
-            print('\nFailed to re-simulate baseline.')
+            model.specification()
+            baseline_initial = model.metrics_at_baseline()
+            # spec.set_production_capacity()
+            baseline_initial = model.metrics_at_baseline()
+            
+        print(f"\nRe-simulated baseline. MPSP = ${round(get_adjusted_MSP(),2)}/kg.")
+        
         
         table = model.table
         model.table = model.table.dropna()
@@ -340,7 +414,8 @@ for yt in yts:
     except Exception as e:
         print(f'\n\nFailed evaluation at y = {y}, t = {t}.')
         print(str(e))
-        # breakpoint()
+        errors_dict[(y,t)] = e
+        breakpoint()
         
     # except Exception as e:
     #     print(str(e))
@@ -390,7 +465,8 @@ for i in range(N_simulations_per_TRY_combo):
             MPSPs.append(results_dict['Uncertainty']['MPSP'][mode][i])
             yts_fit.append((y,t))
         except: # error, likely infeasible region'
-            print(f'Error for {yt}.')
+            # breakpoint()
+            print(f'Error for {i}th MC simulation for yt={yt}.')
             # pass
         
     try:

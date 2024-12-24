@@ -12,6 +12,8 @@ import pickle
 import os
 from fermentation_insights.utils import fit_shifted_rect_hyperbola_two_param, get_feasible_TY_samples
 
+np.random.seed(4153)
+
 #%% Load baseline TRY
 os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 
@@ -58,10 +60,21 @@ import contourplots
 import biosteam as bst
 print('\n\nLoading system ...')
 from biorefineries import succinic
-from biorefineries.succinic import models_glucose as models
-# from biorefineries.succinic import models_corn as models
-# from biorefineries.succinic import models_sugarcane as models
-# from biorefineries.succinic import models_cornstover as models
+
+models = None
+
+if feedstock=='glucose':
+    from biorefineries.succinic import models_glucose
+    models = models_glucose
+elif feedstock=='sugarcane':
+    from biorefineries.succinic import models_corn
+    models = models_corn
+elif feedstock=='corn':
+    from biorefineries.succinic import models_sugarcane
+    models = models_sugarcane
+elif feedstock=='cornstover':
+    from biorefineries.succinic import models_cornstover
+    models = models_cornstover
 
 print('\nLoaded system.')
 from datetime import datetime
@@ -91,8 +104,6 @@ f = bst.main_flowsheet
 u, s = f.unit, f.stream
 
 # %% 
-np.random.seed(4153)
-
 N_simulations_per_TRY_combo = 100 # 6000
 
 percentiles = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 1]

@@ -26,8 +26,8 @@ product_IDs = [
                ]
 feedstock_IDs = [
                  'glucose', 
-                 'sugarcane', 
                  'cornstover',
+                 'sugarcane', 
                  'corn', 
                  ]
 
@@ -60,6 +60,7 @@ for cf in coefficients:
     for i, (p, f) in zip(all_filenames, 
                          list(itertools.product(product_IDs, feedstock_IDs))):
         unc = coeffs_uncertainty[i][cf]
+        if len(unc)<500: print(i, len(unc))
         bl = coeffs_baseline[i][cf]
         baselines_percentiles['product'].append(p)
         baselines_percentiles['feedstock'].append(f)
