@@ -25,6 +25,7 @@ import pandas as pd
 
 from biosteam.utils import  colors
 from  matplotlib.colors import LinearSegmentedColormap
+from matplotlib.ticker import AutoMinorLocator
 import chaospy
 import itertools
 import pickle
@@ -85,7 +86,33 @@ def get_all_MPSP_yt_fit():
             get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='4.2bp', plot_MPSP_y_t=False)
             get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
     
-
+#%%
+def format_ax(ax, x_ticks, y_ticks,):
+    ax.tick_params( direction = 'inout' , which='both')
+    ax.set_xlim((x_ticks[0], x_ticks[-1]))
+    ax.set_ylim((y_ticks[0], y_ticks[-1]))
+    ax.set_xticks(x_ticks)
+    ax.set_yticks(y_ticks)
+    
+    
+    ax_r = ax.secondary_yaxis('right')
+    ax_t = ax.secondary_xaxis('top')
+    
+    ax_r.tick_params(axis='y', direction='in', which='both')
+    ax_r.tick_params(labelright=False)   
+    ax_r.set_ylim((y_ticks[0], y_ticks[-1]))
+    ax_r.set_yticks(y_ticks)
+    
+    ax_t.tick_params(axis='x', direction='in', which='both')
+    ax_t.tick_params(labeltop=False)   
+    ax_t.set_xlim((x_ticks[0], x_ticks[-1]))
+    ax_t.set_xticks(x_ticks)
+    
+    ax.xaxis.set_minor_locator(AutoMinorLocator())
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax_r.yaxis.set_minor_locator(AutoMinorLocator())
+    ax_t.xaxis.set_minor_locator(AutoMinorLocator())
+    
 #%% Load TRY
 
 def get_MPSP_yt_fit(product, feedstock, additional_tag='', 
@@ -1018,7 +1045,9 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
     if external_data_fit_and_plot:
         product_ID = 'product'
         print('\nValidate with external data:\n')
-        
+        plt.rcParams['font.sans-serif'] = "Arial Unicode"
+        plt.rcParams['font.size'] = str(12)
+
         #%% https://doi.org/10.1002/jctb.7690
         # Figure in Jankovic et al. 2024(above DOI) showing data from
         # Jankovic et al. 2023 for ethanol (https://doi.org/10.1016/j.seppur.2023.124320 ) and 
@@ -1032,77 +1061,135 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
             # isobutanol: Vacuum distillation and a novel hybrid combination of gas stripping and vacuum evaporation were coupled with atmospheric azeotropic distillation
         
         # 6 points, 4 points
-        print('\n#1: Janković et al., normalized annual cost($/kg) vs titer (wt%)')
-        
+        print('\n#1: Janković et al., normalized annual cost of separation ($/kg) vs titer (wt%)')
+        filename = 'jankovic_et_al_2023_ethanol_7a'
         product_ID = 'product'
         
-        # product concentration in fermentation broth (wt%)
-        p_currs = [[1.001303781,
-                  2.002607562,
-                  3.003911343,
-                  4.005215124,
-                  4.998696219,
-                  6],
-                  [0.492829205,
-                   1.009126467,
-                   1.603650587,
-                   2.002607562]
-                  ]
+        ext_data1 = pd.read_csv(filename+'.csv')
+        ts_ext1 = ext_data1['titer (wt%)']
+        mpsps_ext1 = ext_data1['annual cost of separation ($/kg)']
         
-        # normalized annual cost of separation ($/kg)
-        arrs = [[0.464788732,
-               0.615492958,
-               0.666197183,
-               0.691549296,
-               0.708450704,
-               0.71971831],
-               [0.335211268,
-                0.56,
-                0.63943662,
-                0.666197183,
-                ]
-               ]
+        m,c,r = fit_shifted_rect_hyperbola(ts_ext1, mpsps_ext1)
         
+        fig = plt.figure()
+        ax = plt.subplot(111)
         
-        for p_curr, arr in zip(p_currs, arrs):
-            p_curr = np.array(p_curr)
-            arr = np.array(arr)
-            
-            # m,c,r = fit_straight_line(p_curr, p_curr*arr)
-            m,c,r = fit_shifted_rect_hyperbola(p_curr, arr)
-            
-            fig = plt.figure()
-            ax = plt.subplot(411)
-            
-            ax.set_ylabel(f'MPSP [$/kg {product_ID}] * titer[g/L]')
-            ax.set_xlabel(f'{product_ID} titer [g/L]')
-            ax.scatter(p_curr, [p_curr*arr], label='simulated')
-            ax.plot(p_curr, [m*t + c for t in p_curr], label='fit') # MPSP * titer vs titer straight line fit
-            
-            ax = plt.subplot(412)
-            ax.set_ylabel(f'MPSP [$/kg {product_ID}]')
-            ax.set_xlabel(f'{product_ID} titer [g/L]')
-            ax.scatter(p_curr, arr, label='simulated')
-            ax.plot(p_curr, [m + c/t for t in p_curr], label='fit') # resulting MPSP vs titer curve
-            plt.legend()
-            
-            ax = plt.subplot(413)
-            ax.set_ylabel(f'Residuals [$/kg {product_ID}]')
-            ax.set_xlabel(f'{product_ID} titer [g/L]')
-            ax.scatter(p_curr, arr - np.array([m + c/t for t in p_curr]))
-            
-            ax = plt.subplot(414)
-            ax.set_ylabel('Standardized residuals [-]')
-            ax.set_xlabel(f'{product_ID} titer [g/L]')
-            ax.scatter(p_curr, (arr - np.array([m + c/t for t in p_curr]))/arr)
-            plt.show()
-            
-            print(get_Rsq(np.array(arr), 
-                          np.array([shifted_rect_hyperbola_f(p, m, c) for p in p_curr])
-                          )
+        x_ticks = np.arange(0.0, 0.071, 0.01)
+        y_ticks = np.arange(0., 0.401, 0.05)
+        
+        format_ax(ax, x_ticks, y_ticks,
                   )
-            print(m, c)
+        
+        # ax = plt.subplot(411)
+        
+        # ax.set_ylabel(f'MPSP [$/kg {product_ID}] * titer[g/L]')
+        # ax.set_xlabel(f'{product_ID} titer [g/L]')
+        # ax.scatter(p_curr, [p_curr*arr], label='simulated')
+        # ax.plot(p_curr, [m*t + c for t in p_curr], label='fit') # MPSP * titer vs titer straight line fit
+        
+        # ax = plt.subplot(412)
+        ax.set_ylabel(f'MPSP [$/kg {product_ID}]')
+        ax.set_xlabel(f'{product_ID} titer [g/L]')
+        ax.scatter(ts_ext1, mpsps_ext1, label='simulated')
+        ax.plot(ts_ext1, [m + c/t for t in ts_ext1], label='fit') # resulting MPSP vs titer curve
+        # plt.legend(loc=(
+        #         np.linspace(x_ticks[0], x_ticks[-1], 100)[-4], # x-coord
+        #         np.linspace(y_ticks[0], y_ticks[-1], 100)[-20],# y-coord
+        #         ))
+        plt.legend(edgecolor ='gray')
+        
+        # ax = plt.subplot(413)
+        # ax.set_ylabel(f'Residuals [$/kg {product_ID}]')
+        # ax.set_xlabel(f'{product_ID} titer [g/L]')
+        # ax.scatter(p_curr, arr - np.array([m + c/t for t in p_curr]))
+        
+        # ax = plt.subplot(414)
+        # ax.set_ylabel('Standardized residuals [-]')
+        # ax.set_xlabel(f'{product_ID} titer [g/L]')
+        # ax.scatter(p_curr, (arr - np.array([m + c/t for t in p_curr]))/arr)
+        # plt.show()
+        Rsq = get_Rsq(np.array(mpsps_ext1), 
+                      np.array([shifted_rect_hyperbola_f(p, m, c) for p in ts_ext1])
+                      )
+        print(Rsq)
+        print(m, c)
+        
+        textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
+        props = dict(boxstyle='round', 
+                     # facecolor='wheat', 
+                     facecolor='white', 
+                     alpha=0.5,
+                     # edgecolor ='gray',
+                     )
+        
+        ax.text(
+                np.linspace(x_ticks[0], x_ticks[-1], 100)[-32], # x-coord
+                # np.linspace(x_ticks[0], x_ticks[-1], 100)[15], # x-coord
+                np.linspace(y_ticks[0], y_ticks[-1], 100)[-30], # y-coord
+                textstr, 
+                # transform=ax.transAxes, 
+                fontsize=12,
+                # verticalalignment='top', 
+                bbox=props)
+        
+        plt.savefig(filename+'.png', dpi=300, 
+                    bbox_inches='tight',
+                    # facecolor=plt.get_facecolor(),
+                    # transparent=False,
+                    )
+        
+        # for p_curr, arr in zip(p_currs, arrs):
+        #     p_curr = np.array(p_curr)
+        #     arr = np.array(arr)
             
+        #     # m,c,r = fit_straight_line(p_curr, p_curr*arr)
+        #     m,c,r = fit_shifted_rect_hyperbola(p_curr, arr)
+            
+        #     fig = plt.figure()
+        #     ax = plt.subplot(111)
+            
+        #     # ax = plt.subplot(411)
+            
+        #     # ax.set_ylabel(f'MPSP [$/kg {product_ID}] * titer[g/L]')
+        #     # ax.set_xlabel(f'{product_ID} titer [g/L]')
+        #     # ax.scatter(p_curr, [p_curr*arr], label='simulated')
+        #     # ax.plot(p_curr, [m*t + c for t in p_curr], label='fit') # MPSP * titer vs titer straight line fit
+            
+        #     # ax = plt.subplot(412)
+        #     ax.set_ylabel(f'MPSP [$/kg {product_ID}]')
+        #     ax.set_xlabel(f'{product_ID} titer [g/L]')
+        #     ax.scatter(p_curr, arr, label='simulated')
+        #     ax.plot(p_curr, [m + c/t for t in p_curr], label='fit') # resulting MPSP vs titer curve
+        #     plt.legend()
+            
+        #     # ax = plt.subplot(413)
+        #     # ax.set_ylabel(f'Residuals [$/kg {product_ID}]')
+        #     # ax.set_xlabel(f'{product_ID} titer [g/L]')
+        #     # ax.scatter(p_curr, arr - np.array([m + c/t for t in p_curr]))
+            
+        #     # ax = plt.subplot(414)
+        #     # ax.set_ylabel('Standardized residuals [-]')
+        #     # ax.set_xlabel(f'{product_ID} titer [g/L]')
+        #     # ax.scatter(p_curr, (arr - np.array([m + c/t for t in p_curr]))/arr)
+        #     # plt.show()
+            
+        #     print(get_Rsq(np.array(arr), 
+        #                   np.array([shifted_rect_hyperbola_f(p, m, c) for p in p_curr])
+        #                   )
+        #           )
+        #     print(m, c)
+        #%%
+        def titer_f(y, MPSP, a, b, c, d):
+            inv_MPSP_minus_a = 1/(MPSP-a)
+            y_minus_h = y - b*inv_MPSP_minus_a
+            # y_minus_h[np.where(y_minus_h<=0)]=1e-6
+            return A(MPSP, a, b, c, d) / y_minus_h\
+                    + c*inv_MPSP_minus_a
+        
+        def A(MPSP, a, b, c, d):
+            inv_MPSP_minus_a = 1/(MPSP-a)
+            return (d+b*c*inv_MPSP_minus_a)*inv_MPSP_minus_a
+
         #%% https://doi.org/10.1021/acssuschemeng.7b01729
         # Tool: SuperPro
         # Feedstock: corn
@@ -1110,17 +1197,128 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         # Separation: solvent extraction (methyl isobutyl ketone) & distillation
         print('\n#2: Gunukula et al., minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
         # 31 y-t combinations
-        
-        ext_data2 = pd.read_csv('e_plot-data.csv')
+        filename = 'gunukula_2017_SI_3-HP_b'
+        ext_data2 = pd.read_csv(filename+'.csv')
         ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
         mpsps_ext2 = ext_data2['MPSP ($/kg)']
         a_ext2, b_ext2, c_ext2, d_ext2, r = fit_shifted_rect_hyperbola_two_param((ys_ext2, ts_ext2), 
                                                                                    mpsps_ext2,)
-        print(get_Rsq(np.array(mpsps_ext2), 
+        Rsq = get_Rsq(np.array(mpsps_ext2), 
                       np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
-                                for y,t in zip(ys_ext2, ts_ext2)])))
-                                 
+                                for y,t in zip(ys_ext2, ts_ext2)]))
+        print(Rsq)
+        fig, axs = plt.subplots(1, 2, constrained_layout=True)
         
+        ax = axs[0]
+        
+        x_ticks = np.arange(0., 1.01, 0.2)
+        y_ticks = np.arange(0., 200.01, 20)
+        
+        format_ax(ax, x_ticks, y_ticks,
+                  )
+        
+        ax.set_xlabel(f'Yield [g/g]')
+        ax.set_ylabel(f'{product_ID} Titer [g/L]')
+        
+        mpsps_ext2 = np.array(mpsps_ext2)
+        MPSP_indices = np.where(mpsps_ext2[:-1] != mpsps_ext2[1:])[0]
+        MPSP_indices += 1
+        # MPSP_indices = [0] + list(MPSP_indices)
+        
+        curr_MPSP_ind = 0
+        next_MPSP_ind = MPSP_indices[0]
+        
+        plot_this_iter = True
+        for i, MPSP in zip(range(len(mpsps_ext2)), mpsps_ext2):
+                
+            ys_curr = ys_ext2[curr_MPSP_ind:next_MPSP_ind]
+            ts_curr = ts_ext2[curr_MPSP_ind:next_MPSP_ind]
+            
+            # print('\n')
+            # print(np.array(ys_curr))
+            # print(np.array(ts_curr))
+            
+            if plot_this_iter:
+                ax.plot(ys_curr, 
+                        ts_curr, label='simulated',
+                        color='black')
+                plot_this_iter = False
+            if not next_MPSP_ind is None:
+                curr_MPSP_ind = 1*next_MPSP_ind
+                try:
+                    next_MPSP_ind = MPSP_indices[list(MPSP_indices).index(curr_MPSP_ind)+1]
+                except:
+                    next_MPSP_ind=None
+                plot_this_iter = True
+                
+        ax = axs[1]
+        format_ax(ax, x_ticks, y_ticks,
+                  )
+        
+        ax.set_xlabel(f'Yield [g/g]')
+        ax.set_ylabel(f'{product_ID} Titer [g/L]')
+        
+        curr_MPSP_ind = 0
+        next_MPSP_ind = MPSP_indices[0]
+        
+        plot_this_iter = True
+        for i, MPSP in zip(range(len(mpsps_ext2)), mpsps_ext2):
+            # ys_curr = ys_ext2[curr_MPSP_ind:next_MPSP_ind]
+            # ts_fit = [titer_f(y, MPSP, a_ext2, b_ext2, c_ext2, d_ext2) for y in ys_curr]
+            
+            
+            # print('\n')
+            # print(np.array(ys_curr))
+            # print(ts_fit)
+            
+            if plot_this_iter:
+                h = b_ext2/(MPSP-a_ext2)
+                k = c_ext2/(MPSP-a_ext2)
+                MPSP = mpsps_ext2[curr_MPSP_ind]
+                
+                ys_curr = np.linspace(h*1.001, 1, 200)
+                ts_fit = np.array([titer_f(y, MPSP, a_ext2, b_ext2, c_ext2, d_ext2) for y in ys_curr])
+                inds_plot = np.where(ts_fit>0)[0]
+                # print(ts_fit)
+                # print('plot')
+                ax.plot(ys_curr[inds_plot], 
+                        ts_fit[inds_plot], label='simulated',
+                        color='black')
+                plot_this_iter = False
+            
+            # print('ind', curr_MPSP_ind, next_MPSP_ind)
+            if not next_MPSP_ind is None:
+                curr_MPSP_ind = 1*next_MPSP_ind
+                try:
+                    next_MPSP_ind = MPSP_indices[list(MPSP_indices).index(curr_MPSP_ind)+1]
+                except:
+                    next_MPSP_ind=None
+                plot_this_iter = True
+            
+        textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
+        props = dict(boxstyle='round', 
+                     # facecolor='wheat', 
+                     facecolor='white', 
+                     alpha=1,
+                     # edgecolor ='gray',
+                     )
+        
+        ax.text(
+                np.linspace(x_ticks[0], x_ticks[-1], 100)[-45], # x-coord
+                # np.linspace(x_ticks[0], x_ticks[-1], 100)[15], # x-coord
+                np.linspace(y_ticks[0], y_ticks[-1], 100)[-1]*1.05, # y-coord
+                textstr, 
+                # transform=ax.transAxes, 
+                fontsize=12,
+                # verticalalignment='top', 
+                bbox=props)
+        
+        plt.savefig(filename+'.png', dpi=300, 
+                    bbox_inches='tight',
+                    # facecolor=plt.get_facecolor(),
+                    # transparent=False,
+                    )
+            
         # Tool: SuperPro
         # Feedstock: corn
         # Product: 1,3-propanediol (aerobic ferm)
@@ -1156,15 +1354,127 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         # Separation: solvent extraction (oleyl alcohol) & distillation
         print('\n#3: Sikazwe et al., minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
         # 11 y-t combinations
-        
-        ext_data2 = pd.read_csv('Sikazwe_2023_5_b.csv')
+        filename = 'Sikazwe_2023_5_b'
+        ext_data2 = pd.read_csv(filename+'.csv')
         ys_ext3, ts_ext3 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
         mpsps_ext3 = ext_data2['MPSP ($/kg)']/1000
         a_ext3, b_ext3, c_ext3, d_ext3, r = fit_shifted_rect_hyperbola_two_param((ys_ext3, ts_ext3), 
                                                                                    mpsps_ext3,)
-        print(get_Rsq(np.array(mpsps_ext3), 
+        Rsq = get_Rsq(np.array(mpsps_ext3), 
                       np.array([shifted_rect_hyperbola_two_param(y, t, a_ext3, b_ext3, c_ext3, d_ext3)
-                                for y,t in zip(ys_ext3, ts_ext3)])))
+                                for y,t in zip(ys_ext3, ts_ext3)]))
+        print(Rsq)
+        fig, axs = plt.subplots(1, 2, constrained_layout=True)
+        
+        ax = axs[0]
+        
+        x_ticks = np.arange(0.3, 0.501, 0.05)
+        y_ticks = np.arange(50., 150.01, 25)
+        
+        format_ax(ax, x_ticks, y_ticks,
+                  )
+        
+        ax.set_xlabel(f'Yield [g/g]')
+        ax.set_ylabel(f'{product_ID} Titer [g/L]')
+        
+        mpsps_ext3 = np.array(mpsps_ext3)
+        MPSP_indices = np.where(mpsps_ext3[:-1] != mpsps_ext3[1:])[0]
+        MPSP_indices += 1
+        # MPSP_indices = [0] + list(MPSP_indices)
+        
+        curr_MPSP_ind = 0
+        next_MPSP_ind = MPSP_indices[0]
+        
+        plot_this_iter = True
+        for i, MPSP in zip(range(len(mpsps_ext3)), mpsps_ext3):
+                
+            ys_curr = ys_ext3[curr_MPSP_ind:next_MPSP_ind]
+            ts_curr = ts_ext3[curr_MPSP_ind:next_MPSP_ind]
+            
+            # print('\n')
+            # print(np.array(ys_curr))
+            # print(np.array(ts_curr))
+            
+            if plot_this_iter:
+                ax.plot(ys_curr, 
+                        ts_curr, label='simulated',
+                        color='black')
+                plot_this_iter = False
+            if not next_MPSP_ind is None:
+                curr_MPSP_ind = 1*next_MPSP_ind
+                try:
+                    next_MPSP_ind = MPSP_indices[list(MPSP_indices).index(curr_MPSP_ind)+1]
+                except:
+                    next_MPSP_ind=None
+                plot_this_iter = True
+                
+        ax = axs[1]
+        format_ax(ax, x_ticks, y_ticks,
+                  )
+        
+        ax.set_xlabel(f'Yield [g/g]')
+        ax.set_ylabel(f'{product_ID} Titer [g/L]')
+        
+        curr_MPSP_ind = 0
+        next_MPSP_ind = MPSP_indices[0]
+        
+        plot_this_iter = True
+        for i, MPSP in zip(range(len(mpsps_ext3)), mpsps_ext3):
+            # ys_curr = ys_ext3[curr_MPSP_ind:next_MPSP_ind]
+            # ts_fit = [titer_f(y, MPSP, a_ext3, b_ext3, c_ext3, d_ext3) for y in ys_curr]
+            
+            
+            # print('\n')
+            # print(np.array(ys_curr))
+            # print(ts_fit)
+            
+            if plot_this_iter:
+                h = b_ext3/(MPSP-a_ext3)
+                k = c_ext3/(MPSP-a_ext3)
+                MPSP = mpsps_ext3[curr_MPSP_ind]
+                
+                ys_curr = np.linspace(h*1.001, 1, 200)
+                ts_fit = np.array([titer_f(y, MPSP, a_ext3, b_ext3, c_ext3, d_ext3) for y in ys_curr])
+                inds_plot = np.where(ts_fit>0)[0]
+                # print(ts_fit)
+                # print('plot')
+                ax.plot(ys_curr[inds_plot], 
+                        ts_fit[inds_plot], label='simulated',
+                        color='black')
+                plot_this_iter = False
+            
+            # print('ind', curr_MPSP_ind, next_MPSP_ind)
+            if not next_MPSP_ind is None:
+                curr_MPSP_ind = 1*next_MPSP_ind
+                try:
+                    next_MPSP_ind = MPSP_indices[list(MPSP_indices).index(curr_MPSP_ind)+1]
+                except:
+                    next_MPSP_ind=None
+                plot_this_iter = True
+            
+        textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
+        props = dict(boxstyle='round', 
+                     # facecolor='wheat', 
+                     facecolor='white', 
+                     alpha=1,
+                     # edgecolor ='gray',
+                     )
+        
+        ax.text(
+                np.linspace(x_ticks[0], x_ticks[-1], 100)[-45], # x-coord
+                # np.linspace(x_ticks[0], x_ticks[-1], 100)[15], # x-coord
+                np.linspace(y_ticks[0], y_ticks[-1], 100)[-1]*1.05, # y-coord
+                textstr, 
+                # transform=ax.transAxes, 
+                fontsize=12,
+                # verticalalignment='top', 
+                bbox=props)
+        
+        plt.savefig(filename+'.png', dpi=300, 
+                    bbox_inches='tight',
+                    # facecolor=plt.get_facecolor(),
+                    # transparent=False,
+                    )
     
     #%% Print coefficients again for convenience
     print('\n')
