@@ -206,6 +206,7 @@ a_units = r"$\mathrm{\$}\cdot\mathrm{kg-fp}^{-1}$"
 b_units = r"$\mathrm{\$}\cdot\mathrm{kg-sugars}^{-1}$"
 c_units = r"$\mathrm{\$}\cdot\mathrm{L-broth}^{-1}$"
 d_units = r"$\mathrm{\$}\cdot\mathrm{kg-fp}\cdot\mathrm{L-broth}^{-1}\cdot\mathrm{kg-sugars}^{-1}$"
+g_units = r"$\mathrm{kg-p}\cdot\mathrm{kg-fp}$"
 
 #%%
 # baseline_marker_shapes=["s", "^", "D","p", "h", "8"]
@@ -405,6 +406,48 @@ contourplots.box_and_whiskers_plot(uncertainty_data=a_uncertainty,
                           fig_width=fig_width,
                           box_width=0.45,
                           filename='d_uncertainties',
+                          dpi=600,
+                          rotate_xticks=90.,
+                          background_fill_colors=background_fill_colors,
+                          background_fill_alphas=background_fill_alphas,
+                          ylabel_fontsize=ylabel_fontsize,
+                          yticks_fontsize=yticks_fontsize,)
+
+#%% g (recoveries - mass of main biorefinery product to mass of fermentation product)
+
+a_uncertainty = [coeffs_uncertainty[filename]['g'] for filename in all_filenames]
+a_baseline = [coeffs_baseline[filename]['g'] for filename in all_filenames]
+
+contourplots.box_and_whiskers_plot(uncertainty_data=a_uncertainty, 
+                          baseline_values=a_baseline,
+                          baseline_marker_shapes=baseline_marker_shapes,
+                          baseline_marker_sizes=baseline_marker_sizes,
+                          baseline_marker_colors=baseline_marker_colors,
+                          baseline_locations=[i+1 for i in range(len(all_filenames))],
+                          boxcolor="#A97802",
+                          # ranges_for_comparison=[
+                          #                        market_range,
+                          #                        # [biobased_price*0.995, biobased_price*1.005],
+                          #                        ],
+                          # ranges_for_comparison_colors=[
+                          #                               '#c0c1c2', 
+                          #                               # '#646464',
+                          #                               # '#c0c1c2', 
+                                                        
+                          #                               ],
+                          # values_for_comparison=[biobased_price],
+                          n_minor_ticks=3,
+                          show_x_ticks=True,
+                          x_tick_labels=x_tick_labels,
+                          x_tick_wrap_width=9,
+                          y_label=r"$\bfg$",
+                          y_units=g_units,
+                          y_ticks=np.arange(0, 1.01, 0.2),
+                          save_file=True,
+                          fig_height=fig_height,
+                          fig_width=fig_width,
+                          box_width=0.45,
+                          filename='g_uncertainties',
                           dpi=600,
                           rotate_xticks=90.,
                           background_fill_colors=background_fill_colors,

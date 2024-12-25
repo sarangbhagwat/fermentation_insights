@@ -72,11 +72,25 @@ all_filenames = list(itertools.product(product_IDs, feedstock_IDs))
 
 def get_all_MPSP_yt_fit():
     for i in all_filenames:
+        print(i[0], i[1])
         get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='', plot_MPSP_y_t=False)
+        get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
+        # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
+        if i[0]+'_'+i[1] in ['TAL_SA_sugarcane']:
+            # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
+            # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.0bp', plot_MPSP_y_t=False)
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.8bp', plot_MPSP_y_t=False)
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='2.6bp', plot_MPSP_y_t=False)
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='3.4bp', plot_MPSP_y_t=False)
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='4.2bp', plot_MPSP_y_t=False)
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
+    
 
 #%% Load TRY
 
-def get_MPSP_yt_fit(product, feedstock, additional_tag='', plot_MPSP_y_t=False, 
+def get_MPSP_yt_fit(product, feedstock, additional_tag='', 
+                    plot_MPSP_y_t=False, 
+                    external_data_fit_and_plot=False,
                     save_to='C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results'):
     os.chdir(save_to)
     product_ID = product
@@ -513,12 +527,13 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='', plot_MPSP_y_t=False,
                                                                                # [0,0,0,0,0],
                                                                                )
     
+    # print('\n')
+    # print(filename)
     print(a_fit, b_fit, c_fit, d_fit)
     print(get_Rsq(indicator_array_for_eval, 
                   np.array([[[MPSP_f(y, t, [a_fit], [b_fit], [c_fit], [d_fit]) 
                               for y in yields_for_eval] 
                                  for t in titers_for_eval]])))
-    
     
     #%% Solve numerically for "g", a', b', c', d', e'
     from scipy.optimize import minimize
@@ -655,12 +670,30 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='', plot_MPSP_y_t=False,
     np.save(f'{filename}_yields_RI.npy', ys_ri)
     np.save(f'{filename}_titers_RI.npy', ts_ri)
     
+    #%% Save coefficients
+    
+    np.save(
+            filename+'_coefficients',
+            np.array(
+                    [a_fit*true_g, 
+                     b_fit*true_g, 
+                     c_fit*true_g, 
+                     d_fit*true_g,
+                     true_g,
+                     get_Rsq(indicator_array_for_eval, 
+                                  np.array([[[MPSP_f(y, t, [a_fit], [b_fit], [c_fit], [d_fit]) 
+                                              for y in yields_for_eval] 
+                                                 for t in titers_for_eval]]))
+                    ]
+                    ),
+                    )
+    
     #%% Plot stuff
     yields_for_plot = yields_for_eval
     titers_for_plot = titers_for_eval
     indicator_array_for_plot = indicator_array_for_eval.tolist()
     
-    
+    #%% MPSP_fit
     fit_indicator_array_for_plot = [[[MPSP_f(y, t, [a_fit], [b_fit], [c_fit], [d_fit]) 
                                    for y in yields_for_plot] 
                                    for t in titers_for_plot]]
@@ -681,6 +714,26 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='', plot_MPSP_y_t=False,
     
     np.save(f'{filename}_MPSP_fit.npy', fit_indicator_array_for_plot)
     
+    
+    #%% Contribution % of d term
+    def dcon_magnitude_f(y, t, d):
+        return d/(y*t)
+    dcon = [[[ (        dcon_magnitude_f(y, t, d_fit)/
+                        MPSP_f(y, t, [a_fit], [b_fit], [c_fit], [d_fit])
+                )
+                                   for y in yields_for_plot] 
+                                   for t in titers_for_plot]]
+    dcon = np.array(dcon)
+    
+    dcon[np.where(np.isnan(indicator_array_for_plot))] = np.nan
+    
+    dcon_non_nan = dcon[np.where(~np.isnan(dcon))]
+    
+    print('D and DCON min and max:', d_fit, np.min(dcon_non_nan), np.max(dcon_non_nan))
+    
+    np.save(f'{filename}_dcon.npy', dcon)
+    
+    #%% Plots
     if plot_MPSP_y_t:
         # Parameters analyzed across
     
@@ -962,174 +1015,160 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='', plot_MPSP_y_t=False,
                                         )
         
     #%% Validate against external data
-    product_ID = 'product'
-    print('\nValidate with external data:\n')
-    
-    #%% https://doi.org/10.1002/jctb.7690
-    # Figure in Jankovic et al. 2024(above DOI) showing data from
-    # Jankovic et al. 2023 for ethanol (https://doi.org/10.1016/j.seppur.2023.124320 ) and 
-    # Jankovic et al. 2023 for isobutanol (https://doi.org/10.1016/j.ecmx.2023.100520 )
-    
-    # Tools: Aspen Plus, Aspen Plus
-    # Products: ethanol, isobutanol
-    # Feedstocks: crude ethanol, crude isobutanol (only modeled separations)
-    # Separations: 
-        # ethanol: vacuum distillation + extractive distillation (ethylene glycol)
-        # isobutanol: Vacuum distillation and a novel hybrid combination of gas stripping and vacuum evaporation were coupled with atmospheric azeotropic distillation
-    
-    # 6 points, 4 points
-    print('\n#1: Janković et al., normalized annual cost($/kg) vs titer (wt%)')
-    
-    product_ID = 'product'
-    
-    # product concentration in fermentation broth (wt%)
-    p_currs = [[1.001303781,
-              2.002607562,
-              3.003911343,
-              4.005215124,
-              4.998696219,
-              6],
-              [0.492829205,
-               1.009126467,
-               1.603650587,
-               2.002607562]
-              ]
-    
-    # normalized annual cost of separation ($/kg)
-    arrs = [[0.464788732,
-           0.615492958,
-           0.666197183,
-           0.691549296,
-           0.708450704,
-           0.71971831],
-           [0.335211268,
-            0.56,
-            0.63943662,
-            0.666197183,
-            ]
-           ]
-    
-    
-    for p_curr, arr in zip(p_currs, arrs):
-        p_curr = np.array(p_curr)
-        arr = np.array(arr)
+    if external_data_fit_and_plot:
+        product_ID = 'product'
+        print('\nValidate with external data:\n')
         
-        # m,c,r = fit_straight_line(p_curr, p_curr*arr)
-        m,c,r = fit_shifted_rect_hyperbola(p_curr, arr)
+        #%% https://doi.org/10.1002/jctb.7690
+        # Figure in Jankovic et al. 2024(above DOI) showing data from
+        # Jankovic et al. 2023 for ethanol (https://doi.org/10.1016/j.seppur.2023.124320 ) and 
+        # Jankovic et al. 2023 for isobutanol (https://doi.org/10.1016/j.ecmx.2023.100520 )
         
-        fig = plt.figure()
-        ax = plt.subplot(411)
+        # Tools: Aspen Plus, Aspen Plus
+        # Products: ethanol, isobutanol
+        # Feedstocks: crude ethanol, crude isobutanol (only modeled separations)
+        # Separations: 
+            # ethanol: vacuum distillation + extractive distillation (ethylene glycol)
+            # isobutanol: Vacuum distillation and a novel hybrid combination of gas stripping and vacuum evaporation were coupled with atmospheric azeotropic distillation
         
-        ax.set_ylabel(f'MPSP [$/kg {product_ID}] * titer[g/L]')
-        ax.set_xlabel(f'{product_ID} titer [g/L]')
-        ax.scatter(p_curr, [p_curr*arr], label='simulated')
-        ax.plot(p_curr, [m*t + c for t in p_curr], label='fit') # MPSP * titer vs titer straight line fit
+        # 6 points, 4 points
+        print('\n#1: Janković et al., normalized annual cost($/kg) vs titer (wt%)')
         
-        ax = plt.subplot(412)
-        ax.set_ylabel(f'MPSP [$/kg {product_ID}]')
-        ax.set_xlabel(f'{product_ID} titer [g/L]')
-        ax.scatter(p_curr, arr, label='simulated')
-        ax.plot(p_curr, [m + c/t for t in p_curr], label='fit') # resulting MPSP vs titer curve
-        plt.legend()
+        product_ID = 'product'
         
-        ax = plt.subplot(413)
-        ax.set_ylabel(f'Residuals [$/kg {product_ID}]')
-        ax.set_xlabel(f'{product_ID} titer [g/L]')
-        ax.scatter(p_curr, arr - np.array([m + c/t for t in p_curr]))
+        # product concentration in fermentation broth (wt%)
+        p_currs = [[1.001303781,
+                  2.002607562,
+                  3.003911343,
+                  4.005215124,
+                  4.998696219,
+                  6],
+                  [0.492829205,
+                   1.009126467,
+                   1.603650587,
+                   2.002607562]
+                  ]
         
-        ax = plt.subplot(414)
-        ax.set_ylabel('Standardized residuals [-]')
-        ax.set_xlabel(f'{product_ID} titer [g/L]')
-        ax.scatter(p_curr, (arr - np.array([m + c/t for t in p_curr]))/arr)
-        plt.show()
+        # normalized annual cost of separation ($/kg)
+        arrs = [[0.464788732,
+               0.615492958,
+               0.666197183,
+               0.691549296,
+               0.708450704,
+               0.71971831],
+               [0.335211268,
+                0.56,
+                0.63943662,
+                0.666197183,
+                ]
+               ]
         
-        print(get_Rsq(np.array(arr), 
-                      np.array([shifted_rect_hyperbola_f(p, m, c) for p in p_curr])
-                      )
-              )
-        print(m, c)
         
-    #%% https://doi.org/10.1021/acssuschemeng.7b01729
-    # Tool: SuperPro
-    # Feedstock: corn
-    # Product: 3-HP (anaerobic ferm)
-    # Separation: solvent extraction (methyl isobutyl ketone) & distillation
-    print('\n#2: Gunukula et al., minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
-    # 31 y-t combinations
+        for p_curr, arr in zip(p_currs, arrs):
+            p_curr = np.array(p_curr)
+            arr = np.array(arr)
+            
+            # m,c,r = fit_straight_line(p_curr, p_curr*arr)
+            m,c,r = fit_shifted_rect_hyperbola(p_curr, arr)
+            
+            fig = plt.figure()
+            ax = plt.subplot(411)
+            
+            ax.set_ylabel(f'MPSP [$/kg {product_ID}] * titer[g/L]')
+            ax.set_xlabel(f'{product_ID} titer [g/L]')
+            ax.scatter(p_curr, [p_curr*arr], label='simulated')
+            ax.plot(p_curr, [m*t + c for t in p_curr], label='fit') # MPSP * titer vs titer straight line fit
+            
+            ax = plt.subplot(412)
+            ax.set_ylabel(f'MPSP [$/kg {product_ID}]')
+            ax.set_xlabel(f'{product_ID} titer [g/L]')
+            ax.scatter(p_curr, arr, label='simulated')
+            ax.plot(p_curr, [m + c/t for t in p_curr], label='fit') # resulting MPSP vs titer curve
+            plt.legend()
+            
+            ax = plt.subplot(413)
+            ax.set_ylabel(f'Residuals [$/kg {product_ID}]')
+            ax.set_xlabel(f'{product_ID} titer [g/L]')
+            ax.scatter(p_curr, arr - np.array([m + c/t for t in p_curr]))
+            
+            ax = plt.subplot(414)
+            ax.set_ylabel('Standardized residuals [-]')
+            ax.set_xlabel(f'{product_ID} titer [g/L]')
+            ax.scatter(p_curr, (arr - np.array([m + c/t for t in p_curr]))/arr)
+            plt.show()
+            
+            print(get_Rsq(np.array(arr), 
+                          np.array([shifted_rect_hyperbola_f(p, m, c) for p in p_curr])
+                          )
+                  )
+            print(m, c)
+            
+        #%% https://doi.org/10.1021/acssuschemeng.7b01729
+        # Tool: SuperPro
+        # Feedstock: corn
+        # Product: 3-HP (anaerobic ferm)
+        # Separation: solvent extraction (methyl isobutyl ketone) & distillation
+        print('\n#2: Gunukula et al., minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
+        # 31 y-t combinations
+        
+        ext_data2 = pd.read_csv('e_plot-data.csv')
+        ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
+        mpsps_ext2 = ext_data2['MPSP ($/kg)']
+        a_ext2, b_ext2, c_ext2, d_ext2, r = fit_shifted_rect_hyperbola_two_param((ys_ext2, ts_ext2), 
+                                                                                   mpsps_ext2,)
+        print(get_Rsq(np.array(mpsps_ext2), 
+                      np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
+                                for y,t in zip(ys_ext2, ts_ext2)])))
+                                 
+        
+        # Tool: SuperPro
+        # Feedstock: corn
+        # Product: 1,3-propanediol (aerobic ferm)
+        # Separation: solvent extraction & distillation
+        
+        
+        # Tool: SuperPro
+        # Feedstock: corn
+        # Product: adipic acid
+        # Separation: (microfiltration, centrifugation), distillation, ultrafiltration, crystallization, ion exchange, drying
+        
+        
+        # Tool: SuperPro
+        # Feedstock: corn
+        # Product: succinic acid
+        # Separation: (microfiltration, centrifugation), distillation, ultrafiltration, crystallization, ion exchange, drying
+        
+        
+        # Tool: SuperPro
+        # Feedstock: corn
+        # Product: 1,3-propanediol (microaerobic ferm)
+        # Separation: solvent extraction & distillation
+        
+        # Tool: SuperPro
+        # Feedstock: corn
+        # Product: isobutanol
+        # Separation: distillation, decantation, distillation
+        
+        #%% https://doi.org/10.1007/s10098-024-02843-w
+        # Tool: Aspen Plus
+        # Feedstock: sugarcane A-molasses
+        # Product: 2,3-BDO
+        # Separation: solvent extraction (oleyl alcohol) & distillation
+        print('\n#3: Sikazwe et al., minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
+        # 11 y-t combinations
+        
+        ext_data2 = pd.read_csv('Sikazwe_2023_5_b.csv')
+        ys_ext3, ts_ext3 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
+        mpsps_ext3 = ext_data2['MPSP ($/kg)']/1000
+        a_ext3, b_ext3, c_ext3, d_ext3, r = fit_shifted_rect_hyperbola_two_param((ys_ext3, ts_ext3), 
+                                                                                   mpsps_ext3,)
+        print(get_Rsq(np.array(mpsps_ext3), 
+                      np.array([shifted_rect_hyperbola_two_param(y, t, a_ext3, b_ext3, c_ext3, d_ext3)
+                                for y,t in zip(ys_ext3, ts_ext3)])))
     
-    ext_data2 = pd.read_csv('e_plot-data.csv')
-    ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
-    mpsps_ext2 = ext_data2['MPSP ($/kg)']
-    a_ext2, b_ext2, c_ext2, d_ext2, r = fit_shifted_rect_hyperbola_two_param((ys_ext2, ts_ext2), 
-                                                                               mpsps_ext2,)
-    print(get_Rsq(np.array(mpsps_ext2), 
-                  np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
-                            for y,t in zip(ys_ext2, ts_ext2)])))
-                             
-    
-    # Tool: SuperPro
-    # Feedstock: corn
-    # Product: 1,3-propanediol (aerobic ferm)
-    # Separation: solvent extraction & distillation
-    
-    
-    # Tool: SuperPro
-    # Feedstock: corn
-    # Product: adipic acid
-    # Separation: (microfiltration, centrifugation), distillation, ultrafiltration, crystallization, ion exchange, drying
-    
-    
-    # Tool: SuperPro
-    # Feedstock: corn
-    # Product: succinic acid
-    # Separation: (microfiltration, centrifugation), distillation, ultrafiltration, crystallization, ion exchange, drying
-    
-    
-    # Tool: SuperPro
-    # Feedstock: corn
-    # Product: 1,3-propanediol (microaerobic ferm)
-    # Separation: solvent extraction & distillation
-    
-    # Tool: SuperPro
-    # Feedstock: corn
-    # Product: isobutanol
-    # Separation: distillation, decantation, distillation
-    
-    #%% https://doi.org/10.1007/s10098-024-02843-w
-    # Tool: Aspen Plus
-    # Feedstock: sugarcane A-molasses
-    # Product: 2,3-BDO
-    # Separation: solvent extraction (oleyl alcohol) & distillation
-    print('\n#3: Sikazwe et al., minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
-    # 11 y-t combinations
-    
-    ext_data2 = pd.read_csv('Sikazwe_2023_5_b.csv')
-    ys_ext3, ts_ext3 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
-    mpsps_ext3 = ext_data2['MPSP ($/kg)']/1000
-    a_ext3, b_ext3, c_ext3, d_ext3, r = fit_shifted_rect_hyperbola_two_param((ys_ext3, ts_ext3), 
-                                                                               mpsps_ext3,)
-    print(get_Rsq(np.array(mpsps_ext3), 
-                  np.array([shifted_rect_hyperbola_two_param(y, t, a_ext3, b_ext3, c_ext3, d_ext3)
-                            for y,t in zip(ys_ext3, ts_ext3)])))
-    
-    #%% Print coefficients again for convenience and save
+    #%% Print coefficients again for convenience
     print('\n')
     print(filename)
     print(a_fit, b_fit, c_fit, d_fit)
     print(a_fit*true_g, b_fit*true_g, c_fit*true_g, d_fit*true_g)
     
-    np.save(
-            filename+'_coefficients',
-            np.array(
-                    [a_fit*true_g, 
-                     b_fit*true_g, 
-                     c_fit*true_g, 
-                     d_fit*true_g,
-                     true_g,
-                     get_Rsq(indicator_array_for_eval, 
-                                  np.array([[[MPSP_f(y, t, [a_fit], [b_fit], [c_fit], [d_fit]) 
-                                              for y in yields_for_eval] 
-                                                 for t in titers_for_eval]]))
-                    ]
-                    ),
-                    )

@@ -19,8 +19,8 @@ os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation
 
 product = product_ID = 'HP'
 # additional_tag = '0.5x_baselineprod'
-# additional_tag = 'neutral'
-additional_tag = ''
+additional_tag = 'neutral'
+# additional_tag = ''
 feedstock = 'cornstover'
 
 filename = None
