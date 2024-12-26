@@ -98,6 +98,7 @@ if show_cluster_labels:
         'feedstock': 'feedstock acquisition, pretreatment, saccharification',
         'fermentation': 'fermentation',
         'separation': 'separation',
+        'catalytic upgrading': 'catalytic upgrading',
         'wwrr': 'WWRR',
         'chp': 'CHP',
         'system-level': None})
@@ -238,6 +239,31 @@ with G.subgraph(name='cluster separation',
     
     c.node('s-m', 'material & energy costs', fontname=dep_fontname, fillcolor=box_color['s-m'], style='filled', fontcolor=text_color['s-m'],)
     c.node('s-e', 'equipment purchase costs', fontname=dep_fontname, fillcolor=box_color['s-e'], style='filled', fontcolor=text_color['s-e'],)
+
+# # Catalytic upgrading nodes
+# with G.subgraph(name='cluster catalytic upgrading', 
+#                 node_attr={'shape': overall_nodeshape},
+#                 graph_attr={'fillcolor': catalytic_upgrading_fillcolor, 
+#                             'color': catalytic_upgrading_linecolor,
+#                             'style': 'filled',
+#                             'label': cluster_label['catalytic upgrading'],
+#                             'fontname': cluster_fontname,
+#                             # 'rank': 'same',
+#                             }) as c:
+#     indep_vars = ['primary reactant conversion',
+#                   'product selectivity',
+#                   'catalyst loading',
+#                   'reaction time',
+#                   'reagent:primary reactant ratio',
+#                   '']
+#     dep_vars = ['reactant input',
+#                 'product output',]
+    
+#     for i in indep_vars: c.node(i, fontname=indep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i],)
+#     for i in dep_vars: c.node(i, fontname=dep_fontname, fillcolor=box_color[i], style='filled', fontcolor=text_color[i],)
+    
+#     c.node('s-m', 'material & energy costs', fontname=dep_fontname, fillcolor=box_color['s-m'], style='filled', fontcolor=text_color['s-m'],)
+#     c.node('s-e', 'equipment purchase costs', fontname=dep_fontname, fillcolor=box_color['s-e'], style='filled', fontcolor=text_color['s-e'],)
     
 # WWRR nodes
 with G.subgraph(name='cluster wastewater resource recovery', 
