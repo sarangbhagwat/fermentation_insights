@@ -106,7 +106,7 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
             ax = axs_list[j]
         else:
             ax = axs_list
-        filename = product_ID+'_'+feedstock_ID
+        filename = product_ID+'_5.0bp_'+feedstock_ID
         print(filename)
         yields = yields_for_plot = np.load(filename+'_yields_for_eval.npy')
         titers = titers_for_plot = np.load(filename+'_titers_for_eval.npy')
@@ -326,7 +326,7 @@ plt.subplots_adjust(wspace=0, hspace=0)
 fig.set_figheight(4.5)
 fig.set_figwidth(9)
 
-plt.savefig(f'TAL_all_TRY_fit.png', 
+plt.savefig(f'TAL_5.0bp_all_TRY_fit.png', 
             transparent = False,  
             facecolor = 'white',
             bbox_inches='tight',

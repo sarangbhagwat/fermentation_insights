@@ -111,7 +111,7 @@ plot_multiple_metrics(productivities,
                       x_axis_units=x_units,
                       
                       units_on_newline=True,
-                      xlim=(0.024,0.6), 
+                      xlim=(0.02,0.62), 
                       ylims_list=[
                                   (0,5),
                                   (0,1),
@@ -134,6 +134,7 @@ plot_multiple_metrics(productivities,
                                               '#f98f60',
                                               '#90918e'
                                               ],
+                      plot_type='scatter',
                       filename='coeffs_recovery_multiple_productivities_TAL_SA_sugarcane'
                       )
 
@@ -176,5 +177,6 @@ plot_multiple_metrics(productivities,
                                               '#f98f60',
                                               '#90918e'
                                               ],
+                      plot_type='scatter',
                       filename='coeffs_recovery_times_prod_multiple_productivities_TAL_SA_sugarcane'
                       )

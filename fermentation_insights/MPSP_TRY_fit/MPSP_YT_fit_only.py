@@ -76,7 +76,7 @@ def get_all_MPSP_yt_fit():
         print(i[0], i[1])
         get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='', plot_MPSP_y_t=False)
         get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
-        # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
+        get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
         if i[0]+'_'+i[1] in ['TAL_SA_sugarcane']:
             # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
             # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.0bp', plot_MPSP_y_t=False)
@@ -1091,7 +1091,9 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         ax.set_ylabel(f'MPSP [$/kg {product_ID}]')
         ax.set_xlabel(f'{product_ID} titer [g/L]')
         ax.scatter(ts_ext1, mpsps_ext1, label='simulated')
-        ax.plot(ts_ext1, [m + c/t for t in ts_ext1], label='fit') # resulting MPSP vs titer curve
+        ts_ext1_arr = np.array(ts_ext1)
+        ts_ext1_fit_plot = np.linspace(ts_ext1_arr[0], ts_ext1_arr[-1], 100)
+        ax.plot(ts_ext1_fit_plot, [m + c/t for t in ts_ext1_fit_plot], label='fit') # resulting MPSP vs titer curve
         # plt.legend(loc=(
         #         np.linspace(x_ticks[0], x_ticks[-1], 100)[-4], # x-coord
         #         np.linspace(y_ticks[0], y_ticks[-1], 100)[-20],# y-coord
