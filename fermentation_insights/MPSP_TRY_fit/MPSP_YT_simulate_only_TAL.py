@@ -26,7 +26,7 @@ keep_varnames = [
 feedstocks = ['glucose', 'sugarcane', 'corn', 'cornstover']
 neutralizations = [False, True]
 productivity_labels = [None, '0.2bp', '5.0bp']
-steps = 50
+steps = 10
 
 processes = 12
 
@@ -80,7 +80,7 @@ if __name__ == '__main__':
         np.save(f'{tag}_titers', titers)
         np.save(f'{tag}_productivities', productivities)
         
-        
+    
         print(f'\nSaved results for {tag}')
         
             # del yields, titers, inflection_product_yields
