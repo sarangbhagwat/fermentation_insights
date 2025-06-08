@@ -40,6 +40,8 @@ else:
     results_metric_6 = np.load('TAL_glucose_TCI')
     inflection_product_yields = np.load('TAL_glucose_inflection_product_yields')
 
+import gc
+gc.collect()
 #%% TAL_sugarcane
 run_simulations = True
 import numpy as np
@@ -72,7 +74,10 @@ else:
     results_metric_5 = np.load('TAL_sugarcane_AOC')
     results_metric_6 = np.load('TAL_sugarcane_TCI')
     inflection_product_yields = np.load('TAL_sugarcane_inflection_product_yields')
-            
+      
+import gc
+gc.collect()
+      
 #%% TAL_corn
 run_simulations = True
 import numpy as np
@@ -105,7 +110,10 @@ else:
     results_metric_5 = np.load('TAL_corn_AOC')
     results_metric_6 = np.load('TAL_corn_TCI')
     inflection_product_yields = np.load('TAL_corn_inflection_product_yields')
-            
+      
+import gc
+gc.collect()
+                  
 #%% TAL_cornstover
 run_simulations = True
 import numpy as np
@@ -138,7 +146,9 @@ else:
     results_metric_5 = np.load('TAL_cornstover_AOC')
     results_metric_6 = np.load('TAL_cornstover_TCI')
     inflection_product_yields = np.load('TAL_cornstover_inflection_product_yields')
-            
+      
+import gc
+gc.collect()            
 
 #%% TAL_SA
 
@@ -175,6 +185,9 @@ else:
     results_metric_5 = np.load('TAL_SA_glucose_AOC')
     results_metric_6 = np.load('TAL_SA_glucose_TCI')
     inflection_product_yields = np.load('TAL_SA_glucose_inflection_product_yields')
+      
+import gc
+gc.collect()
             
 #%% TAL_SA_sugarcane
 run_simulations = True
@@ -209,7 +222,10 @@ else:
     results_metric_5 = np.load('TAL_SA_sugarcane_AOC')
     results_metric_6 = np.load('TAL_SA_sugarcane_TCI')
     inflection_product_yields = np.load('TAL_SA_sugarcane_inflection_product_yields')
-            
+      
+import gc
+gc.collect()
+                  
 #%% TAL_SA_corn
 run_simulations = True
 import numpy as np
@@ -243,7 +259,10 @@ else:
     results_metric_5 = np.load('TAL_SA_corn_AOC')
     results_metric_6 = np.load('TAL_SA_corn_TCI')
     inflection_product_yields = np.load('TAL_SA_corn_inflection_product_yields')
-            
+      
+import gc
+gc.collect()
+                  
 #%% TAL_SA_cornstover
 run_simulations = True
 import numpy as np
@@ -277,7 +296,10 @@ else:
     results_metric_5 = np.load('TAL_SA_cornstover_AOC')
     results_metric_6 = np.load('TAL_SA_cornstover_TCI')
     inflection_product_yields = np.load('TAL_SA_cornstover_inflection_product_yields')
-            
+      
+import gc
+gc.collect()
+                  
 #%% HP
 
 #%% HP_glucose
@@ -311,7 +333,10 @@ else:
     results_metric_4 = np.load('HP_glucose_AOC')
     results_metric_5 = np.load('HP_glucose_TCI')
     inflection_product_yields = np.load('HP_glucose_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_sugarcane
 run_simulations = True
 import numpy as np
@@ -343,7 +368,10 @@ else:
     results_metric_4 = np.load('HP_sugarcane_AOC')
     results_metric_5 = np.load('HP_sugarcane_TCI')
     inflection_product_yields = np.load('HP_sugarcane_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_corn
 run_simulations = True
 import numpy as np
@@ -375,7 +403,10 @@ else:
     results_metric_4 = np.load('HP_corn_AOC')
     results_metric_5 = np.load('HP_corn_TCI')
     inflection_product_yields = np.load('HP_corn_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_cornstover
 run_simulations = True
 import numpy as np
@@ -407,7 +438,10 @@ else:
     results_metric_4 = np.load('HP_cornstover_AOC')
     results_metric_5 = np.load('HP_cornstover_TCI')
     inflection_product_yields = np.load('HP_cornstover_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_neutral
 
 #%% HP_neutral_glucose
@@ -441,7 +475,10 @@ else:
     results_metric_4 = np.load('HP_neutral_glucose_AOC')
     results_metric_5 = np.load('HP_neutral_glucose_TCI')
     inflection_product_yields = np.load('HP_neutral_glucose_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_neutral_sugarcane
 run_simulations = True
 import numpy as np
@@ -473,7 +510,10 @@ else:
     results_metric_4 = np.load('HP_neutral_sugarcane_AOC')
     results_metric_5 = np.load('HP_neutral_sugarcane_TCI')
     inflection_product_yields = np.load('HP_neutral_sugarcane_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_neutral_corn
 run_simulations = True
 import numpy as np
@@ -505,7 +545,10 @@ else:
     results_metric_4 = np.load('HP_neutral_corn_AOC')
     results_metric_5 = np.load('HP_neutral_corn_TCI')
     inflection_product_yields = np.load('HP_neutral_corn_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_neutral_cornstover
 run_simulations = True
 import numpy as np
@@ -537,7 +580,9 @@ else:
     results_metric_4 = np.load('HP_neutral_cornstover_AOC')
     results_metric_5 = np.load('HP_neutral_cornstover_TCI')
     inflection_product_yields = np.load('HP_neutral_cornstover_inflection_product_yields')
-
+      
+import gc
+gc.collect()
 
 #%% HP_hexanol
 
@@ -572,7 +617,10 @@ else:
     results_metric_4 = np.load('HP_hexanol_glucose_AOC')
     results_metric_5 = np.load('HP_hexanol_glucose_TCI')
     inflection_product_yields = np.load('HP_hexanol_glucose_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_hexanol_sugarcane
 run_simulations = True
 import numpy as np
@@ -604,7 +652,10 @@ else:
     results_metric_4 = np.load('HP_hexanol_sugarcane_AOC')
     results_metric_5 = np.load('HP_hexanol_sugarcane_TCI')
     inflection_product_yields = np.load('HP_hexanol_sugarcane_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_hexanol_corn
 run_simulations = True
 import numpy as np
@@ -636,7 +687,10 @@ else:
     results_metric_4 = np.load('HP_hexanol_corn_AOC')
     results_metric_5 = np.load('HP_hexanol_corn_TCI')
     inflection_product_yields = np.load('HP_hexanol_corn_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_hexanol_cornstover
 run_simulations = True
 import numpy as np
@@ -668,7 +722,9 @@ else:
     results_metric_4 = np.load('HP_hexanol_cornstover_AOC')
     results_metric_5 = np.load('HP_hexanol_cornstover_TCI')
     inflection_product_yields = np.load('HP_hexanol_cornstover_inflection_product_yields')
-
+      
+import gc
+gc.collect()
 
 #%% HP_hexanol_neutral
 
@@ -703,7 +759,10 @@ else:
     results_metric_4 = np.load('HP_neutral_hexanol_glucose_AOC')
     results_metric_5 = np.load('HP_neutral_hexanol_glucose_TCI')
     inflection_product_yields = np.load('HP_neutral_hexanol_glucose_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_neutral_hexanol_sugarcane
 run_simulations = True
 import numpy as np
@@ -735,7 +794,10 @@ else:
     results_metric_4 = np.load('HP_neutral_hexanol_sugarcane_AOC')
     results_metric_5 = np.load('HP_neutral_hexanol_sugarcane_TCI')
     inflection_product_yields = np.load('HP_neutral_hexanol_sugarcane_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_neutral_hexanol_corn
 run_simulations = True
 import numpy as np
@@ -767,7 +829,10 @@ else:
     results_metric_4 = np.load('HP_neutral_hexanol_corn_AOC')
     results_metric_5 = np.load('HP_neutral_hexanol_corn_TCI')
     inflection_product_yields = np.load('HP_neutral_hexanol_corn_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% HP_neutral_hexanol_cornstover
 run_simulations = True
 import numpy as np
@@ -799,7 +864,9 @@ else:
     results_metric_4 = np.load('HP_neutral_hexanol_cornstover_AOC')
     results_metric_5 = np.load('HP_neutral_hexanol_cornstover_TCI')
     inflection_product_yields = np.load('HP_neutral_hexanol_cornstover_inflection_product_yields')
-
+      
+import gc
+gc.collect()
 
 #%% succinic
 
@@ -835,7 +902,10 @@ else:
     # results_metric_4 = np.load('succinic_glucose_AOC')
     # results_metric_5 = np.load('succinic_glucose_TCI')
     inflection_product_yields = np.load('succinic_glucose_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% succinic_sugarcane
 run_simulations = True
 import numpy as np
@@ -868,7 +938,10 @@ else:
     # results_metric_4 = np.load('succinic_sugarcane_AOC')
     # results_metric_5 = np.load('succinic_sugarcane_TCI')
     inflection_product_yields = np.load('succinic_sugarcane_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% succinic_corn
 run_simulations = True
 import numpy as np
@@ -901,7 +974,10 @@ else:
     # results_metric_4 = np.load('succinic_corn_AOC')
     # results_metric_5 = np.load('succinic_corn_TCI')
     inflection_product_yields = np.load('succinic_corn_inflection_product_yields')
-
+      
+import gc
+gc.collect()
+      
 #%% succinic_cornstover
 run_simulations = True
 import numpy as np
@@ -934,7 +1010,9 @@ else:
     # results_metric_4 = np.load('succinic_cornstover_AOC')
     # results_metric_5 = np.load('succinic_cornstover_TCI')
     inflection_product_yields = np.load('succinic_cornstover_inflection_product_yields')
-
+      
+import gc
+gc.collect()
 
 #%% succinic_neutral
 
@@ -970,7 +1048,10 @@ else:
     # results_metric_4 = np.load('succinic_neutral_glucose_AOC')
     # results_metric_5 = np.load('succinic_neutral_glucose_TCI')
     inflection_product_yields = np.load('succinic_neutral_glucose_inflection_product_yields')
-    
+      
+import gc
+gc.collect()
+          
 #%% succinic_neutral_sugarcane
 run_simulations = True
 import numpy as np
@@ -1003,7 +1084,10 @@ else:
     # results_metric_4 = np.load('succinic_neutral_sugarcane_AOC')
     # results_metric_5 = np.load('succinic_neutral_sugarcane_TCI')
     inflection_product_yields = np.load('succinic_neutral_sugarcane_inflection_product_yields')
-    
+      
+import gc
+gc.collect()
+          
 #%% succinic_neutral_corn
 run_simulations = True
 import numpy as np
@@ -1036,7 +1120,10 @@ else:
     # results_metric_4 = np.load('succinic_neutral_corn_AOC')
     # results_metric_5 = np.load('succinic_neutral_corn_TCI')
     inflection_product_yields = np.load('succinic_neutral_corn_inflection_product_yields')
-    
+      
+import gc
+gc.collect()
+          
 #%% succinic_neutral_cornstover
 run_simulations = True
 import numpy as np
@@ -1069,7 +1156,9 @@ else:
     # results_metric_4 = np.load('succinic_neutral_cornstover_AOC')
     # results_metric_5 = np.load('succinic_neutral_cornstover_TCI')
     inflection_product_yields = np.load('succinic_neutral_cornstover_inflection_product_yields')
-    
+      
+import gc
+gc.collect()    
     
 #%% 2,3-BDO TRY
 # product_ID = 'BDO'
@@ -1112,3 +1201,6 @@ else:
 # results_metric_1 = np.array([results_metric_1_new])
 # results_metric_2 = np.array([results_metric_2_new])
 # results_metric_3 = np.array([results_metric_3_new])
+      
+# import gc
+# gc.collect()
