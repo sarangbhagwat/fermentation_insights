@@ -40,9 +40,9 @@ productivities_all = {
     'HP_hexanol': get_productivities(baseline_productivity=0.3255),
     'succinic': get_productivities(baseline_productivity=0.6573)}
 
-steps = 3
+steps = 50
 
-processes = 12
+processes = 8
 
 from biorefineries.succinic.analyses.TRY_analysis_FGI import run_TRY_analysis as run_TRY_analysis_succinic
 from biorefineries.TAL.analyses.fermentation.TRY_analysis_TAL_FGI import run_TRY_analysis as run_TRY_analysis_TAL
