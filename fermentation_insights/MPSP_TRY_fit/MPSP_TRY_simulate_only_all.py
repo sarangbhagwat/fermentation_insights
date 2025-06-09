@@ -42,7 +42,7 @@ productivities_all = {
 
 steps = 50
 
-processes = 8
+processes = 12
 
 from biorefineries.succinic.analyses.TRY_analysis_FGI import run_TRY_analysis as run_TRY_analysis_succinic
 from biorefineries.TAL.analyses.fermentation.TRY_analysis_TAL_FGI import run_TRY_analysis as run_TRY_analysis_TAL
@@ -99,6 +99,8 @@ if __name__ == '__main__':
         if prod_label is not None:
             tag += prod_label + '_'
         tag += feedstock
+        
+        tag = tag.replace('HP_hexanol_neutral', 'HP_neutral_hexanol')
         
         if product=='TAL' or product=='TAL_SA':
             yields, titers, inflection_product_yields,\
@@ -158,5 +160,5 @@ if __name__ == '__main__':
             np.save(f'{tag}_titers', titers)
             np.save(f'{tag}_productivities', productivities_all[product])
             
-            
+            print(f'\nSaved results for {tag}')
 

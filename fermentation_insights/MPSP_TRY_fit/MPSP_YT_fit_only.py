@@ -77,14 +77,14 @@ def get_all_MPSP_yt_fit():
         get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='', plot_MPSP_y_t=False)
         get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
         get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
-        if i[0]+'_'+i[1] in ['TAL_SA_sugarcane']:
-            # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
-            # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.0bp', plot_MPSP_y_t=False)
-            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.8bp', plot_MPSP_y_t=False)
-            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='2.6bp', plot_MPSP_y_t=False)
-            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='3.4bp', plot_MPSP_y_t=False)
-            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='4.2bp', plot_MPSP_y_t=False)
-            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
+        # if i[0]+'_'+i[1] in ['TAL_SA_sugarcane']:
+        #     # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
+        #     # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.0bp', plot_MPSP_y_t=False)
+        #     get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.8bp', plot_MPSP_y_t=False)
+        #     get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='2.6bp', plot_MPSP_y_t=False)
+        #     get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='3.4bp', plot_MPSP_y_t=False)
+        #     get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='4.2bp', plot_MPSP_y_t=False)
+        #     get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
     
 #%%
 def format_ax(ax, x_ticks, y_ticks,):
