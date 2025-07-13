@@ -72,11 +72,17 @@ feedstock_IDs = [
 all_filenames = list(itertools.product(product_IDs, feedstock_IDs))
 
 def get_all_MPSP_yt_fit():
+    not_found = []
     for i in all_filenames:
         print(i[0], i[1])
-        get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='', plot_MPSP_y_t=False)
-        get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
-        get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
+        for additional_tag in ('', '0.2bp', '5.0bp'):
+            try:
+                get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag=additional_tag, plot_MPSP_y_t=False)
+            except:
+                not_found.append((i[1], i[0], additional_tag))
+        
+    return not_found
+
         # if i[0]+'_'+i[1] in ['TAL_SA_sugarcane']:
         #     # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
         #     # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.0bp', plot_MPSP_y_t=False)
