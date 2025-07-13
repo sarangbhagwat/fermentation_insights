@@ -5,6 +5,8 @@ Created on Mon Dec  9 11:42:11 2024
 @author: sarangbhagwat
 """
 
+from numba import config
+config.DISABLE_JIT = True
 import pandas as pd
 import itertools
 import pickle
@@ -13,11 +15,12 @@ from fermentation_insights.utils import fit_shifted_rect_hyperbola_two_param, ge
 from biosteam.units import MultiEffectEvaporator
 import multiprocessing
 
-steps_TRY = 3
+
+steps_TRY = 4
 N_simulations_per_TRY_combo = 5
 notification_interval = 5
 
-processes = 8
+processes = 32
 
 products = [
             'TAL', 'TAL_SA', 
@@ -41,7 +44,6 @@ all_combs = []
 
 for product in products:
     all_combs += list(itertools.product([product], neutralizations_all[product], feedstocks))
-
 
 #%%
 def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_simulations_per_TRY_combo=2000, notification_interval=5):
@@ -97,8 +99,9 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
     get_adjusted_MSP = None
     unit_groups = None
     
-    biorefinery_filepath = None
-    biorefinery_results_filepath = None
+    filepaths = {'biorefinery': None,
+                 'biorefinery_results': None,
+                 'parameter_distributions': None}
     
     if product=='TAL':
         from biorefineries import TAL
@@ -124,8 +127,8 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         get_adjusted_MSP = models.get_adjusted_MSP
         unit_groups = models.unit_groups
         
-        biorefinery_filepath = TAL.__file__.replace('\\__init__.py', '')
-        biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
+        filepaths['biorefinery'] = TAL.__file__.replace('\\__init__.py', '')
+        filepaths['biorefinery_results'] = filepaths['biorefinery'] + '\\analyses\\results\\'
     
     elif product=='TAL_SA':
         from biorefineries import TAL
@@ -152,10 +155,10 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         get_adjusted_MSP = models.get_adjusted_MSP
         run_bugfix_barrage = models.run_bugfix_barrage
         
-        biorefinery_filepath = TAL.__file__.replace('\\__init__.py', '')
-        biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
+        filepaths['biorefinery'] = TAL.__file__.replace('\\__init__.py', '')
+        filepaths['biorefinery_results'] = filepaths['biorefinery'] + '\\analyses\\results\\'
         
-    elif product=='HP' and additional_tag=='':
+    elif product=='HP' and not ('hexanol' in additional_tag):
         from biorefineries import HP
         if feedstock=='glucose':
             from biorefineries.HP.models.glucose import models_glucose_improved_separations
@@ -179,8 +182,8 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         get_adjusted_MSP = models.get_adjusted_MSP
         run_bugfix_barrage = models.run_bugfix_barrage
         
-        biorefinery_filepath = HP.__file__.replace('\\__init__.py', '')
-        biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
+        filepaths['biorefinery'] = HP.__file__.replace('\\__init__.py', '')
+        filepaths['biorefinery_results'] = filepaths['biorefinery'] + '\\analyses\\results\\'
         
     elif product=='HP' and ('hexanol' in additional_tag):
         from biorefineries import HP
@@ -204,8 +207,9 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         tea = models.HP_tea
         lca = models.HP_lca
         get_adjusted_MSP = models.get_adjusted_MSP
-        biorefinery_filepath = HP.__file__.replace('\\__init__.py', '')
-        biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
+        
+        filepaths['biorefinery'] = HP.__file__.replace('\\__init__.py', '')
+        filepaths['biorefinery_results'] = filepaths['biorefinery'] + '\\analyses\\results\\'
         
     elif product=='succinic':
         from biorefineries import succinic
@@ -231,14 +235,17 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         get_adjusted_MSP = models.get_adjusted_MSP
         run_bugfix_barrage = models.run_bugfix_barrage
         
-        biorefinery_filepath = succinic.__file__.replace('\\__init__.py', '')
-        biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
-        
+        filepaths['biorefinery'] = succinic.__file__.replace('\\__init__.py', '')
+        filepaths['biorefinery_results'] = filepaths['biorefinery'] + '\\analyses\\results\\'
+    
+    else:
+         raise ValueError(product, additional_tag)
+         
     print('\nLoaded system.')
     
     chdir = os.chdir
     
-    run_bugfix_barrage = models.run_bugfix_barrage
+    # run_bugfix_barrage = models.run_bugfix_barrage
     
     # per_kg_AA_to_per_kg_SA = models.per_kg_AA_to_per_kg_SA
     
@@ -261,11 +268,13 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         product_tag=='Acrylic'
     
     mode = None
-    parameter_distributions_filename = None
     
+    # if filepaths['biorefinery'] is None:
+    #     breakpoint()
+        
     if product in ('TAL', 'TAL_SA'):
         mode = 'A_FGI'
-        parameter_distributions_filename = biorefinery_filepath+\
+        filepaths['parameter_distributions'] = filepaths['biorefinery']+\
                 f'\\analyses\\full\\parameter_distributions\\'+\
                 f'parameter-distributions_{product_tag}_' + mode + f'_{feedstock_tag}'+'.xlsx' 
         
@@ -273,13 +282,13 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         mode = '300L_FGI'
         product_folder = 'acrylic_acid_product' if product_tag=='Acrylic' else 'HP_salt_product'
 
-        parameter_distributions_filename = biorefinery_filepath+\
+        filepaths['parameter_distributions'] = filepaths['biorefinery']+\
                 f'\\analyses\\full\\parameter_distributions\\{product_folder}\\'+\
                 f'parameter-distributions_{feedstock_tag}_{product_tag}_' + mode + '.xlsx' 
     
     elif product in ('succinic', 'succinic_neutral'):
         mode = f'pilot-scale_batch_{feedstock_tag}_FGI' 
-        parameter_distributions_filename = biorefinery_filepath+'\\analyses\\parameter_distributions\\'+'parameter-distributions_' + mode + '.xlsx'
+        filepaths['parameter_distributions'] = filepaths['biorefinery']+'\\analyses\\parameter_distributions\\'+'parameter-distributions_' + mode + '.xlsx'
 
     
     #%% Bugfix barrage (without set_production_capacity)
@@ -402,9 +411,9 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
                         spec.load_specifications(spec_1=spec.spec_1, spec_2=spec.spec_2, spec_3=spec.spec_3)
                         model._system.simulate()
                     except:
-                        run_bugfix_barrage()
+                        run_bugfix_barrage(e)
                 else:
-                    run_bugfix_barrage()
+                    run_bugfix_barrage(e)
                     
     model.specification = model_specification
     
@@ -441,7 +450,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
     #%% Load parameter distributions and samples
     print(f'\n\nLoading parameter distributions ({mode}) ,,,')
     model.parameters = ()
-    model.load_parameter_distributions(parameter_distributions_filename, models.namespace_dict)
+    model.load_parameter_distributions(filepaths['parameter_distributions'], models.namespace_dict)
     
     # load_additional_params()
     print(f'\nLoaded parameter distributions ({mode}).')
@@ -623,6 +632,13 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
 def func(comb):
     product, neutralization, feedstock = comb
     additional_tag = 'neutral' if neutralization else ''
+    if '_hexanol' in product:
+        product = product.replace('_hexanol', '')
+        if 'neutral' in additional_tag: 
+            additional_tag += '_hexanol'
+        else:
+            additional_tag += 'hexanol'
+            
     return run_uncertainties_coeffs(product=product, 
                                     additional_tag=additional_tag, 
                                     feedstock=feedstock,

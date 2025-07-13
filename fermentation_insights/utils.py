@@ -391,6 +391,7 @@ def get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f, theo_max_yield):
                 pass
         if len(titers_ubs) < i+1:
             # print(titers_ub, i+1)
+            breakpoint()
             raise RuntimeError(f'At yield {y}, no titer was identified with non-nan MPSP (lowest titer checked: {titer_curr}).')
             
     titer_samples = []

@@ -109,7 +109,8 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
         yields = yields_for_plot = np.load(filename+'_yields_for_eval.npy')
         titers = titers_for_plot = np.load(filename+'_titers_for_eval.npy')
         indicator_array = results_metric_1 = np.load(f'{filename}_MPSP_for_eval.npy')
-        
+        # if product_ID=='HP_hexanol' and feedstock_ID=='cornstover': 
+        #     breakpoint()
         show_yields = product_ID in ['TAL_SA', 'HP_neutral_hexanol', 'succinic_neutral']
         show_titers = feedstock_ID in['glucose']
         show_top_ticklabels = ((product_ID in ['TAL', 'HP', 'succinic'] and feedstock_ID in ['glucose'])

@@ -5,6 +5,8 @@ Created on Mon Dec  9 11:42:11 2024
 @author: sarangbhagwat
 """
 
+from numba import config
+config.DISABLE_JIT = True
 import numpy as np
 import pandas as pd
 import itertools
