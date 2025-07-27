@@ -6,7 +6,7 @@ Created on Mon Dec  9 11:42:11 2024
 """
 
 from numba import config
-config.DISABLE_JIT = True
+# config.DISABLE_JIT = True
 import numpy as np
 import pandas as pd
 import itertools
@@ -15,14 +15,14 @@ import os
 from fermentation_insights.utils import fit_shifted_rect_hyperbola_two_param, get_feasible_TY_samples
 from biosteam.units import MultiEffectEvaporator
 
-def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_simulations_per_TRY_combo=2000, notification_interval=5):
+def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_simulations_per_TRY_combo=1000, notification_interval=100):
     import numpy as np
     np.random.seed(4153)
     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
     
     product_ID = product
     # additional_tag = '0.5x_baselineprod'
-    additional_tag = ''
+    # additional_tag = ''
     feedstock = feedstock
     
     filename = None
@@ -101,6 +101,8 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
     
     elif product=='TAL_SA':
+        from biorefineries import TAL
+        
         if feedstock=='glucose':
             from biorefineries.TAL.models import models_SA_solubility_exploit_glucose
             models = models_SA_solubility_exploit_glucose
@@ -127,6 +129,8 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
         
     elif product=='HP' and additional_tag=='':
+        from biorefineries import HP
+        
         if feedstock=='glucose':
             from biorefineries.HP.models.glucose import models_glucose_improved_separations
             models = models_glucose_improved_separations
@@ -153,6 +157,8 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
         
     elif product=='HP' and ('hexanol' in additional_tag):
+        from biorefineries import HP
+        
         if feedstock=='glucose':
             from biorefineries.HP.models.glucose import models_glucose_hexanol
             models = models_glucose_hexanol
@@ -177,6 +183,8 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
         
     elif product=='succinic':
+        from biorefineries import succinic
+        
         if feedstock=='glucose':
             from biorefineries.succinic import models_glucose
             models = models_glucose
@@ -203,7 +211,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
         
     print('\nLoaded system.')
-    
+    print(get_adjusted_MSP())
     chdir = os.chdir
     
     run_bugfix_barrage = models.run_bugfix_barrage
@@ -218,15 +226,15 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
     
     percentiles = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 1]
     
-    notification_interval = notification_interval
-    
     feedstock_tag = feedstock
     product_tag = product.replace('_neutral', '')
+    
+    print('\nFetching parameter distributions ...')
     
     if product=='TAL_SA':
         product_tag = 'Sorbate'
     elif product in ('HP', 'HP_neutral', 'HP_hexanol', 'HP_neutral_hexanol'):
-        product_tag=='Acrylic'
+        product_tag = 'Acrylic'
     
     mode = None
     parameter_distributions_filename = None
@@ -249,6 +257,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         mode = f'pilot-scale_batch_{feedstock_tag}_FGI' 
         parameter_distributions_filename = biorefinery_filepath+'\\analyses\\parameter_distributions\\'+'parameter-distributions_' + mode + '.xlsx'
 
+    print('\nFetched parameter distributions.')
     
     #%% Bugfix barrage (without set_production_capacity)
     baseline_spec = {'spec_1': spec.baseline_yield,
@@ -389,11 +398,15 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         model._system.simulate()
         return get_adjusted_MSP()
     
+    print('\nSimulating to get feasible TY samples ...')
     yts = get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f, theo_max_yield=theo_max_yield)
     yts = np.array(yts)
+    print(f'\nFeasible TY samples obtained: {yts}')
     
+    print('\nSimulating baseline ...')
     spec.load_specifications(**baseline_spec)
     model.specification()
+    print('\nSimulated baseline.')
     
     #%%
     # overall_results_dict = {(y,t): {'Baseline':{'MPSP':{}, 'GWP100a':{}, 'FEC':{}, 
@@ -427,10 +440,12 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
     
     errors_dict = {}
     
-    for yt in yts:
+    n_unc_analyses = len(yts)
+    for i, yt in zip(range(n_unc_analyses), yts):
+        
         y, t = yt
         print('\n\n------------------------------------------------------------------------------------')
-        print(f'\nPerforming uncertainty analysis at yield = {np.round(y,2)} and titer = {np.round(t,2)} ...')
+        print(f'\nPerforming uncertainty analysis ({i}/{n_unc_analyses}), at yield = {np.round(y,2)} and titer = {np.round(t,2)} ...')
         spec.spec_1 = y/theo_max_yield
         spec.spec_2 = t
         # try:

@@ -380,14 +380,17 @@ def get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f, theo_max_yield):
     titers_ubs = []
     for y, i in zip(yields, range(len(yields))):
         titer_curr = None
+        print(f'Looking at yield={y} ...')
         for t in titers_reverse:
             titer_curr = t
             try:
                 MPSP = MPSP_sim_f(y/theo_max_yield, t)
                 if not np.isnan(MPSP): 
+                    print(f'yield={y}, titer={t} is feasible. MPSP = {MPSP}.')
                     titers_ubs.append(t)
                     break
             except:
+                # print(f'{y}, {t} is infeasible.')
                 pass
         if len(titers_ubs) < i+1:
             # print(titers_ub, i+1)

@@ -20,8 +20,10 @@ import pandas as pd
 os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
 
 product_IDs = [
-               'TAL', 'TAL_SA', 
-               'HP', 'HP_neutral', 'HP_hexanol', 'HP_neutral_hexanol', 
+               'TAL', 
+               # 'TAL_SA', 
+               # 'HP', 'HP_neutral', 
+               # 'HP_hexanol', 'HP_neutral_hexanol', 
                # 'succinic', 'succinic_neutral',
                ]
 feedstock_IDs = [
