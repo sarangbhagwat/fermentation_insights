@@ -146,7 +146,7 @@ for coeff in ['a', 'b', 'c', 'd']:
 
 #%% Plot
 
-coeff = 'b'
+coeff = 'd'
 
 plt.rcParams['font.sans-serif'] = "Arial Unicode"
 plt.rcParams['font.size'] = str(20)

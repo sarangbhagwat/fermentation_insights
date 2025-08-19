@@ -17,7 +17,8 @@ from biosteam.units import MultiEffectEvaporator
 
 def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_simulations_per_TRY_combo=1000, notification_interval=100):
     import numpy as np
-    np.random.seed(4153)
+    np.random.seed(9000) # for HP_glucose
+    # np.random.seed(4153) # for all others
     os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
     
     product_ID = product
@@ -128,7 +129,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         biorefinery_filepath = TAL.__file__.replace('\\__init__.py', '')
         biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
         
-    elif product=='HP' and additional_tag=='':
+    elif product=='HP' and not ('hexanol' in additional_tag):
         from biorefineries import HP
         
         if feedstock=='glucose':
@@ -157,6 +158,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         biorefinery_results_filepath = biorefinery_filepath + '\\analyses\\results\\'
         
     elif product=='HP' and ('hexanol' in additional_tag):
+        print('\n\n\n\nIt is hexanol.\n\n\n\n')
         from biorefineries import HP
         
         if feedstock=='glucose':
@@ -264,7 +266,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
                      'spec_2': spec.baseline_titer,
                      'spec_3': spec.baseline_productivity,}
     
-    system=model._system
+    system = model._system
     def reset_V_first_effect_evaporators(system):
         for unit in system.units:
             if isinstance(unit, MultiEffectEvaporator): 
@@ -286,7 +288,11 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
             print('Resetting cache and emptying recycles ...')
             system.reset_cache()
             system.empty_recycles()
-            run_evaporators(system)
+            try:
+                run_evaporators(system)
+            except:
+                pass
+            system.simulate()
             print('Loading and simulating with baseline specifications ...')
             spec.load_specifications(**baseline_spec)
             # spec.load_specifications(spec_1=spec_1, spec_2=spec_2, spec_3=spec_3)
@@ -306,13 +312,24 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
     def reset_and_switch_solver(solver_ID):
         system.reset_cache()
         system.empty_recycles()
-        run_evaporators(system)
+        try:
+            run_evaporators(system)
+        except:
+            pass
         system.converge_method = solver_ID
         print(f"Trying {solver_ID} ...")
         # spec.load_specifications(spec_1=spec.spec_1, spec_2=spec.spec_2, spec_3=spec.spec_3)
         # spec.set_production_capacity(spec.desired_annual_production)
-        system.simulate()
-    
+        simulated = False
+        for i in range(2): 
+            try: 
+                system.simulate()
+                simulated = True
+            except:
+                pass
+        if not simulated: 
+            system.simulate() # to raise the simulation-related error
+            
     # F403 = u.F403
     def traditional_bugfix_sequence():
         try:
@@ -330,7 +347,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
                     # print(_yellow_text+"Bugfix barrage failed.\n"+_reset_text)
                     print("Bugfix barrage failed.\n")
                     system.simulate()
-                    # breakpoint()
+                    breakpoint()
                     raise e
                 finally:
                     system.simulate()
@@ -371,6 +388,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
                 raise e
             elif 'length' in str(e).lower() or 'in subtract' in str(e).lower() or 'in log' in str(e).lower():
                 raise e
+                breakpoint()
             else:
                 if product=='succinic':
                     try:
@@ -384,6 +402,27 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
                     run_bugfix_barrage(e)
                     
     model.specification = model_specification
+    
+        
+    #%% Load parameter distributions and samples
+    print(f'\n\nLoading parameter distributions ({mode}) ,,,')
+    model.parameters = ()
+    model.load_parameter_distributions(parameter_distributions_filename, models.namespace_dict)
+    
+    # load_additional_params()
+    print(f'\nLoaded parameter distributions ({mode}).')
+    print(parameter_distributions_filename)
+    
+    parameters = model.get_parameters()
+    
+    print('\n\nLoading samples ...')
+    samples = model.sample(N=N_simulations_per_TRY_combo, rule='L')
+    model.load_samples(samples)
+    print('\nLoaded samples.')
+    
+    model.exception_hook = 'warn'
+    
+    # breakpoint()
     
     #%% Create TRY combinations 
     
@@ -401,6 +440,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
     print('\nSimulating to get feasible TY samples ...')
     yts = get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f, theo_max_yield=theo_max_yield)
     yts = np.array(yts)
+    
     print(f'\nFeasible TY samples obtained: {yts}')
     
     print('\nSimulating baseline ...')
@@ -418,24 +458,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
     #                 for (y,t) in list(itertools.product(ys,ts))}
     
     overall_results_dict = {}
-    
-    #%% Load parameter distributions and samples
-    print(f'\n\nLoading parameter distributions ({mode}) ,,,')
-    model.parameters = ()
-    model.load_parameter_distributions(parameter_distributions_filename, models.namespace_dict)
-    
-    # load_additional_params()
-    print(f'\nLoaded parameter distributions ({mode}).')
-    
-    parameters = model.get_parameters()
-    
-    print('\n\nLoading samples ...')
-    samples = model.sample(N=N_simulations_per_TRY_combo, rule='L')
-    model.load_samples(samples)
-    print('\nLoaded samples.')
-    
-    model.exception_hook = 'warn'
-    
+
     #%% Run uncertainty analyses across TRY
     
     errors_dict = {}
@@ -445,7 +468,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         
         y, t = yt
         print('\n\n------------------------------------------------------------------------------------')
-        print(f'\nPerforming uncertainty analysis ({i}/{n_unc_analyses}), at yield = {np.round(y,2)} and titer = {np.round(t,2)} ...')
+        print(f'\nPerforming uncertainty analysis {i+1}/{n_unc_analyses}, at yield = {np.round(y,2)} and titer = {np.round(t,2)} ...')
         spec.spec_1 = y/theo_max_yield
         spec.spec_2 = t
         # try:
@@ -472,7 +495,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
         results_dict['Baseline']['MPSP'][mode] = get_adjusted_MSP()
         results_dict['Baseline']['GWP100a'][mode] = tot_GWP = lca.GWP
         results_dict['Baseline']['FEC'][mode] = tot_FEC = lca.FEC
-    
+        
         print(f"\nSimulated baseline. MPSP = ${round(results_dict['Baseline']['MPSP'][mode],2)}/kg.")
         
         print('\n\nEvaluating ...')
@@ -535,7 +558,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
             results_dict['Sensitivity']['p-val Spearman']['GWP100a'][mode] = df_p['Biorefinery', 'Total gwp100a [kg-CO2-eq/kg]']
             results_dict['Sensitivity']['p-val Spearman']['FEC'][mode] = df_p['Biorefinery', 'Total FEC [MJ/kg]']
             
-        elif product=='HP' and additional_tag=='':
+        elif product=='HP' and not ('hexanol' in additional_tag):
             # results_dict['Uncertainty']['MPSP'][mode] = model.table.Biorefinery['Adjusted minimum selling price - as sorbic acid [$/kg SA-eq.]']
             results_dict['Uncertainty']['MPSP'][mode] = model.table.Biorefinery['Adjusted minimum selling price [$/kg AA]']
             results_dict['Uncertainty']['GWP100a'][mode] = model.table.Biorefinery['Total gwp100a [kg-CO2-eq/kg]'] # GWP or gwp
@@ -657,6 +680,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
                 yts_fit.append((y,t))
             except: # error, likely infeasible region'
                 print(f'Error for {yt}.')
+                # breakpoint()
                 # pass
             
         try:

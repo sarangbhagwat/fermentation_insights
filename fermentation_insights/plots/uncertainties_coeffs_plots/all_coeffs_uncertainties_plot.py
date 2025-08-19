@@ -21,10 +21,13 @@ os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation
 
 product_IDs = [
                'TAL', 
-               # 'TAL_SA', 
-               # 'HP', 'HP_neutral', 
-               # 'HP_hexanol', 'HP_neutral_hexanol', 
-               # 'succinic', 'succinic_neutral',
+               'TAL_SA', 
+               'HP', 
+               'HP_neutral', 
+               'HP_hexanol', 
+               'HP_neutral_hexanol', 
+               # 'succinic', 
+               # 'succinic_neutral',
                ]
 feedstock_IDs = [
                  'glucose', 
@@ -62,7 +65,7 @@ for cf in coefficients:
     for i, (p, f) in zip(all_filenames, 
                          list(itertools.product(product_IDs, feedstock_IDs))):
         unc = coeffs_uncertainty[i][cf]
-        if len(unc)<500: print(i, len(unc))
+        if len(unc)<1000: print(i, len(unc))
         bl = coeffs_baseline[i][cf]
         baselines_percentiles['product'].append(p)
         baselines_percentiles['feedstock'].append(f)
@@ -108,7 +111,7 @@ for i in all_filenames:
     if not i in filenames_to_exclude:
         uncs_d_ += list(coeffs_uncertainty[i]['d'])
     
-print('\n\n'+k)
+print('\n\n\n'+k)
 print('5th perc: ', np.percentile(uncs_d_, 5))
 print('50th perc: ', np.percentile(uncs_d_, 50))
 print('95th perc: ', np.percentile(uncs_d_, 95))

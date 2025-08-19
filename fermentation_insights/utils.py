@@ -378,7 +378,11 @@ def get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f, theo_max_yield):
     titers_lb = titers[0]
     titers_reverse = np.flip(titers, 0)
     titers_ubs = []
-    for y, i in zip(yields, range(len(yields))):
+    
+    yields_samples = np.linspace(yields[0], yields[-1], steps[0])
+    
+    for y, i in zip(yields_samples, range(len(yields_samples))):
+        # titers_ubs.append([])
         titer_curr = None
         print(f'Looking at yield={y} ...')
         for t in titers_reverse:
@@ -386,7 +390,7 @@ def get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f, theo_max_yield):
             try:
                 MPSP = MPSP_sim_f(y/theo_max_yield, t)
                 if not np.isnan(MPSP): 
-                    print(f'yield={y}, titer={t} is feasible. MPSP = {MPSP}.')
+                    print(f'For yield={y}, titer={t} is the highest titer feasible within the given range. MPSP = {MPSP}.')
                     titers_ubs.append(t)
                     break
             except:
@@ -398,7 +402,6 @@ def get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f, theo_max_yield):
             raise RuntimeError(f'At yield {y}, no titer was identified with non-nan MPSP (lowest titer checked: {titer_curr}).')
             
     titer_samples = []
-    yields_samples = np.linspace(yields[0], yields[-1], steps[0])
     yts = []
     for y, titers_ub in zip(yields_samples, titers_ubs):
         titer_samples.append(np.linspace(titers_lb, titers_ub, steps[1]))
