@@ -12,10 +12,35 @@ import contourplots
 import itertools
 from biosteam.utils import  colors
 from  matplotlib.colors import LinearSegmentedColormap
-from fermentation_insights.plots.analyze_all_combinations import coeff
+# from fermentation_insights.plots.analyze_all_combinations import coeff
 
 #%%
 os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+
+#%%
+os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+
+product_IDs = [
+               'TAL', 'TAL_SA',
+                'HP', 'HP_neutral', 'HP_hexanol', 'HP_neutral_hexanol',
+               'succinic', 'succinic_neutral']
+feedstock_IDs = ['glucose', 'sugarcane', 'corn', 'cornstover']
+
+
+all_pf_combinations = list(itertools.product(product_IDs, feedstock_IDs))
+
+all_filenames = []
+refinery = {i: {} for i in feedstock_IDs}
+for p,f in all_pf_combinations:
+    all_filenames.append(p+'_'+f)
+    refinery[f][p] = np.load(all_filenames[-1]+'_coefficients'+'.npy')
+    
+# for filename in [f'TAL_SA_{str(i)}x_blp_glucose' for i in [0.1, 0.5, 2, 10]]:
+#     all_filenames.append(filename)
+#     # refinery[f][p] = np.load(all_filenames[-1])
+    
+coeff = {i: np.load(i+'_coefficients'+'.npy') for i in all_filenames}
+
 
 #%% MPSP and titer functions; hyperbola property utils
 

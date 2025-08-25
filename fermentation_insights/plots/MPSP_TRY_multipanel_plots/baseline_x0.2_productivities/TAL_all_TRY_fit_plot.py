@@ -235,10 +235,14 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
         # MPSP_w_ticks = [1., 1.25, 1.5, 1.75, 2., 2.5,  3., 4, 5, 6, 8,]
         # MPSP_w_ticks = [3, 5, 8]
         # MPSP_w_ticks = get_w_ticks(indicator_array, MPSP_w_levels, n_ticks=3)
-        MPSP_w_ticks = get_w_ticks_from_percentiles(indicator_array, MPSP_w_levels, 
-                                                    percentiles=(25, 50, 75),
-                                                    cbar_ticks=MPSP_cbar_ticks)
         
+        try:
+            MPSP_w_ticks = get_w_ticks_from_percentiles(indicator_array, MPSP_w_levels, 
+                                                        percentiles=(25, 50, 75),
+                                                        cbar_ticks=MPSP_cbar_ticks)
+        except:
+            MPSP_w_ticks = np.array([])
+            
         contourplots.animated_contourplot(w_data_vs_x_y_at_multiple_z=indicator_array, # shape = z * x * y # values of the metric you want to plot on the color axis; e.g., MPSP
                                         x_data=yields_for_plot, # x axis values
                                         # x_data = yields/theoretical_max_g_HP_acid_per_g_glucose,
