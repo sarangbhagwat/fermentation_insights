@@ -236,7 +236,7 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
         recovery_w_ticks = get_w_ticks_from_percentiles(recoveries_array, recovery_w_levels, 
                                                     percentiles=(25, 50, 75),
                                                     cbar_ticks=recovery_cbar_ticks)
-        
+        breakpoint()
         contourplots.animated_contourplot(w_data_vs_x_y_at_multiple_z=recoveries_array, # shape = z * x * y # values of the metric you want to plot on the color axis; e.g., MPSP
                                         x_data=yields_for_plot, # x axis values
                                         # x_data = yields/theoretical_max_g_HP_acid_per_g_glucose,

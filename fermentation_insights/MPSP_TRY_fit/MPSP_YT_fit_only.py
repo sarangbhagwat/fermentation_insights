@@ -31,6 +31,8 @@ import itertools
 import pickle
 import dill
 
+from labellines import labelLine, labelLines
+
 #%%
 
 def CABBI_green_colormap(N_levels=90):
@@ -81,17 +83,18 @@ def get_all_MPSP_yt_fit():
             except:
                 not_found.append((i[1], i[0], additional_tag))
         
+
+        if i[0]+'_'+i[1] in ['TAL_SA_sugarcane']:
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
+            # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.0bp', plot_MPSP_y_t=False)
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.8bp', plot_MPSP_y_t=False)
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='2.6bp', plot_MPSP_y_t=False)
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='3.4bp', plot_MPSP_y_t=False)
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='4.2bp', plot_MPSP_y_t=False)
+            get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
+    
     return not_found
 
-        # if i[0]+'_'+i[1] in ['TAL_SA_sugarcane']:
-        #     # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
-        #     # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.0bp', plot_MPSP_y_t=False)
-        #     get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.8bp', plot_MPSP_y_t=False)
-        #     get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='2.6bp', plot_MPSP_y_t=False)
-        #     get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='3.4bp', plot_MPSP_y_t=False)
-        #     get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='4.2bp', plot_MPSP_y_t=False)
-        #     get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
-    
 #%%
 def format_ax(ax, x_ticks, y_ticks,):
     ax.tick_params( direction = 'inout' , which='both')
@@ -513,6 +516,9 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
     np.save(f'{filename}_yields_for_eval.npy', yields_for_eval)
     np.save(f'{filename}_titers_for_eval.npy', titers_for_eval)
     np.save(f'{filename}_MPSP_for_eval.npy', indicator_array_for_eval)
+    
+    
+    np.save(f'{filename}_recoveries_for_eval.npy', recoveries[:, :, :yield_upper_bound_index_for_eval])
     
     #%%
     def MPSP_f(y, t, avals, bvals, cvals, dvals): # use the coefficients solved for the corresponding yield regime
@@ -1049,6 +1055,7 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         
     #%% Validate against external data
     if external_data_fit_and_plot:
+        folder_name = 'external_data_for_validation'
         product_ID = 'product'
         print('\nValidate with external data:\n')
         plt.rcParams['font.sans-serif'] = "Arial Unicode"
@@ -1068,7 +1075,7 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         
         # 6 points, 4 points
         print('\n#1: Janković et al., normalized annual cost of separation ($/kg) vs titer (wt%)')
-        filename = 'jankovic_et_al_2023_ethanol_7a'
+        filename = folder_name+'/'+'jankovic_et_al_2023_ethanol_7a'
         product_ID = 'product'
         
         ext_data1 = pd.read_csv(filename+'.csv')
@@ -1205,7 +1212,7 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         # Separation: solvent extraction (methyl isobutyl ketone) & distillation
         print('\n#2: Gunukula et al., minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
         # 31 y-t combinations
-        filename = 'gunukula_2017_SI_3-HP_b'
+        filename = folder_name+'/'+'gunukula_2017_SI_3-HP_b'
         ext_data2 = pd.read_csv(filename+'.csv')
         ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
         mpsps_ext2 = ext_data2['MPSP ($/kg)']
@@ -1238,7 +1245,8 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         
         plot_this_iter = True
         for i, MPSP in zip(range(len(mpsps_ext2)), mpsps_ext2):
-                
+            
+            curr_MPSP = mpsps_ext2[curr_MPSP_ind]
             ys_curr = ys_ext2[curr_MPSP_ind:next_MPSP_ind]
             ts_curr = ts_ext2[curr_MPSP_ind:next_MPSP_ind]
             
@@ -1248,9 +1256,12 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
             
             if plot_this_iter:
                 ax.plot(ys_curr, 
-                        ts_curr, label='simulated',
+                        ts_curr,
+                        # label='simulated',
+                        label=str(round(curr_MPSP, 2)),
                         color='black')
                 plot_this_iter = False
+                
             if not next_MPSP_ind is None:
                 curr_MPSP_ind = 1*next_MPSP_ind
                 try:
@@ -1258,7 +1269,10 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
                 except:
                     next_MPSP_ind=None
                 plot_this_iter = True
-                
+        
+        labelLines(ax.get_lines(), zorder=2.5)
+        
+        
         ax = axs[1]
         format_ax(ax, x_ticks, y_ticks,
                   )
@@ -1280,17 +1294,21 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
             # print(ts_fit)
             
             if plot_this_iter:
-                h = b_ext2/(MPSP-a_ext2)
-                k = c_ext2/(MPSP-a_ext2)
-                MPSP = mpsps_ext2[curr_MPSP_ind]
+                curr_MPSP = mpsps_ext2[curr_MPSP_ind]
+                # MPSP = mpsps_ext2[curr_MPSP_ind]
+                h = b_ext2/(curr_MPSP-a_ext2)
+                k = c_ext2/(curr_MPSP-a_ext2)
+                
                 
                 ys_curr = np.linspace(h*1.001, 1, 200)
-                ts_fit = np.array([titer_f(y, MPSP, a_ext2, b_ext2, c_ext2, d_ext2) for y in ys_curr])
+                ts_fit = np.array([titer_f(y, curr_MPSP, a_ext2, b_ext2, c_ext2, d_ext2) for y in ys_curr])
                 inds_plot = np.where(ts_fit>0)[0]
                 # print(ts_fit)
                 # print('plot')
                 ax.plot(ys_curr[inds_plot], 
-                        ts_fit[inds_plot], label='simulated',
+                        ts_fit[inds_plot],
+                        # label='simulated',
+                        label=str(round(curr_MPSP, 2)),
                         color='black')
                 plot_this_iter = False
             
@@ -1302,7 +1320,10 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
                 except:
                     next_MPSP_ind=None
                 plot_this_iter = True
-            
+        
+        labelLines(ax.get_lines(), zorder=2.5)
+        
+        
         textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
         props = dict(boxstyle='round', 
                      # facecolor='wheat', 
@@ -1362,7 +1383,7 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         # Separation: solvent extraction (oleyl alcohol) & distillation
         print('\n#3: Sikazwe et al., minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
         # 11 y-t combinations
-        filename = 'Sikazwe_2023_5_b'
+        filename = folder_name+'/'+'Sikazwe_2023_5_b'
         ext_data2 = pd.read_csv(filename+'.csv')
         ys_ext3, ts_ext3 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
         mpsps_ext3 = ext_data2['MPSP ($/kg)']/1000
@@ -1395,7 +1416,9 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         
         plot_this_iter = True
         for i, MPSP in zip(range(len(mpsps_ext3)), mpsps_ext3):
-                
+            
+            
+            curr_MPSP = mpsps_ext2[curr_MPSP_ind]
             ys_curr = ys_ext3[curr_MPSP_ind:next_MPSP_ind]
             ts_curr = ts_ext3[curr_MPSP_ind:next_MPSP_ind]
             
@@ -1405,7 +1428,9 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
             
             if plot_this_iter:
                 ax.plot(ys_curr, 
-                        ts_curr, label='simulated',
+                        ts_curr, 
+                        # label='simulated',
+                        label = str(round(curr_MPSP, 2)),
                         color='black')
                 plot_this_iter = False
             if not next_MPSP_ind is None:
@@ -1415,7 +1440,11 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
                 except:
                     next_MPSP_ind=None
                 plot_this_iter = True
-                
+            
+        
+        labelLines(ax.get_lines(), zorder=2.5)
+        
+        
         ax = axs[1]
         format_ax(ax, x_ticks, y_ticks,
                   )
@@ -1447,7 +1476,9 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
                 # print(ts_fit)
                 # print('plot')
                 ax.plot(ys_curr[inds_plot], 
-                        ts_fit[inds_plot], label='simulated',
+                        ts_fit[inds_plot], 
+                        # label='simulated',
+                        label = str(round(curr_MPSP, 2)),
                         color='black')
                 plot_this_iter = False
             
@@ -1459,7 +1490,10 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
                 except:
                     next_MPSP_ind=None
                 plot_this_iter = True
-            
+        
+        labelLines(ax.get_lines(), zorder=2.5)
+        
+        
         textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
         props = dict(boxstyle='round', 
                      # facecolor='wheat', 

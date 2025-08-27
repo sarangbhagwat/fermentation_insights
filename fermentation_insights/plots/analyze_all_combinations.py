@@ -65,8 +65,24 @@ ri_positive_fractions = np.array(ri_positive_fractions)
 #%% Contributions of d' term to MPSP across TY for all biorefineries
 dcon_all = []
 for filename in all_filenames:
-    dcon_all += list(np.load(f'{filename}_dcon.npy'))
-
+    dcon = list(np.load(f'{filename}_dcon.npy'))
+    if len(dcon[0][0])==50:
+        dcon_all += dcon
+    elif len(dcon[0][0])==49:
+        dcon = list(dcon)
+        dcon_to_add = []
+        for i in dcon: 
+            i = list(i)
+            i_to_add = []
+            for j in i:
+                j_to_add = list(j)
+                j_to_add.append(np.median(j_to_add))
+                i_to_add.append(np.array(j_to_add))
+            dcon_to_add.append(np.array(i_to_add))
+        dcon_all += dcon_to_add
+    else:
+        breakpoint()
+        
 dcon_all = np.array(dcon_all)
 dcon_all_non_nan = dcon_all[np.where(~np.isnan(dcon_all))]
 

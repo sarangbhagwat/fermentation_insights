@@ -50,7 +50,7 @@ productivities_all = {
     'HP_hexanol': get_productivities(baseline_productivity=0.276),
     'succinic': get_productivities(baseline_productivity=0.6573)}
 
-steps = 50
+steps = 5
 
 processes = 32
 
