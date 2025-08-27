@@ -154,9 +154,9 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
         # ##### X and Y ticks -- bounds rounding method (use for yield)        
         round_up_yield_ubound = True if np.round(yields_for_plot[-1],1)<yields_for_plot[-1] else False
         round_down_yield_lbound = True if np.round(yields_for_plot[0],1)>yields_for_plot[0] else False
-        x_ticks = np.arange(np.round(yields_for_plot[0],1)-0.1*round_down_yield_lbound, 
-                            np.round(yields_for_plot[-1],1)+0.1*round_up_yield_ubound+1e-5, 0.1)[::4]
-
+        # x_ticks = np.arange(np.round(yields_for_plot[0],1)-0.1*round_down_yield_lbound, 
+        #                     np.round(yields_for_plot[-1],1)+0.1*round_up_yield_ubound+1e-5, 0.1)[::4]
+        x_ticks = [0.0, 0.5, 1.0]
 
         # round_up_titer_ubound = True if np.round(titers_for_plot[-1],-1)<titers_for_plot[-1] else False
         # # round_down_titer_lbound = True if np.round(titers_for_plot[0],-1)>titers_for_plot[0] else False
