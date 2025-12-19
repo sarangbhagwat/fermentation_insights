@@ -3,7 +3,7 @@
 This module contains code to evaluate 32 biomanufacturing configurations across titer-rate-yield (TRY) combinations
 and under uncertainty as well as to perform regression analyses to generate widely applicable insights; discussed in [[1]](#1).
 
-![Example regression analyses across TRY for biorefineries producing acrylic acid via 3-HP](https://github.com/sarangbhagwat/fermentation_insights/fermentation_insights/results/figures/HP_all_TRY_fit.png)
+![Example regression analyses across TRY for biorefineries producing acrylic acid via 3-HP](https://github.com/sarangbhagwat/fermentation_insights/blob/main/fermentation_insights/results/figures/HP_all_TRY_fit.png)
 
 Getting Started
 ---------------
