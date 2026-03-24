@@ -127,7 +127,7 @@ def format_ax(ax, x_ticks, y_ticks,):
 def get_MPSP_yt_fit(product, feedstock, additional_tag='', 
                     plot_MPSP_y_t=False, 
                     external_data_fit_and_plot=False,
-                    save_to='C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results'):
+                    save_to='C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data'):
     os.chdir(save_to)
     product_ID = product
     # additional_tag = '0.5x_baselineprod'
@@ -529,6 +529,11 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
                 return shifted_rect_hyperbola_two_param(y, t, avals[ii], bvals[ii], cvals[ii], dvals[ii],)
         # return shifted_rect_hyperbola_two_param(y, t, avals[-1], bvals[-1], cvals[-1], dvals[-1])
     
+    def MPSP_sim(y, t, z_ind=0):
+        yi = list(yields_for_eval).index(y)
+        ti = list(titers_for_eval).index(t)
+        return indicator_array[z_ind][ti][yi]
+    
     #%%
     def get_Rsq(indicator_orig, indicator_fit):
         indicator_orig = indicator_orig.flatten()
@@ -771,6 +776,20 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
     print('D and DCON min and max:', d_fit, np.min(dcon_non_nan), np.max(dcon_non_nan))
     
     np.save(f'{filename}_dcon.npy', dcon)
+    
+    #%% Residual MPSP [% as decimal]
+    resMPSPfrac = [[[ (MPSP_sim(y, t) - MPSP_f(y, t, [a_fit], [b_fit], [c_fit], [d_fit]))/MPSP_sim(y, t)
+                                   for y in yields_for_eval] 
+                                   for t in titers_for_eval]]
+    resMPSPfrac = np.array(resMPSPfrac)
+    
+    resMPSPfrac[np.where(np.isnan(indicator_array_for_plot))] = np.nan
+    
+    resMPSPfrac_non_nan = resMPSPfrac[np.where(~np.isnan(resMPSPfrac))]
+    
+    print('resMPSPfrac min and max:', np.min(resMPSPfrac_non_nan), np.max(resMPSPfrac_non_nan))
+    
+    np.save(f'{filename}_resMPSPfrac.npy', resMPSPfrac)
     
     #%% Plots
     if plot_MPSP_y_t:
@@ -1210,7 +1229,7 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         # Feedstock: corn
         # Product: 3-HP (anaerobic ferm)
         # Separation: solvent extraction (methyl isobutyl ketone) & distillation
-        print('\n#2: Gunukula et al., minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
+        print('\n#2A: Gunukula et al., 3-HP anaerobic, minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
         # 31 y-t combinations
         filename = folder_name+'/'+'gunukula_2017_SI_3-HP_b'
         ext_data2 = pd.read_csv(filename+'.csv')
@@ -1352,7 +1371,143 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         # Feedstock: corn
         # Product: 1,3-propanediol (aerobic ferm)
         # Separation: solvent extraction & distillation
+        print('\n#2B: Gunukula et al., 1,3-PDO aerobic, minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
+        # 31 y-t combinations
+        filename = folder_name+'/'+'gunukula_2017_SI_1-3-PDO_aer_S7b'
+        ext_data2 = pd.read_csv(filename+'.csv')
+        ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
+        mpsps_ext2 = ext_data2['MPSP ($/kg)']
+        a_ext2, b_ext2, c_ext2, d_ext2, r = fit_shifted_rect_hyperbola_two_param((ys_ext2, ts_ext2), 
+                                                                                   mpsps_ext2,)
+        Rsq = get_Rsq(np.array(mpsps_ext2), 
+                      np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
+                                for y,t in zip(ys_ext2, ts_ext2)]))
+        print(Rsq)
+        fig, axs = plt.subplots(1, 2, constrained_layout=True)
         
+        ax = axs[0]
+        
+        x_ticks = np.arange(0., 1.01, 0.2)
+        y_ticks = np.arange(0., 200.01, 20)
+        
+        format_ax(ax, x_ticks, y_ticks,
+                  )
+        
+        ax.set_xlabel(f'Yield [g/g]')
+        ax.set_ylabel(f'{product_ID} Titer [g/L]')
+        
+        mpsps_ext2 = np.array(mpsps_ext2)
+        MPSP_indices = np.where(mpsps_ext2[:-1] != mpsps_ext2[1:])[0]
+        MPSP_indices += 1
+        # MPSP_indices = [0] + list(MPSP_indices)
+        
+        curr_MPSP_ind = 0
+        next_MPSP_ind = MPSP_indices[0]
+        
+        plot_this_iter = True
+        for i, MPSP in zip(range(len(mpsps_ext2)), mpsps_ext2):
+            
+            curr_MPSP = mpsps_ext2[curr_MPSP_ind]
+            ys_curr = ys_ext2[curr_MPSP_ind:next_MPSP_ind]
+            ts_curr = ts_ext2[curr_MPSP_ind:next_MPSP_ind]
+            
+            # print('\n')
+            # print(np.array(ys_curr))
+            # print(np.array(ts_curr))
+            
+            if plot_this_iter:
+                ax.plot(ys_curr, 
+                        ts_curr,
+                        # label='simulated',
+                        label=str(round(curr_MPSP, 2)),
+                        color='black')
+                plot_this_iter = False
+                
+            if not next_MPSP_ind is None:
+                curr_MPSP_ind = 1*next_MPSP_ind
+                try:
+                    next_MPSP_ind = MPSP_indices[list(MPSP_indices).index(curr_MPSP_ind)+1]
+                except:
+                    next_MPSP_ind=None
+                plot_this_iter = True
+        
+        labelLines(ax.get_lines(), zorder=2.5)
+        
+        
+        ax = axs[1]
+        format_ax(ax, x_ticks, y_ticks,
+                  )
+        
+        ax.set_xlabel(f'Yield [g/g]')
+        ax.set_ylabel(f'{product_ID} Titer [g/L]')
+        
+        curr_MPSP_ind = 0
+        next_MPSP_ind = MPSP_indices[0]
+        
+        plot_this_iter = True
+        for i, MPSP in zip(range(len(mpsps_ext2)), mpsps_ext2):
+            # ys_curr = ys_ext2[curr_MPSP_ind:next_MPSP_ind]
+            # ts_fit = [titer_f(y, MPSP, a_ext2, b_ext2, c_ext2, d_ext2) for y in ys_curr]
+            
+            
+            # print('\n')
+            # print(np.array(ys_curr))
+            # print(ts_fit)
+            
+            if plot_this_iter:
+                curr_MPSP = mpsps_ext2[curr_MPSP_ind]
+                # MPSP = mpsps_ext2[curr_MPSP_ind]
+                h = b_ext2/(curr_MPSP-a_ext2)
+                k = c_ext2/(curr_MPSP-a_ext2)
+                
+                
+                ys_curr = np.linspace(h*1.001, 1, 200)
+                ts_fit = np.array([titer_f(y, curr_MPSP, a_ext2, b_ext2, c_ext2, d_ext2) for y in ys_curr])
+                inds_plot = np.where(ts_fit>0)[0]
+                # print(ts_fit)
+                # print('plot')
+                ax.plot(ys_curr[inds_plot], 
+                        ts_fit[inds_plot],
+                        # label='simulated',
+                        label=str(round(curr_MPSP, 2)),
+                        color='black')
+                plot_this_iter = False
+            
+            # print('ind', curr_MPSP_ind, next_MPSP_ind)
+            if not next_MPSP_ind is None:
+                curr_MPSP_ind = 1*next_MPSP_ind
+                try:
+                    next_MPSP_ind = MPSP_indices[list(MPSP_indices).index(curr_MPSP_ind)+1]
+                except:
+                    next_MPSP_ind=None
+                plot_this_iter = True
+        
+        labelLines(ax.get_lines(), zorder=2.5)
+        
+        
+        textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
+        props = dict(boxstyle='round', 
+                     # facecolor='wheat', 
+                     facecolor='white', 
+                     alpha=1,
+                     # edgecolor ='gray',
+                     )
+        
+        ax.text(
+                np.linspace(x_ticks[0], x_ticks[-1], 100)[-45], # x-coord
+                # np.linspace(x_ticks[0], x_ticks[-1], 100)[15], # x-coord
+                np.linspace(y_ticks[0], y_ticks[-1], 100)[-1]*1.05, # y-coord
+                textstr, 
+                # transform=ax.transAxes, 
+                fontsize=12,
+                # verticalalignment='top', 
+                bbox=props)
+        
+        plt.savefig(filename+'.png', dpi=300, 
+                    bbox_inches='tight',
+                    # facecolor=plt.get_facecolor(),
+                    # transparent=False,
+                    )
         
         # Tool: SuperPro
         # Feedstock: corn
@@ -1370,11 +1525,285 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         # Feedstock: corn
         # Product: 1,3-propanediol (microaerobic ferm)
         # Separation: solvent extraction & distillation
+        print('\n#2C: Gunukula et al., 1,3-PDO microaerobic, minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
+        # 31 y-t combinations
+        filename = folder_name+'/'+'gunukula_2017_SI_1-3-PDO_microaer_S7e'
+        ext_data2 = pd.read_csv(filename+'.csv')
+        ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
+        mpsps_ext2 = ext_data2['MPSP ($/kg)']
+        a_ext2, b_ext2, c_ext2, d_ext2, r = fit_shifted_rect_hyperbola_two_param((ys_ext2, ts_ext2), 
+                                                                                   mpsps_ext2,)
+        Rsq = get_Rsq(np.array(mpsps_ext2), 
+                      np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
+                                for y,t in zip(ys_ext2, ts_ext2)]))
+        print(Rsq)
+        fig, axs = plt.subplots(1, 2, constrained_layout=True)
+        
+        ax = axs[0]
+        
+        x_ticks = np.arange(0., 1.01, 0.2)
+        y_ticks = np.arange(0., 200.01, 20)
+        
+        format_ax(ax, x_ticks, y_ticks,
+                  )
+        
+        ax.set_xlabel(f'Yield [g/g]')
+        ax.set_ylabel(f'{product_ID} Titer [g/L]')
+        
+        mpsps_ext2 = np.array(mpsps_ext2)
+        MPSP_indices = np.where(mpsps_ext2[:-1] != mpsps_ext2[1:])[0]
+        MPSP_indices += 1
+        # MPSP_indices = [0] + list(MPSP_indices)
+        
+        curr_MPSP_ind = 0
+        next_MPSP_ind = MPSP_indices[0]
+        
+        plot_this_iter = True
+        for i, MPSP in zip(range(len(mpsps_ext2)), mpsps_ext2):
+            
+            curr_MPSP = mpsps_ext2[curr_MPSP_ind]
+            ys_curr = ys_ext2[curr_MPSP_ind:next_MPSP_ind]
+            ts_curr = ts_ext2[curr_MPSP_ind:next_MPSP_ind]
+            
+            # print('\n')
+            # print(np.array(ys_curr))
+            # print(np.array(ts_curr))
+            
+            if plot_this_iter:
+                ax.plot(ys_curr, 
+                        ts_curr,
+                        # label='simulated',
+                        label=str(round(curr_MPSP, 2)),
+                        color='black')
+                plot_this_iter = False
+                
+            if not next_MPSP_ind is None:
+                curr_MPSP_ind = 1*next_MPSP_ind
+                try:
+                    next_MPSP_ind = MPSP_indices[list(MPSP_indices).index(curr_MPSP_ind)+1]
+                except:
+                    next_MPSP_ind=None
+                plot_this_iter = True
+        
+        labelLines(ax.get_lines(), zorder=2.5)
+        
+        
+        ax = axs[1]
+        format_ax(ax, x_ticks, y_ticks,
+                  )
+        
+        ax.set_xlabel(f'Yield [g/g]')
+        ax.set_ylabel(f'{product_ID} Titer [g/L]')
+        
+        curr_MPSP_ind = 0
+        next_MPSP_ind = MPSP_indices[0]
+        
+        plot_this_iter = True
+        for i, MPSP in zip(range(len(mpsps_ext2)), mpsps_ext2):
+            # ys_curr = ys_ext2[curr_MPSP_ind:next_MPSP_ind]
+            # ts_fit = [titer_f(y, MPSP, a_ext2, b_ext2, c_ext2, d_ext2) for y in ys_curr]
+            
+            
+            # print('\n')
+            # print(np.array(ys_curr))
+            # print(ts_fit)
+            
+            if plot_this_iter:
+                curr_MPSP = mpsps_ext2[curr_MPSP_ind]
+                # MPSP = mpsps_ext2[curr_MPSP_ind]
+                h = b_ext2/(curr_MPSP-a_ext2)
+                k = c_ext2/(curr_MPSP-a_ext2)
+                
+                
+                ys_curr = np.linspace(h*1.001, 1, 200)
+                ts_fit = np.array([titer_f(y, curr_MPSP, a_ext2, b_ext2, c_ext2, d_ext2) for y in ys_curr])
+                inds_plot = np.where(ts_fit>0)[0]
+                # print(ts_fit)
+                # print('plot')
+                ax.plot(ys_curr[inds_plot], 
+                        ts_fit[inds_plot],
+                        # label='simulated',
+                        label=str(round(curr_MPSP, 2)),
+                        color='black')
+                plot_this_iter = False
+            
+            # print('ind', curr_MPSP_ind, next_MPSP_ind)
+            if not next_MPSP_ind is None:
+                curr_MPSP_ind = 1*next_MPSP_ind
+                try:
+                    next_MPSP_ind = MPSP_indices[list(MPSP_indices).index(curr_MPSP_ind)+1]
+                except:
+                    next_MPSP_ind=None
+                plot_this_iter = True
+        
+        labelLines(ax.get_lines(), zorder=2.5)
+        
+        
+        textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
+        props = dict(boxstyle='round', 
+                     # facecolor='wheat', 
+                     facecolor='white', 
+                     alpha=1,
+                     # edgecolor ='gray',
+                     )
+        
+        ax.text(
+                np.linspace(x_ticks[0], x_ticks[-1], 100)[-45], # x-coord
+                # np.linspace(x_ticks[0], x_ticks[-1], 100)[15], # x-coord
+                np.linspace(y_ticks[0], y_ticks[-1], 100)[-1]*1.05, # y-coord
+                textstr, 
+                # transform=ax.transAxes, 
+                fontsize=12,
+                # verticalalignment='top', 
+                bbox=props)
+        
+        plt.savefig(filename+'.png', dpi=300, 
+                    bbox_inches='tight',
+                    # facecolor=plt.get_facecolor(),
+                    # transparent=False,
+                    )
         
         # Tool: SuperPro
         # Feedstock: corn
         # Product: isobutanol
         # Separation: distillation, decantation, distillation
+        print('\n#2D: Gunukula et al., isobutanol, minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
+        # 31 y-t combinations
+        filename = folder_name+'/'+'gunukula_2017_SI_isobutanol_S7f'
+        ext_data2 = pd.read_csv(filename+'.csv')
+        ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
+        mpsps_ext2 = ext_data2['MPSP ($/kg)']
+        a_ext2, b_ext2, c_ext2, d_ext2, r = fit_shifted_rect_hyperbola_two_param((ys_ext2, ts_ext2), 
+                                                                                   mpsps_ext2,)
+        Rsq = get_Rsq(np.array(mpsps_ext2), 
+                      np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
+                                for y,t in zip(ys_ext2, ts_ext2)]))
+        print(Rsq)
+        fig, axs = plt.subplots(1, 2, constrained_layout=True)
+        
+        ax = axs[0]
+        
+        x_ticks = np.arange(0., 1.01, 0.2)
+        y_ticks = np.arange(0., 200.01, 20)
+        
+        format_ax(ax, x_ticks, y_ticks,
+                  )
+        
+        ax.set_xlabel(f'Yield [g/g]')
+        ax.set_ylabel(f'{product_ID} Titer [g/L]')
+        
+        mpsps_ext2 = np.array(mpsps_ext2)
+        MPSP_indices = np.where(mpsps_ext2[:-1] != mpsps_ext2[1:])[0]
+        MPSP_indices += 1
+        # MPSP_indices = [0] + list(MPSP_indices)
+        
+        curr_MPSP_ind = 0
+        next_MPSP_ind = MPSP_indices[0]
+        
+        plot_this_iter = True
+        for i, MPSP in zip(range(len(mpsps_ext2)), mpsps_ext2):
+            
+            curr_MPSP = mpsps_ext2[curr_MPSP_ind]
+            ys_curr = ys_ext2[curr_MPSP_ind:next_MPSP_ind]
+            ts_curr = ts_ext2[curr_MPSP_ind:next_MPSP_ind]
+            
+            # print('\n')
+            # print(np.array(ys_curr))
+            # print(np.array(ts_curr))
+            
+            if plot_this_iter:
+                ax.plot(ys_curr, 
+                        ts_curr,
+                        # label='simulated',
+                        label=str(round(curr_MPSP, 2)),
+                        color='black')
+                plot_this_iter = False
+                
+            if not next_MPSP_ind is None:
+                curr_MPSP_ind = 1*next_MPSP_ind
+                try:
+                    next_MPSP_ind = MPSP_indices[list(MPSP_indices).index(curr_MPSP_ind)+1]
+                except:
+                    next_MPSP_ind=None
+                plot_this_iter = True
+        
+        labelLines(ax.get_lines(), zorder=2.5)
+        
+        
+        ax = axs[1]
+        format_ax(ax, x_ticks, y_ticks,
+                  )
+        
+        ax.set_xlabel(f'Yield [g/g]')
+        ax.set_ylabel(f'{product_ID} Titer [g/L]')
+        
+        curr_MPSP_ind = 0
+        next_MPSP_ind = MPSP_indices[0]
+        
+        plot_this_iter = True
+        for i, MPSP in zip(range(len(mpsps_ext2)), mpsps_ext2):
+            # ys_curr = ys_ext2[curr_MPSP_ind:next_MPSP_ind]
+            # ts_fit = [titer_f(y, MPSP, a_ext2, b_ext2, c_ext2, d_ext2) for y in ys_curr]
+            
+            
+            # print('\n')
+            # print(np.array(ys_curr))
+            # print(ts_fit)
+            
+            if plot_this_iter:
+                curr_MPSP = mpsps_ext2[curr_MPSP_ind]
+                # MPSP = mpsps_ext2[curr_MPSP_ind]
+                h = b_ext2/(curr_MPSP-a_ext2)
+                k = c_ext2/(curr_MPSP-a_ext2)
+                
+                
+                ys_curr = np.linspace(h*1.001, 1, 200)
+                ts_fit = np.array([titer_f(y, curr_MPSP, a_ext2, b_ext2, c_ext2, d_ext2) for y in ys_curr])
+                inds_plot = np.where(ts_fit>0)[0]
+                # print(ts_fit)
+                # print('plot')
+                ax.plot(ys_curr[inds_plot], 
+                        ts_fit[inds_plot],
+                        # label='simulated',
+                        label=str(round(curr_MPSP, 2)),
+                        color='black')
+                plot_this_iter = False
+            
+            # print('ind', curr_MPSP_ind, next_MPSP_ind)
+            if not next_MPSP_ind is None:
+                curr_MPSP_ind = 1*next_MPSP_ind
+                try:
+                    next_MPSP_ind = MPSP_indices[list(MPSP_indices).index(curr_MPSP_ind)+1]
+                except:
+                    next_MPSP_ind=None
+                plot_this_iter = True
+        
+        labelLines(ax.get_lines(), zorder=2.5)
+        
+        
+        textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
+        props = dict(boxstyle='round', 
+                     # facecolor='wheat', 
+                     facecolor='white', 
+                     alpha=1,
+                     # edgecolor ='gray',
+                     )
+        
+        ax.text(
+                np.linspace(x_ticks[0], x_ticks[-1], 100)[-45], # x-coord
+                # np.linspace(x_ticks[0], x_ticks[-1], 100)[15], # x-coord
+                np.linspace(y_ticks[0], y_ticks[-1], 100)[-1]*1.05, # y-coord
+                textstr, 
+                # transform=ax.transAxes, 
+                fontsize=12,
+                # verticalalignment='top', 
+                bbox=props)
+        
+        plt.savefig(filename+'.png', dpi=300, 
+                    bbox_inches='tight',
+                    # facecolor=plt.get_facecolor(),
+                    # transparent=False,
+                    )
         
         #%% https://doi.org/10.1007/s10098-024-02843-w
         # Tool: Aspen Plus

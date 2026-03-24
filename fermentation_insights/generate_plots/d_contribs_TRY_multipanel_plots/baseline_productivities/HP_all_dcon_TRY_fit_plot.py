@@ -39,7 +39,7 @@ def GG_orange_white_colormap(N_levels=90):
     return LinearSegmentedColormap.from_list('CABBI', cmap_colors, N_levels)
 
 #%%
-os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data')
 
 product_IDs = [
                # 'TAL', 'TAL_SA', 
