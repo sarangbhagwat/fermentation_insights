@@ -369,6 +369,33 @@ def min_sep_energy_based_f(t, m, c,): # assumes no change in target final produc
 #     ((a, b, substrate_sugars_mol), r) = scipy.optimize.curve_fit(f, tdata, indicatordata, p0=p0)
 #     return a, b, substrate_sugars_mol, r
 
+#%% Multivariate linear regression
+
+def multivariate_linear_eq(x, y, a, b, c):
+    return a + b*x + c*y
+
+def multivariate_linear_eq_for_fit(xy, a, b, c):
+    x, y = xy
+    return a + b*x + c*y
+    
+def fit_multivariate_linear_eq(xydata, zdata, p0=None):
+    # x, y = xydata
+    ((a, b, c), r) = scipy.optimize.curve_fit(multivariate_linear_eq_for_fit, xydata, zdata, p0=p0)
+    return a, b, c, r
+
+#%% Alternative regression suggested by a reviewer
+
+def alternative_eq(x, y, a, b, c, d):
+    return a + b*x + c*y + d*x*y
+
+def alternative_eq_for_fit(xy, a, b, c, d):
+    x, y = xy
+    return a + b*x + c*y + d*x*y
+    
+def fit_alternative_eq(xydata, zdata, p0=None):
+    # x, y = xydata
+    ((a, b, c, d), r) = scipy.optimize.curve_fit(alternative_eq_for_fit, xydata, zdata, p0=p0)
+    return a, b, c, d, r
 
 #%% Utils to get evenly distributed samples of feasible TY points
 

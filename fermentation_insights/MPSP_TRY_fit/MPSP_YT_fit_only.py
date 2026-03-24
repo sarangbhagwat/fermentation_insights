@@ -554,7 +554,7 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
     #                                                                            np.array(indicator_array)[:, :, :yield_upper_bound_index_for_eval].flatten()[non_nan_indices],
     #                                                                            [1,1,1,1,])
     
-    ys_fit, ts_fit, mpsps_fit = [], [], []
+    ys_fit, ts_fit, mpsps_for_fit = [], [], []
     for i in range(len(indicator_array_for_eval[0])):
         t_curr = titers[i]
         for j in range(len(indicator_array_for_eval[0][i])):
@@ -563,10 +563,10 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
             if not np.isnan(mpsp_curr):
                 ys_fit.append(y_curr)
                 ts_fit.append(t_curr)
-                mpsps_fit.append(mpsp_curr)
+                mpsps_for_fit.append(mpsp_curr)
     
     a_fit, b_fit, c_fit, d_fit, r = fit_shifted_rect_hyperbola_two_param((ys_fit, ts_fit), 
-                                                                               mpsps_fit,
+                                                                               mpsps_for_fit,
                                                                                [1,1,1,1],
                                                                                # [0,0,0,0,0],
                                                                                )
@@ -653,7 +653,7 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         return Rsq, res.success, g, aprime, bprime, cprime, dprime
     
     Rsq, success, g, aprime, bprime, cprime, dprime = solve_for_g(ys_fit[:2], ts_fit[:2], 
-                                                                          # mpsps_fit[:4],
+                                                                          # mpsps_for_fit[:4],
                                                                           [shifted_rect_hyperbola_two_param(yt[0], yt[1], a_fit, b_fit, c_fit, d_fit,) 
                                                                            for yt in zip(ys_fit[:2], ts_fit[:2])],
                                                                           a_fit, b_fit, c_fit, d_fit)
