@@ -14,7 +14,7 @@ from  matplotlib.colors import LinearSegmentedColormap
 
 #%%
 
-def GG_purple_white_colormap(N_levels=90):
+def GG_blue_gray_red_colormap(N_levels=90):
     """
     Return a matplotlib.colors.LinearSegmentedColormap object
     that serves as CABBI's green colormap theme for contour plots.
@@ -30,10 +30,11 @@ def GG_purple_white_colormap(N_levels=90):
                    # (99, 198, 206), # GG blue
                    # (138, 227, 235),# lighter GG blue
                    
-                   (255, 255, 255), # white
+                   # (255, 255, 255), # white
                    
-                   (212, 168, 242), # lighter GG purple
-                   (162, 128, 185), # GG purple
+                   (96, 193, 207), # GG blue
+                   (228, 230, 225), # lighter GG gray
+                   (237, 88, 111), # GG red
                    ))/255
     
     return LinearSegmentedColormap.from_list('CABBI', cmap_colors, N_levels)
@@ -105,6 +106,9 @@ def get_w_ticks_from_percentiles(w_array, w_levels, percentiles=(25, 50, 75), cb
 
 #%% Plot
 
+
+min_min = np.inf
+max_max = - np.inf
 
 for i, product_ID in zip(range(len(product_IDs)), product_IDs):
     axs_list = None
@@ -243,8 +247,8 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
         
         #################
         
-        resMPSPfrac_w_levels = np.arange(0, 0.0601, 0.0025)
-        resMPSPfrac_cbar_ticks = np.arange(0, 0.0601, 0.01)
+        resMPSPfrac_w_levels = np.arange(-0.15, 0.1501, 0.005)
+        resMPSPfrac_cbar_ticks = np.arange(-0.15, 0.1501, 0.01)
         # resMPSPfrac_w_ticks = [0, 0.025, 0.05, 0.1, 0.15, 0.2, 0.4, 0.6, 0.8, 1.]
         resMPSPfrac_w_ticks = []
         
@@ -275,7 +279,7 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
                                         w_units=resMPSPfrac_units,
                                         # fmt_clabel=lambda cvalue: r"$\mathrm{\$}$"+" {:.1f} ".format(cvalue)+r"$\cdot\mathrm{kg}^{-1}$", # format of contour labels
                                         fmt_clabel = lambda cvalue: get_rounded_str(cvalue, 2),
-                                        cmap=GG_purple_white_colormap(), # can use 'viridis' or other default matplotlib colormaps
+                                        cmap=GG_blue_gray_red_colormap(), # can use 'viridis' or other default matplotlib colormaps
                                         cmap_over_color = colors.grey_dark.shade(8).RGBn,
                                         extend_cmap='both',
                                         cbar_ticks=resMPSPfrac_cbar_ticks,
@@ -338,6 +342,24 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
         #         # verticalalignment='top', 
         #         bbox=props)
         
+        # Statistics
+        print(product_ID, feedstock_ID)
+        non_nan_vals = results_metric_1[np.where(~np.isnan((results_metric_1)))]
+        print(f'Mean abs: {np.mean(np.abs(non_nan_vals))}')
+        print(f'Median abs: {np.median(np.abs(non_nan_vals))}')
+        print(f'5th perc abs: {np.percentile(np.abs(non_nan_vals), 5)}')
+        print(f'95th perc abs: {np.percentile(np.abs(non_nan_vals), 95)}')
+        print(f'Min abs: {np.min(np.abs(non_nan_vals))}')
+        print(f'Max abs: {np.max(np.abs(non_nan_vals))}')
+        print(f'Min: {np.min(non_nan_vals)}')
+        print(f'Max: {np.max(non_nan_vals)}')
+        if np.min(non_nan_vals) < min_min: 
+            min_min = np.min(non_nan_vals)
+        if np.max(non_nan_vals) > max_max: 
+            max_max = np.max(non_nan_vals)
+
+print(f'\nOverall min and max are {min_min} and {max_max}, respectively.\n\n')
+
 #%%
 plt.subplots_adjust(wspace=0, hspace=0)
 fig.set_figheight(8.5)
