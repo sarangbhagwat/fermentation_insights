@@ -436,3 +436,22 @@ def get_feasible_TY_samples(yields, titers, steps, MPSP_sim_f, theo_max_yield):
             yts.append((y, t))
     
     return yts
+
+#%% Temporary functions to get all pairings from HXN
+
+def get_pair_indices_from_unit_ID(ID):
+    k = ID.replace('HX_', '').replace('_hs', '').replace('_cs', '')
+    i1, i2 = int(k[:k.index('_')]), int(k[k.index('_')+1:])
+    return i1, i2
+
+def get_pairings(HXN, owner=False):
+    hxs = HXN.new_HXs
+    orig_hus = HXN.original_heat_utils
+    pairings = []
+    for hx in hxs:
+        i1, i2 = get_pair_indices_from_unit_ID(hx.ID)
+        if not owner:
+            pairings.append((orig_hus[i1].unit, orig_hus[i2].unit))
+        else:
+            pairings.append((orig_hus[i1].unit.owner, orig_hus[i2].unit.owner))
+    return pairings

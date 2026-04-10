@@ -306,7 +306,7 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
         coefficients = np.load(f'{filename}_coefficients.npy')
         Rsq = coefficients[-1]
         textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.65)
         
         # place a text box in upper left in axes coords
         ax.text(
@@ -317,7 +317,8 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
                 # transform=ax.transAxes, 
                 fontsize=axis_tick_fontsize,
                 # verticalalignment='top', 
-                bbox=props)
+                bbox=props,
+                zorder=10000)
         
 #%%
 plt.subplots_adjust(wspace=0, hspace=0)

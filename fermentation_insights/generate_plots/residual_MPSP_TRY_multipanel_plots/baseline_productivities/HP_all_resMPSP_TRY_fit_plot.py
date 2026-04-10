@@ -110,6 +110,8 @@ def get_w_ticks_from_percentiles(w_array, w_levels, percentiles=(25, 50, 75), cb
 min_min = np.inf
 max_max = - np.inf
 
+combined_metric_vals = []
+
 for i, product_ID in zip(range(len(product_IDs)), product_IDs):
     axs_list = None
     if len(product_IDs)>1:
@@ -345,6 +347,7 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
         # Statistics
         print(product_ID, feedstock_ID)
         non_nan_vals = results_metric_1[np.where(~np.isnan((results_metric_1)))]
+        combined_metric_vals+=list(non_nan_vals.flatten())
         print(f'Mean abs: {np.mean(np.abs(non_nan_vals))}')
         print(f'Median abs: {np.median(np.abs(non_nan_vals))}')
         print(f'5th perc abs: {np.percentile(np.abs(non_nan_vals), 5)}')
@@ -358,7 +361,20 @@ for i, product_ID in zip(range(len(product_IDs)), product_IDs):
         if np.max(non_nan_vals) > max_max: 
             max_max = np.max(non_nan_vals)
 
-print(f'\nOverall min and max are {min_min} and {max_max}, respectively.\n\n')
+combined_metric_vals = np.array(combined_metric_vals)
+
+print('\n\n Overall:')
+print(f'Mean abs: {np.mean(np.abs(combined_metric_vals))}')
+print(f'Median abs: {np.median(np.abs(combined_metric_vals))}')
+print(f'5th perc abs: {np.percentile(np.abs(combined_metric_vals), 5)}')
+print(f'95th perc abs: {np.percentile(np.abs(combined_metric_vals), 95)}')
+print(f'Min abs: {np.min(np.abs(combined_metric_vals))}')
+print(f'Max abs: {np.max(np.abs(combined_metric_vals))}\n')
+print(f'Median: {np.median((combined_metric_vals))}')
+print(f'5th perc: {np.percentile((combined_metric_vals), 5)}')
+print(f'95th perc: {np.percentile((combined_metric_vals), 95)}')
+print(f'Min: {np.min(combined_metric_vals)}')
+print(f'Max: {np.max(combined_metric_vals)}')
 
 #%%
 plt.subplots_adjust(wspace=0, hspace=0)
