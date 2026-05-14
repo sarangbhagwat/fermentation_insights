@@ -12,6 +12,7 @@ import biosteam as bst
 import os
 import numpy as np
 import pickle
+import pandas as pd
 
 #%%
 f = bst.main_flowsheet
@@ -133,6 +134,9 @@ def get_mass_flow_by_area(flow_nodes, filename=None, value_factor=0.1):
         sankey_stv = {'Source': [label[i] for i in source], 'Target': [label[i] for i in target], 'Mass flow [kg/h]': [i/value_factor for i in value]}
         with open(filename+'.pkl', 'wb') as ff:
             pickle.dump(sankey_stv, ff)
+        
+        sankey_stv_df = pd.DataFrame.from_dict(sankey_stv)
+        sankey_stv_df.to_excel(filename+'.xlsx')
         
     return source, target, value, label
 

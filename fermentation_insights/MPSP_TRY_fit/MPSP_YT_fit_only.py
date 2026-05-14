@@ -15,7 +15,7 @@ from fermentation_insights.utils import loop_evaluate_across_param,\
         piecewise_linear_f, fit_piecewise_linear,\
         shifted_rect_hyperbola_f, fit_shifted_rect_hyperbola,\
         shifted_rect_hyperbola_two_param, fit_shifted_rect_hyperbola_two_param,\
-        plot_across_param
+        plot_across_param, save_xyz_grid_to_excel
 from biorefineries.TAL._general_utils import add_metrics_to_unit_groups,\
         TEA_breakdown as general_TEA_breakdown
 from matplotlib import pyplot as plt
@@ -32,6 +32,8 @@ import pickle
 import dill
 
 from labellines import labelLine, labelLines
+
+from openpyxl import load_workbook
 
 #%%
 
@@ -66,20 +68,30 @@ product_IDs = [
                 ]
 feedstock_IDs = [
                  'glucose', 
+                 'cornstover',
                  'sugarcane', 
                  'corn', 
-                 'cornstover',
                  ]
 
 all_filenames = list(itertools.product(product_IDs, feedstock_IDs))
 
-def get_all_MPSP_yt_fit():
+
+additional_tags_figures_map = {'': 'Fig_1', 
+                               '0.2bp': 'Supp_Fig_1', 
+                               '5.0bp': 'Supp_Fig_2'}
+
+def get_all_MPSP_yt_fit(write_source_data=False):
     not_found = []
-    for i in all_filenames:
+    for index, i in zip(range(len(all_filenames)), all_filenames):
+        index += 1
+        index = str(index)
+        if len(index)==1: 
+            index = '0'+index
         print(i[0], i[1])
-        for additional_tag in ('', '0.2bp', '5.0bp'):
+        for additional_tag, figure in additional_tags_figures_map.items():
             try:
-                get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag=additional_tag, plot_MPSP_y_t=False)
+                get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag=additional_tag, plot_MPSP_y_t=False,
+                                write_source_data=write_source_data, figure=figure, index=index)
             except:
                 not_found.append((i[1], i[0], additional_tag))
         
@@ -92,6 +104,9 @@ def get_all_MPSP_yt_fit():
             get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='3.4bp', plot_MPSP_y_t=False)
             get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='4.2bp', plot_MPSP_y_t=False)
             get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
+    
+    if not not_found==[]:
+        print('Not found: ', not_found)
     
     return not_found
 
@@ -127,7 +142,8 @@ def format_ax(ax, x_ticks, y_ticks,):
 def get_MPSP_yt_fit(product, feedstock, additional_tag='', 
                     plot_MPSP_y_t=False, 
                     external_data_fit_and_plot=False,
-                    save_to='C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data'):
+                    save_to='C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data',
+                    write_source_data=False, figure=None, index=None):
     os.chdir(save_to)
     product_ID = product
     # additional_tag = '0.5x_baselineprod'
@@ -517,8 +533,8 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
     np.save(f'{filename}_titers_for_eval.npy', titers_for_eval)
     np.save(f'{filename}_MPSP_for_eval.npy', indicator_array_for_eval)
     
-    
-    np.save(f'{filename}_recoveries_for_eval.npy', recoveries[:, :, :yield_upper_bound_index_for_eval])
+    recoveries_for_eval = recoveries[:, :, :yield_upper_bound_index_for_eval]
+    np.save(f'{filename}_recoveries_for_eval.npy', recoveries_for_eval)
     
     #%%
     def MPSP_f(y, t, avals, bvals, cvals, dvals): # use the coefficients solved for the corresponding yield regime
@@ -779,8 +795,8 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
     
     #%% Residual MPSP [% as decimal]
     resMPSPfrac = [[[ (MPSP_sim(y, t) - MPSP_f(y, t, [a_fit], [b_fit], [c_fit], [d_fit]))/MPSP_sim(y, t)
-                                   for y in yields_for_eval] 
-                                   for t in titers_for_eval]]
+                                   for y in yields_for_plot] 
+                                   for t in titers_for_plot]]
     resMPSPfrac = np.array(resMPSPfrac)
     
     resMPSPfrac[np.where(np.isnan(indicator_array_for_plot))] = np.nan
@@ -791,6 +807,32 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
     
     np.save(f'{filename}_resMPSPfrac.npy', resMPSPfrac)
     
+    #%% Write source data
+    if write_source_data:
+        save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=indicator_array_for_plot[0], 
+                               output_path='source_data.xlsx', sheet_name=f'{figure}_sim_{index}', 
+                               x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='MPSP [$/kg-p]')
+        
+        save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=fit_indicator_array_for_plot[0], 
+                               output_path='source_data.xlsx', sheet_name=f'{figure}_fit_{index}', 
+                               x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='MPSP [$/kg-p]')
+        if additional_tag == '':
+            save_xyz_grid_to_excel(x_values=ys_ri, y_values=ts_ri, z_values=rel_impact_arr[0], 
+                                   output_path='source_data.xlsx', sheet_name=f'Fig_4_{index}', 
+                                   x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='RI_MPSP [dimensionless]')
+            
+            save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=dcon, 
+                                   output_path='source_data.xlsx', sheet_name=f'Supp_Fig_5_{index}', 
+                                   x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='Contribution of k_T term to MPSP [fraction as decimal]')
+            
+            save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=resMPSPfrac, 
+                                   output_path='source_data.xlsx', sheet_name=f'Supp_Fig_8_{index}', 
+                                   x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='Fractional residual MPSP [fraction relative to simulated value]')
+        
+            save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=recoveries_for_eval, 
+                                   output_path='source_data.xlsx', sheet_name=f'Supp_Fig_3B_{index}', 
+                                   x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='Recovery [kg-p/kg-fp]')
+            
     #%% Plots
     if plot_MPSP_y_t:
         # Parameters analyzed across
@@ -1097,7 +1139,7 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         filename = folder_name+'/'+'jankovic_et_al_2023_ethanol_7a'
         product_ID = 'product'
         
-        ext_data1 = pd.read_csv(filename+'.csv')
+        ext_data1 = pd.read_excel(filename+'.xlsx')
         ts_ext1 = ext_data1['titer (wt%)']
         mpsps_ext1 = ext_data1['annual cost of separation ($/kg)']
         
@@ -1142,11 +1184,26 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         # ax.set_xlabel(f'{product_ID} titer [g/L]')
         # ax.scatter(p_curr, (arr - np.array([m + c/t for t in p_curr]))/arr)
         # plt.show()
+        
+        fit_results = np.array([shifted_rect_hyperbola_f(p, m, c) for p in ts_ext1])
+                               
         Rsq = get_Rsq(np.array(mpsps_ext1), 
-                      np.array([shifted_rect_hyperbola_f(p, m, c) for p in ts_ext1])
+                      fit_results,
                       )
         print(Rsq)
         print(m, c)
+        
+        # Write fit results
+        wb = load_workbook(filename+'.xlsx')
+        ws = wb.active   # or wb.active
+        
+        ws.cell(row=1, column=3, value='Fit annual cost of separation ($/kg)')
+        ## Write array values into column C, starting at C2
+        for row_idx, value in enumerate(fit_results, start=2):
+            ws.cell(row=row_idx, column=3, value=value.item() if hasattr(value, "item") else value)
+        
+        ## Save
+        wb.save(f"{filename}_with_fit.xlsx")
         
         textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
         props = dict(boxstyle='round', 
@@ -1171,6 +1228,8 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
                     # facecolor=plt.get_facecolor(),
                     # transparent=False,
                     )
+        
+
         
         # for p_curr, arr in zip(p_currs, arrs):
         #     p_curr = np.array(p_curr)
@@ -1232,15 +1291,29 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         print('\n#2A: Gunukula et al., 3-HP anaerobic, minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
         # 31 y-t combinations
         filename = folder_name+'/'+'gunukula_2017_SI_3-HP_b'
-        ext_data2 = pd.read_csv(filename+'.csv')
+        ext_data2 = pd.read_excel(filename+'.xlsx')
         ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
         mpsps_ext2 = ext_data2['MPSP ($/kg)']
         a_ext2, b_ext2, c_ext2, d_ext2, r = fit_shifted_rect_hyperbola_two_param((ys_ext2, ts_ext2), 
                                                                                    mpsps_ext2,)
+        fit_results = np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
+                  for y,t in zip(ys_ext2, ts_ext2)])
         Rsq = get_Rsq(np.array(mpsps_ext2), 
-                      np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
-                                for y,t in zip(ys_ext2, ts_ext2)]))
+                      fit_results)
         print(Rsq)
+        
+        # Write fit results
+        wb = load_workbook(filename+'.xlsx')
+        ws = wb.active   # or wb.active
+        
+        ws.cell(row=1, column=4, value='Fit MPSP ($/kg)')
+        ## Write array values into column D, starting at D2
+        for row_idx, value in enumerate(fit_results, start=2):
+            ws.cell(row=row_idx, column=4, value=value.item() if hasattr(value, "item") else value)
+        
+        ## Save
+        wb.save(f"{filename}_with_fit.xlsx")
+        
         fig, axs = plt.subplots(1, 2, constrained_layout=True)
         
         ax = axs[0]
@@ -1374,15 +1447,30 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         print('\n#2B: Gunukula et al., 1,3-PDO aerobic, minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
         # 31 y-t combinations
         filename = folder_name+'/'+'gunukula_2017_SI_1-3-PDO_aer_S7b'
-        ext_data2 = pd.read_csv(filename+'.csv')
+        ext_data2 = pd.read_excel(filename+'.xlsx')
         ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
         mpsps_ext2 = ext_data2['MPSP ($/kg)']
         a_ext2, b_ext2, c_ext2, d_ext2, r = fit_shifted_rect_hyperbola_two_param((ys_ext2, ts_ext2), 
                                                                                    mpsps_ext2,)
+        fit_results = np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
+                  for y,t in zip(ys_ext2, ts_ext2)])
         Rsq = get_Rsq(np.array(mpsps_ext2), 
-                      np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
-                                for y,t in zip(ys_ext2, ts_ext2)]))
+                      fit_results)
         print(Rsq)
+        
+        # Write fit results
+        wb = load_workbook(filename+'.xlsx')
+        ws = wb.active   # or wb.active
+        
+        ws.cell(row=1, column=4, value='Fit MPSP ($/kg)')
+        ## Write array values into column D, starting at D2
+        for row_idx, value in enumerate(fit_results, start=2):
+            ws.cell(row=row_idx, column=4, value=value.item() if hasattr(value, "item") else value)
+        
+        ## Save
+        wb.save(f"{filename}_with_fit.xlsx")
+        
+        
         fig, axs = plt.subplots(1, 2, constrained_layout=True)
         
         ax = axs[0]
@@ -1528,15 +1616,29 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         print('\n#2C: Gunukula et al., 1,3-PDO microaerobic, minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
         # 31 y-t combinations
         filename = folder_name+'/'+'gunukula_2017_SI_1-3-PDO_microaer_S7e'
-        ext_data2 = pd.read_csv(filename+'.csv')
+        ext_data2 = pd.read_excel(filename+'.xlsx')
         ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
         mpsps_ext2 = ext_data2['MPSP ($/kg)']
         a_ext2, b_ext2, c_ext2, d_ext2, r = fit_shifted_rect_hyperbola_two_param((ys_ext2, ts_ext2), 
                                                                                    mpsps_ext2,)
+        fit_results = np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
+                  for y,t in zip(ys_ext2, ts_ext2)])
         Rsq = get_Rsq(np.array(mpsps_ext2), 
-                      np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
-                                for y,t in zip(ys_ext2, ts_ext2)]))
+                      fit_results)
         print(Rsq)
+        
+        # Write fit results
+        wb = load_workbook(filename+'.xlsx')
+        ws = wb.active   # or wb.active
+        
+        ws.cell(row=1, column=4, value='Fit MPSP ($/kg)')
+        ## Write array values into column D, starting at D2
+        for row_idx, value in enumerate(fit_results, start=2):
+            ws.cell(row=row_idx, column=4, value=value.item() if hasattr(value, "item") else value)
+        
+        ## Save
+        wb.save(f"{filename}_with_fit.xlsx")
+        
         fig, axs = plt.subplots(1, 2, constrained_layout=True)
         
         ax = axs[0]
@@ -1670,15 +1772,29 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         print('\n#2D: Gunukula et al., isobutanol, minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
         # 31 y-t combinations
         filename = folder_name+'/'+'gunukula_2017_SI_isobutanol_S7f'
-        ext_data2 = pd.read_csv(filename+'.csv')
+        ext_data2 = pd.read_excel(filename+'.xlsx')
         ys_ext2, ts_ext2 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
         mpsps_ext2 = ext_data2['MPSP ($/kg)']
         a_ext2, b_ext2, c_ext2, d_ext2, r = fit_shifted_rect_hyperbola_two_param((ys_ext2, ts_ext2), 
                                                                                    mpsps_ext2,)
+        fit_results = np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
+                  for y,t in zip(ys_ext2, ts_ext2)])
         Rsq = get_Rsq(np.array(mpsps_ext2), 
-                      np.array([shifted_rect_hyperbola_two_param(y, t, a_ext2, b_ext2, c_ext2, d_ext2)
-                                for y,t in zip(ys_ext2, ts_ext2)]))
+                      fit_results)
         print(Rsq)
+        
+        # Write fit results
+        wb = load_workbook(filename+'.xlsx')
+        ws = wb.active   # or wb.active
+        
+        ws.cell(row=1, column=4, value='Fit MPSP ($/kg)')
+        ## Write array values into column D, starting at D2
+        for row_idx, value in enumerate(fit_results, start=2):
+            ws.cell(row=row_idx, column=4, value=value.item() if hasattr(value, "item") else value)
+        
+        ## Save
+        wb.save(f"{filename}_with_fit.xlsx")
+        
         fig, axs = plt.subplots(1, 2, constrained_layout=True)
         
         ax = axs[0]
@@ -1813,15 +1929,29 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
         print('\n#3: Sikazwe et al., minimum selling price ($/kg) vs yield (g/g) and titer (g/L)')
         # 11 y-t combinations
         filename = folder_name+'/'+'Sikazwe_2023_5_b'
-        ext_data2 = pd.read_csv(filename+'.csv')
+        ext_data2 = pd.read_excel(filename+'.xlsx')
         ys_ext3, ts_ext3 = ext_data2['yield (g/g)'], ext_data2['titer (g/L)']
-        mpsps_ext3 = ext_data2['MPSP ($/kg)']/1000
+        mpsps_ext3 = ext_data2['MPSP ($/kg)']
         a_ext3, b_ext3, c_ext3, d_ext3, r = fit_shifted_rect_hyperbola_two_param((ys_ext3, ts_ext3), 
                                                                                    mpsps_ext3,)
+        fit_results = np.array([shifted_rect_hyperbola_two_param(y, t, a_ext3, b_ext3, c_ext3, d_ext3)
+                  for y,t in zip(ys_ext3, ts_ext3)])
         Rsq = get_Rsq(np.array(mpsps_ext3), 
-                      np.array([shifted_rect_hyperbola_two_param(y, t, a_ext3, b_ext3, c_ext3, d_ext3)
-                                for y,t in zip(ys_ext3, ts_ext3)]))
+                      fit_results)
         print(Rsq)
+        
+        # Write fit results
+        wb = load_workbook(filename+'.xlsx')
+        ws = wb.active   # or wb.active
+        
+        ws.cell(row=1, column=4, value='Fit MPSP ($/kg)')
+        ## Write array values into column D, starting at D2
+        for row_idx, value in enumerate(fit_results, start=2):
+            ws.cell(row=row_idx, column=4, value=value.item() if hasattr(value, "item") else value)
+        
+        ## Save
+        wb.save(f"{filename}_with_fit.xlsx")
+        
         fig, axs = plt.subplots(1, 2, constrained_layout=True)
         
         ax = axs[0]

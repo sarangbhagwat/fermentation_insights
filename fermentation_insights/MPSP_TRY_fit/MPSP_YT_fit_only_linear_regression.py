@@ -12,7 +12,7 @@ from biorefineries.TAL.models.model_utils import codify
 from fermentation_insights.utils import loop_evaluate_across_param,\
         loop_evaluate_across_titers, loop_evaluate_across_yields,\
         multivariate_linear_eq, fit_multivariate_linear_eq,\
-        plot_across_param
+        plot_across_param, save_xyz_grid_to_excel
 from biorefineries.TAL._general_utils import add_metrics_to_unit_groups,\
         TEA_breakdown as general_TEA_breakdown
 from matplotlib import pyplot as plt
@@ -63,32 +63,43 @@ product_IDs = [
                 ]
 feedstock_IDs = [
                  'glucose', 
+                 'cornstover',
                  'sugarcane', 
                  'corn', 
-                 'cornstover',
                  ]
 
 all_filenames = list(itertools.product(product_IDs, feedstock_IDs))
 
-def get_all_MPSP_yt_fit_lin_reg():
+
+additional_tags_figures_map = {'': 'Supp_Fig_9',}
+
+def get_all_MPSP_yt_fit_lin_reg(write_source_data=False):
     not_found = []
-    for i in all_filenames:
+    for index, i in zip(range(len(all_filenames)), all_filenames):
+        index += 1
+        index = str(index)
+        if len(index)==1: 
+            index = '0'+index
         print(i[0], i[1])
-        for additional_tag in ('', '0.2bp', '5.0bp'):
+        for additional_tag, figure in additional_tags_figures_map.items():
             try:
-                get_MPSP_yt_fit_lin_reg(product=i[0], feedstock=i[1], additional_tag=additional_tag, plot_MPSP_y_t=False)
+                get_MPSP_yt_fit_lin_reg(product=i[0], feedstock=i[1], additional_tag=additional_tag, plot_MPSP_y_t=False,
+                                write_source_data=write_source_data, figure=figure, index=index)
             except:
                 not_found.append((i[1], i[0], additional_tag))
         
 
         if i[0]+'_'+i[1] in ['TAL_SA_sugarcane']:
             get_MPSP_yt_fit_lin_reg(product=i[0], feedstock=i[1], additional_tag='0.2bp', plot_MPSP_y_t=False)
-            # get_MPSP_yt_fit_lin_reg(product=i[0], feedstock=i[1], additional_tag='1.0bp', plot_MPSP_y_t=False)
+            # get_MPSP_yt_fit(product=i[0], feedstock=i[1], additional_tag='1.0bp', plot_MPSP_y_t=False)
             get_MPSP_yt_fit_lin_reg(product=i[0], feedstock=i[1], additional_tag='1.8bp', plot_MPSP_y_t=False)
             get_MPSP_yt_fit_lin_reg(product=i[0], feedstock=i[1], additional_tag='2.6bp', plot_MPSP_y_t=False)
             get_MPSP_yt_fit_lin_reg(product=i[0], feedstock=i[1], additional_tag='3.4bp', plot_MPSP_y_t=False)
             get_MPSP_yt_fit_lin_reg(product=i[0], feedstock=i[1], additional_tag='4.2bp', plot_MPSP_y_t=False)
             get_MPSP_yt_fit_lin_reg(product=i[0], feedstock=i[1], additional_tag='5.0bp', plot_MPSP_y_t=False)
+    
+    if not not_found==[]:
+        print('Not found: ', not_found)
     
     return not_found
 
@@ -124,7 +135,8 @@ def format_ax(ax, x_ticks, y_ticks,):
 def get_MPSP_yt_fit_lin_reg(product, feedstock, additional_tag='', 
                     plot_MPSP_y_t=False, 
                     external_data_fit_and_plot=False,
-                    save_to='C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data'):
+                    save_to='C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data',
+                    write_source_data=False, figure=None, index=None):
     os.chdir(save_to)
     product_ID = product
     # additional_tag = '0.5x_baselineprod'
@@ -308,7 +320,16 @@ def get_MPSP_yt_fit_lin_reg(product, feedstock, additional_tag='',
     
     np.save(f'{filename}_MPSP_fit_lin_reg.npy', fit_indicator_array_for_plot)
     
-    
+    if write_source_data:
+        save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=indicator_array_for_plot[0], 
+                               output_path='source_data.xlsx', sheet_name=f'{figure}_sim_{index}', 
+                               x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='MPSP [$/kg-p]')
+        
+        save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=fit_indicator_array_for_plot[0], 
+                               output_path='source_data.xlsx', sheet_name=f'{figure}_fit_{index}', 
+                               x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='MPSP [$/kg-p]')
+        
+
 
     #%% Residual MPSP [% as decimal]
     resMPSPfrac = [[[ (MPSP_sim(y, t) - MPSP_f(y, t, a_fit, b_fit, c_fit))/MPSP_sim(y, t)

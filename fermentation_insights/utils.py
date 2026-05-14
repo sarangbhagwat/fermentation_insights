@@ -11,6 +11,7 @@ import numpy as np
 from math import log as ln
 import scipy
 from matplotlib import pyplot as plt
+import pandas as pd
 
 #%%
 def loop_evaluate_across_param(
@@ -455,3 +456,80 @@ def get_pairings(HXN, owner=False):
         else:
             pairings.append((orig_hus[i1].unit.owner, orig_hus[i2].unit.owner))
     return pairings
+
+#%%
+
+def save_xyz_grid_to_excel(x_values, y_values, z_values, output_path, sheet_name, x_title, y_title, z_title):
+    """
+    Save x, y, z grid data to an Excel sheet.
+
+    Layout:
+        - First row contains x-axis values
+        - First column contains y-axis values
+        - Middle cells contain z-values
+
+    Parameters
+    ----------
+    x_values : 1D array-like
+        X-axis values, length = number of columns in z_values
+
+    y_values : 1D array-like
+        Y-axis values, length = number of rows in z_values
+
+    z_values : 2D array-like
+        Z-values with shape (len(y_values), len(x_values))
+
+    output_path : str
+        Path to output Excel file, e.g. "output.xlsx"
+    
+    sheet_name : str
+        Name of the Excel sheet to which to write.
+    
+    x_titles : str
+        X-axis title.
+
+    y_titles : str
+        Y-axis title.
+
+    z_titles : str
+        Z-axis title.
+    """
+
+    x_values = np.asarray(x_values)
+    y_values = np.asarray(y_values)
+    z_values = np.asarray(z_values)
+
+    if z_values.shape != (len(y_values), len(x_values)):
+        raise ValueError(
+            f"z_values must have shape ({len(y_values)}, {len(x_values)}), "
+            f"but got {z_values.shape}"
+        )
+
+    # Create DataFrame with y-values as row index and x-values as column headers
+    df = pd.DataFrame(
+        data=z_values,
+        index=y_values,
+        columns=x_values
+    )
+
+    # Optional: name the index/column corner cell
+    df.index.name = f"{y_title} \\ {x_title}"
+
+    # Save to Excel
+    
+    with pd.ExcelWriter(output_path,
+        engine="openpyxl",
+        mode="a",
+        if_sheet_exists="overlay", # or "new", "replace"
+        ) as writer:
+        
+        df.to_excel(
+            writer,
+            sheet_name=sheet_name,
+            startrow=1
+        )
+
+        # Write z axis title to cell A1
+        worksheet = writer.sheets[sheet_name]
+        worksheet["A1"] = z_title
+        

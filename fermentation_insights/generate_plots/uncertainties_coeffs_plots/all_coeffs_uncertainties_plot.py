@@ -54,7 +54,7 @@ for p,f in list(itertools.product(product_IDs, feedstock_IDs)):
 
 #%% Save baselines and percentiles
 coefficients = ['a', 'b', 'c', 'd', 'g'] # note 'g' is the same as 'r' (recoveries)
-coefficients_eq_11 = ['k_Y', 'k_0', 'k_V', 'k_T']
+coefficients_eq_11 = ['k_Y', 'k_0', 'k_V', 'k_T', 'g'] # note 'g' is the same as 'r' (recoveries)
 
 all_coeff_uncs = {cf_eq_11: {} for cf_eq_11 in coefficients_eq_11} 
 
@@ -82,14 +82,15 @@ for cf, cf_eq_11 in zip(coefficients, coefficients_eq_11):
         # add to dict of all coeff uncertainties 
         if not cf=='g':
             all_coeff_uncs[cf_eq_11][i] = unc * coeffs_uncertainty[i]['g']
-        
+        else:
+            all_coeff_uncs[cf_eq_11][i] = unc
+            
     baselines_percentiles_df = pd.DataFrame.from_dict(baselines_percentiles)
     baselines_percentiles_df.to_excel(cf+'_coeff_baselines_percentiles.xlsx')
     
 # save coefficient uncertainties into source data excel file
 all_coeff_uncs_dfs = {}
-for cf, cf_eq_11 in zip(coefficients[:-1], coefficients_eq_11):
-    assert (not cf=='g')
+for cf, cf_eq_11 in zip(coefficients, coefficients_eq_11):
     all_coeff_uncs_dfs[cf_eq_11] = pd.DataFrame.from_dict(all_coeff_uncs[cf_eq_11])
     with pd.ExcelWriter(
         "source_data.xlsx",
@@ -97,7 +98,11 @@ for cf, cf_eq_11 in zip(coefficients[:-1], coefficients_eq_11):
         mode="a",
         if_sheet_exists="overlay", # or "new", "replace"
     ) as writer:
-        sheet_name = f'Fig_3_{cf.upper()}'
+        
+        if cf==cf_eq_11=='g':
+            sheet_name = 'Supp_Fig_3A'
+        else:
+            sheet_name = f'Fig_3{cf.upper()}'
         all_coeff_uncs_dfs[cf_eq_11].to_excel(writer, 
                                               sheet_name=sheet_name, 
                                               startrow=1,
@@ -106,13 +111,17 @@ for cf, cf_eq_11 in zip(coefficients[:-1], coefficients_eq_11):
         
         # Access the openpyxl worksheet
         ws = writer.book[sheet_name]
-    
+        
         # Apply wrap text to all cells in row 2
         for cell in ws[2]:
             cell.alignment = Alignment(
                 wrap_text=True,
                 vertical="top"
             )
+        
+        # Write coefficient name to cell A1
+        worksheet = writer.sheets[sheet_name]
+        worksheet["A1"] = cf_eq_11
         
 #%% Save Spearman's rho for coeffs w.r.t. uncertain parameters
 for i in all_filenames:
