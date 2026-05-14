@@ -19,7 +19,7 @@ def run_uncertainties_coeffs(product, additional_tag, feedstock, steps_TRY=5, N_
     import numpy as np
     np.random.seed(9000) # for HP_glucose
     # np.random.seed(4153) # for all others
-    os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+    os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data')
     
     product_ID = product
     # additional_tag = '0.5x_baselineprod'

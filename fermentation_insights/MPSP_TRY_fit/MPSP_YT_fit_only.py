@@ -121,7 +121,7 @@ def format_ax(ax, x_ticks, y_ticks,):
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax_r.yaxis.set_minor_locator(AutoMinorLocator())
     ax_t.xaxis.set_minor_locator(AutoMinorLocator())
-    
+
 #%% Load TRY
 
 def get_MPSP_yt_fit(product, feedstock, additional_tag='', 

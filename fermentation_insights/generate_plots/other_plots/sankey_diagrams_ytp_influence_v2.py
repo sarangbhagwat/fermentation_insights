@@ -11,6 +11,7 @@ from biorefineries.HP.models.sugarcane import models_sc_hexanol as models
 import biosteam as bst
 import os
 import numpy as np
+import pickle
 
 #%%
 f = bst.main_flowsheet
@@ -69,6 +70,9 @@ baseline_initial = model.metrics_at_baseline()
 print(get_AA_MPSP())
 get_AA_MPSP()
 
+#%%
+os.chdir(('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data'))
+
 #%% Utils
 def streams_between(sys1, sys2):
     sys1_to_sys2 = []
@@ -89,7 +93,7 @@ def flows_between(sys1, sys2):
     for i in sys1_to_sys2:
         flows_sys1_to_sys2
         
-def get_mass_flow_by_area(flow_nodes, value_factor=0.1):
+def get_mass_flow_by_area(flow_nodes, filename=None, value_factor=0.1):
     source=[]
     target=[]
     value=[]
@@ -125,9 +129,15 @@ def get_mass_flow_by_area(flow_nodes, value_factor=0.1):
     target.append(label.index('fermentation'))
     value.append(f.M304.ins[1].F_mass*value_factor)
     
+    if filename:
+        sankey_stv = {'Source': [label[i] for i in source], 'Target': [label[i] for i in target], 'Mass flow [kg/h]': [i/value_factor for i in value]}
+        with open(filename+'.pkl', 'wb') as ff:
+            pickle.dump(sankey_stv, ff)
+        
     return source, target, value, label
 
-def plot_mass_flow(flow_nodes, value_factor=0.1,
+def plot_mass_flow(flow_nodes, filename, 
+                   value_factor=0.1,
                    width=600, height=400,
                    x=None, y=None,
                    nodecolors=None,
@@ -139,7 +149,9 @@ def plot_mass_flow(flow_nodes, value_factor=0.1,
     import plotly.graph_objs as go#create links
     from plotly.offline import init_notebook_mode,  plot
     init_notebook_mode()
-    source, target, value, label = get_mass_flow_by_area(flow_nodes, value_factor)
+    source, target, value, label = get_mass_flow_by_area(flow_nodes=flow_nodes, filename=filename, 
+                                                         value_factor=value_factor,
+                                                         )
     
     if not isinstance(linkalphas, list):
         linkalphas = [linkalphas]*len(source)
@@ -266,6 +278,7 @@ spec.load_specifications(spec.baseline_yield, spec.baseline_titer, spec.baseline
 get_AA_MPSP()
 
 plot_mass_flow(flow_nodes=flow_nodes,
+               filename='HP_neutral_sugarcane_sankey',
                            width=width, height=800/2,
                            x=x, y=y,
                            nodecolors=default_nodecolor,
@@ -287,6 +300,7 @@ for si, ti in zip(s,t):
         nodecolors[l.index(l[ti])] = yield_influenced_nodecolor
     
 plot_mass_flow(flow_nodes=flow_nodes,
+               filename='HP_neutral_sugarcane_0.5by_sankey',
                            width=width, height=555/1.8,
                            x=x, y=y,
                            nodecolors=nodecolors,
@@ -308,6 +322,7 @@ for si, ti in zip(s,t):
         nodecolors[l.index(l[ti])] = titer_influenced_nodecolor
     
 plot_mass_flow(flow_nodes=flow_nodes,
+               filename='HP_neutral_sugarcane_0.5bt_sankey',
                            width=width, height=1250/2.2,
                            x=x, y=y,
                            nodecolors=nodecolors,
@@ -341,6 +356,7 @@ for si, ti in zip(s,t):
         
 plot_mass_flow(flow_nodes=flow_nodes,
                            width=width, 
+                           filename='HP_neutral_sugarcane_0.5by_0.5bt_sankey',
                            height=790/1.99, # 0.5, 0.5
                            # height=790/2.52, # 0.25, 0.5
                            # height=790/1.64, # 0.75, 0.5
