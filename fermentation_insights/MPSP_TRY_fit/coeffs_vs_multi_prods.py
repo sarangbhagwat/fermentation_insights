@@ -14,9 +14,10 @@ from biosteam.utils import  colors
 from  matplotlib.colors import LinearSegmentedColormap
 # from fermentation_insights.plots.analyze_all_combinations import coeff
 from biorefineries.TAL.analyses.miscellaneous.supernatant_recycling_with_fixed_decarboxylation import plot_multiple_metrics
+import pandas as pd
 
 #%%
-os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data')
 
 #%%
 product_IDs = [
@@ -56,7 +57,7 @@ productivities = productivities_for_plot = np.linspace(0.2, 5., 7) * 0.12 # base
 product = 'TAL_SA'
 feedstock = 'sugarcane'
 
-avals, bvals, cvals, dvals, gvals = [], [], [], [], [] # note these are actually a', b', c', d', and r
+avals, bvals, cvals, dvals, gvals = [], [], [], [], [] # note these are actually already a', b', c', d', and r
 
 for p in productivities/0.12:
     name = product+f'_{round_to(p, 1)}bp_'+feedstock if not p==1 else product+'_'+feedstock
@@ -160,6 +161,21 @@ plot_multiple_metrics(productivities,
                       plot_type='scatter',
                       filename='coeffs_recovery_multiple_productivities_TAL_SA_sugarcane'
                       )
+
+coeffs_vs_prods = {'Productivity [g-fp/L/h]': productivities,
+                   'k_Y [$/kg-fp]': avals,
+                   'k_0 [$/kg-sugars]': bvals,
+                   'k_V [$/m3-broth]': cvals,
+                   'k_T [$/kg-fp/m3-broth/kg-sugars]': dvals,
+                   'r   [kg-p/kg-fp]': gvals}
+
+# add coeff * productivity data
+for k in list(coeffs_vs_prods.keys()):
+    if not 'productivity' in k.lower():
+        coeffs_vs_prods[k[:3] + '* Productivity'] = coeffs_vs_prods[k] * coeffs_vs_prods['Productivity [g-fp/L/h]']
+
+coeffs_vs_prods_df = pd.DataFrame.from_dict(coeffs_vs_prods)
+coeffs_vs_prods_df.to_excel('coeffs_vs_prods_TAL_SA_sugarcane.xlsx')
 
 #%%
 plot_multiple_metrics(productivities,

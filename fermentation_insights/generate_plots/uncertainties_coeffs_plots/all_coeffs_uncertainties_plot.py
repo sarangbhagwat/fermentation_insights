@@ -80,10 +80,10 @@ for cf, cf_eq_11 in zip(coefficients, coefficients_eq_11):
         baselines_percentiles['95th'].append(np.percentile(unc, 95))
         
         # add to dict of all coeff uncertainties 
-        if not cf=='g':
-            all_coeff_uncs[cf_eq_11][i] = unc * coeffs_uncertainty[i]['g']
-        else:
-            all_coeff_uncs[cf_eq_11][i] = unc
+        # if not cf=='g':
+        #     all_coeff_uncs[cf_eq_11][i] = unc * coeffs_uncertainty[i]['g']
+        # else:
+        all_coeff_uncs[cf_eq_11][i] = unc # no need to multiply by g; _coefficients.npy files are actually already a', b', c', d', and r
             
     baselines_percentiles_df = pd.DataFrame.from_dict(baselines_percentiles)
     baselines_percentiles_df.to_excel(cf+'_coeff_baselines_percentiles.xlsx')
