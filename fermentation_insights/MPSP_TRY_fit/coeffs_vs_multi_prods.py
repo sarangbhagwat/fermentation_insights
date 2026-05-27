@@ -98,8 +98,8 @@ r_label = r"$\bfr$"
 
 a_units = r"$\mathrm{\$}\cdot\mathrm{kg-fp}^{-1}$"
 b_units = r"$\mathrm{\$}\cdot\mathrm{kg-sugars}^{-1}$"
-c_units = r"$\mathrm{\$}\cdot\mathrm{L-broth}^{-1}$"
-d_units = r"$\mathrm{\$}\cdot\mathrm{kg-fp}\cdot\mathrm{L-broth}^{-1}\cdot\mathrm{kg-sugars}^{-1}$"
+c_units = r"$\mathrm{\$}\cdot\mathrm{m}^{-3}\mathrm{-broth}$"
+d_units = r"$\mathrm{\$}\cdot\mathrm{kg-fp}\cdot\mathrm{m}^{-3}\mathrm{-broth}\cdot\mathrm{kg-sugars}^{-1}$"
 r_units = r"$\mathrm{kg-p}\cdot\mathrm{kg-fp}^{-1}$"
 
 y_labels = [a_label, b_label, c_label, d_label, r_label]

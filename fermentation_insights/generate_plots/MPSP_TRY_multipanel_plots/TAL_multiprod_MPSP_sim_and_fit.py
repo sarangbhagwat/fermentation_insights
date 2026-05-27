@@ -11,6 +11,7 @@ import contourplots
 import itertools
 from biosteam.utils import  colors
 from  matplotlib.colors import LinearSegmentedColormap
+from fermentation_insights.utils import save_xyz_grid_to_excel
 
 #%%
 
@@ -29,7 +30,7 @@ def CABBI_green_colormap(N_levels=90):
     return LinearSegmentedColormap.from_list('CABBI', CABBI_colors, N_levels)
 
 #%%
-os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data')
 
 product_IDs = [
                # 'TAL', 
@@ -44,7 +45,7 @@ feedstock_IDs = [
                  # 'corn', 
                  ]
 
-columns = ['simulated', 'fit']
+columns = ['sim', 'fit']
 
 all_filenames = []
 refinery = {i: {} for i in feedstock_IDs}
@@ -80,6 +81,8 @@ for p in productivities/0.12:
     
 #%%
 fig, axs = plt.subplots(len(productivities), len(columns), constrained_layout=True)
+
+plot = True
 
 #%% Plot clabel utils
 def get_penultimate_lowest_w_tick(w_levels, w_array):
@@ -146,9 +149,9 @@ for i, p in zip(range(len(productivities)), productivities):
         
         # show_yields = product_ID in ['TAL_SA', 'HP_neutral_hexanol', 'succinic_neutral']
         show_yields = p_over_baseline==5.
-        show_titers = column in['simulated']
+        show_titers = column in['sim']
         # show_titers = True
-        show_top_ticklabels = (p_over_baseline==0.2 and column=='simulated'
+        show_top_ticklabels = (p_over_baseline==0.2 and column=='sim'
                                or p_over_baseline==5. and column=='fit')
         
         ########
@@ -258,7 +261,7 @@ for i, p in zip(range(len(productivities)), productivities):
         axis_tick_fontsize = 16
         keep_frames = True
 
-        print('\nCreating and saving contour plots ...\n')
+        
 
         get_rounded_str = contourplots.utils.get_rounded_str
         
@@ -278,87 +281,94 @@ for i, p in zip(range(len(productivities)), productivities):
         except:
             MPSP_w_ticks = [MPSP_w_levels[-1]]
             
-        contourplots.animated_contourplot(w_data_vs_x_y_at_multiple_z=indicator_array, # shape = z * x * y # values of the metric you want to plot on the color axis; e.g., MPSP
-                                        x_data=yields_for_plot, # x axis values
-                                        # x_data = yields/theoretical_max_g_HP_acid_per_g_glucose,
-                                        y_data=titers_for_plot, # y axis values
-                                        z_data=np.array([1]), # z axis values
-                                        x_label=x_label, # title of the x axis
-                                        y_label=y_label, # title of the y axis
-                                        z_label=z_label, # title of the z axis
-                                        w_label=MPSP_w_label, # title of the color axis
-                                        x_ticks=x_ticks,
-                                        y_ticks=y_ticks,
-                                        z_ticks=z_ticks,
-                                        w_levels=MPSP_w_levels, # levels for unlabeled, filled contour areas (labeled and ticked only on color bar)
-                                        w_ticks=MPSP_w_ticks, # labeled, lined contours; a subset of w_levels
-                                        x_units=x_units,
-                                        y_units=y_units,
-                                        z_units=z_units,
-                                        w_units=MPSP_units,
-                                        # fmt_clabel=lambda cvalue: r"$\mathrm{\$}$"+" {:.1f} ".format(cvalue)+r"$\cdot\mathrm{kg}^{-1}$", # format of contour labels
-                                        fmt_clabel = lambda cvalue: get_rounded_str(cvalue, 2),
-                                        cmap=CABBI_green_colormap(), # can use 'viridis' or other default matplotlib colormaps
-                                        cmap_over_color = colors.grey_dark.shade(8).RGBn,
-                                        extend_cmap='max',
-                                        cbar_ticks=MPSP_cbar_ticks,
-                                        z_marker_color='g', # default matplotlib color names
-                                        fps=fps, # animation frames (z values traversed) per second
-                                        n_loops='inf', # the number of times the animated contourplot should loop animation over z; infinite by default
-                                        animated_contourplot_filename=filename+'_MPSP_y_t_sims', # file name to save animated contourplot as (no extensions)
-                                        keep_frames=keep_frames, # leaves frame PNG files undeleted after running; False by default
-                                        axis_title_fonts=axis_title_fonts,
-                                        clabel_fontsize = clabel_fontsize,
-                                        default_fontsize = default_fontsize,
-                                        axis_tick_fontsize = axis_tick_fontsize,
-                                        # comparison_range=market_range,
-                                        n_minor_ticks = 1,
-                                        cbar_n_minor_ticks = 3,
-                                        # manual_clabels_regular = {
-                                        #     MPSP_w_ticks[5]: (45,28),
-                                        #     },
-                                        # additional_points ={(73, 62.5):('D', 'w', 6)},
-                                        fill_bottom_with_cmap_over_color=False, # for TRY
-                                        # bottom_fill_bounds = ((0,0), 
-                                        #                       (5,60.),
-                                        #                       (95,10.)),
-                                        # # zoom_data_scale=5,
-                                        # text_boxes = {'>4.00': [(5,5), 'white']},
-                                        
-                                        add_shapes = infeas_region_shape,
-                                        units_on_newline = (False, False, False, False), # x,y,z,w
-                                        units_opening_brackets = [" (",] * 4,
-                                        units_closing_brackets = [")",] * 4,
-                                        # label_over_color='white',
-                                        round_xticks_to=1,
-                                        round_yticks_to=0,
-                                        keep_gifs=False,
-                                        include_top_bar = False,
-                                        include_cbar = False,
-                                        include_axis_labels = False,
-                                        include_x_axis_ticklabels = show_yields,
-                                        include_y_axis_ticklabels = show_titers,
-                                        show_top_ticklabels = show_top_ticklabels,
-                                        figwidth=None,
-                                        fig_ax_to_use=(fig, ax),
-                                        )
-        if column=='fit':
-            # add R-squared text box to top left of each plot
-            coefficients = np.load(f'{filename}_coefficients.npy')
-            Rsq = coefficients[-1]
-            textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
-            props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+        if plot:
+            print('\nCreating and saving contour plots ...\n')
+            contourplots.animated_contourplot(w_data_vs_x_y_at_multiple_z=indicator_array, # shape = z * x * y # values of the metric you want to plot on the color axis; e.g., MPSP
+                                            x_data=yields_for_plot, # x axis values
+                                            # x_data = yields/theoretical_max_g_HP_acid_per_g_glucose,
+                                            y_data=titers_for_plot, # y axis values
+                                            z_data=np.array([1]), # z axis values
+                                            x_label=x_label, # title of the x axis
+                                            y_label=y_label, # title of the y axis
+                                            z_label=z_label, # title of the z axis
+                                            w_label=MPSP_w_label, # title of the color axis
+                                            x_ticks=x_ticks,
+                                            y_ticks=y_ticks,
+                                            z_ticks=z_ticks,
+                                            w_levels=MPSP_w_levels, # levels for unlabeled, filled contour areas (labeled and ticked only on color bar)
+                                            w_ticks=MPSP_w_ticks, # labeled, lined contours; a subset of w_levels
+                                            x_units=x_units,
+                                            y_units=y_units,
+                                            z_units=z_units,
+                                            w_units=MPSP_units,
+                                            # fmt_clabel=lambda cvalue: r"$\mathrm{\$}$"+" {:.1f} ".format(cvalue)+r"$\cdot\mathrm{kg}^{-1}$", # format of contour labels
+                                            fmt_clabel = lambda cvalue: get_rounded_str(cvalue, 2),
+                                            cmap=CABBI_green_colormap(), # can use 'viridis' or other default matplotlib colormaps
+                                            cmap_over_color = colors.grey_dark.shade(8).RGBn,
+                                            extend_cmap='max',
+                                            cbar_ticks=MPSP_cbar_ticks,
+                                            z_marker_color='g', # default matplotlib color names
+                                            fps=fps, # animation frames (z values traversed) per second
+                                            n_loops='inf', # the number of times the animated contourplot should loop animation over z; infinite by default
+                                            animated_contourplot_filename=filename+'_MPSP_y_t_sims', # file name to save animated contourplot as (no extensions)
+                                            keep_frames=keep_frames, # leaves frame PNG files undeleted after running; False by default
+                                            axis_title_fonts=axis_title_fonts,
+                                            clabel_fontsize = clabel_fontsize,
+                                            default_fontsize = default_fontsize,
+                                            axis_tick_fontsize = axis_tick_fontsize,
+                                            # comparison_range=market_range,
+                                            n_minor_ticks = 1,
+                                            cbar_n_minor_ticks = 3,
+                                            # manual_clabels_regular = {
+                                            #     MPSP_w_ticks[5]: (45,28),
+                                            #     },
+                                            # additional_points ={(73, 62.5):('D', 'w', 6)},
+                                            fill_bottom_with_cmap_over_color=False, # for TRY
+                                            # bottom_fill_bounds = ((0,0), 
+                                            #                       (5,60.),
+                                            #                       (95,10.)),
+                                            # # zoom_data_scale=5,
+                                            # text_boxes = {'>4.00': [(5,5), 'white']},
+                                            
+                                            add_shapes = infeas_region_shape,
+                                            units_on_newline = (False, False, False, False), # x,y,z,w
+                                            units_opening_brackets = [" (",] * 4,
+                                            units_closing_brackets = [")",] * 4,
+                                            # label_over_color='white',
+                                            round_xticks_to=1,
+                                            round_yticks_to=0,
+                                            keep_gifs=False,
+                                            include_top_bar = False,
+                                            include_cbar = False,
+                                            include_axis_labels = False,
+                                            include_x_axis_ticklabels = show_yields,
+                                            include_y_axis_ticklabels = show_titers,
+                                            show_top_ticklabels = show_top_ticklabels,
+                                            figwidth=None,
+                                            fig_ax_to_use=(fig, ax),
+                                            )
+            if column=='fit':
+                # add R-squared text box to top left of each plot
+                coefficients = np.load(f'{filename}_coefficients.npy')
+                Rsq = coefficients[-1]
+                textstr = "$\mathrm{R}^{2}$" + " = " + "%.3f"%(Rsq)
+                props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+                
+                # place a text box in upper left in axes coords
+                ax.text(
+                        np.linspace(x_ticks[0], x_ticks[-1], 100)[4], # x-coord
+                        # np.linspace(x_ticks[0], x_ticks[-1], 100)[15], # x-coord
+                        np.linspace(y_ticks[0], y_ticks[-1], 100)[-5], # y-coord
+                        textstr, 
+                        # transform=ax.transAxes, 
+                        fontsize=axis_tick_fontsize,
+                        # verticalalignment='top', 
+                        bbox=props)
             
-            # place a text box in upper left in axes coords
-            ax.text(
-                    np.linspace(x_ticks[0], x_ticks[-1], 100)[4], # x-coord
-                    # np.linspace(x_ticks[0], x_ticks[-1], 100)[15], # x-coord
-                    np.linspace(y_ticks[0], y_ticks[-1], 100)[-5], # y-coord
-                    textstr, 
-                    # transform=ax.transAxes, 
-                    fontsize=axis_tick_fontsize,
-                    # verticalalignment='top', 
-                    bbox=props)
+        save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=indicator_array[0], 
+                               output_path='source_data.xlsx', sheet_name=f'Supp_Fig_6A_row{i+1}_{column}', 
+                               x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='MPSP [$/kg-p]')
+        
 #%%
 plt.subplots_adjust(wspace=0, hspace=0)
 fig.set_figheight(12)

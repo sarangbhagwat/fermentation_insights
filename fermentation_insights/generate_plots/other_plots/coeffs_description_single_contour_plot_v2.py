@@ -12,13 +12,14 @@ import contourplots
 import itertools
 from biosteam.utils import  colors
 from  matplotlib.colors import LinearSegmentedColormap
+import pandas as pd
 # from fermentation_insights.plots.analyze_all_combinations import coeff
 
 #%%
-os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data')
 
 #%%
-os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//TRY_results')
+os.chdir('C://Users//saran//Documents//Academia//repository_clones//fermentation_insights//fermentation_insights//results//data')
 
 product_IDs = [
                'TAL', 'TAL_SA',
@@ -85,8 +86,8 @@ def linear_eccentricity(MPSP, a, b, c, d):
 
 
 #%%
-yields = yields_for_plot = np.linspace(0.01, 200., 100000)
-titers = titers_for_plot = np.linspace(0.2, 200, 50)
+yields = np.linspace(0.1, 1., 1000)
+# titers = titers_for_plot = np.linspace(0.2, 200, 1000)
 
 refinery = 'succinic_glucose'
 name = refinery
@@ -268,6 +269,7 @@ def mark_asymptotes(ax, h, k, color, zorder=10):
     ax.scatter(h, y_ticks[-1]*1.02, color=[color], marker="v", zorder=zorder, clip_on=False, alpha=asymptote_alpha)
     ax.scatter(x_ticks[-1]*1.02, k, color=[color], marker="<", zorder=zorder, clip_on=False, alpha=asymptote_alpha)
 
+
 #%% 
 
 fig, axs = plt.subplots(2, 2, constrained_layout=True)
@@ -387,3 +389,20 @@ plt.savefig(f'coeffs_description_single_contour.png',
 
 plt.show()
 
+#%% Save source data
+results = {'Yield [g-fp/g-sugars]': yields}
+
+for a_val in a_vals:
+    results [f'Titer [g-fp/L] at which MPSP=$3.00/kg when a is changed to {round(a_val, 3)}'] = titer_f(yields, MPSP=MPSP, a=a_val, b=b, c=c, d=d)
+
+for b_val in b_vals:
+    results [f'Titer [g-fp/L] at which MPSP=$3.00/kg when b is changed to {round(b_val, 3)}'] = titer_f(yields, MPSP=MPSP, a=a, b=b_val, c=c, d=d)
+
+for c_val in c_vals:
+    results [f'Titer [g-fp/L] at which MPSP=$3.00/kg when c is changed to {round(c_val, 3)}'] = titer_f(yields, MPSP=MPSP, a=a, b=b, c=c_val, d=d)
+                                                                                    
+for d_val in d_vals:
+    results [f'Titer [g-fp/L] at which MPSP=$3.00/kg when d is changed to {round(d_val, 3)}'] = titer_f(yields, MPSP=MPSP, a=a, b=b, c=c, d=d_val)
+
+results_df = pd.DataFrame.from_dict(results)
+results_df.to_excel('coeffs_description_results_succinic_glucose_lowpH.xlsx')

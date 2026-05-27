@@ -77,8 +77,9 @@ all_filenames = list(itertools.product(product_IDs, feedstock_IDs))
 
 
 additional_tags_figures_map = {'': 'Fig_1', 
-                               '0.2bp': 'Supp_Fig_1', 
-                               '5.0bp': 'Supp_Fig_2'}
+                               # '0.2bp': 'Supp_Fig_1', 
+                               # '5.0bp': 'Supp_Fig_2',
+                               }
 
 def get_all_MPSP_yt_fit(write_source_data=False):
     not_found = []
@@ -821,15 +822,15 @@ def get_MPSP_yt_fit(product, feedstock, additional_tag='',
                                    output_path='source_data.xlsx', sheet_name=f'Fig_4_{index}', 
                                    x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='RI_MPSP [dimensionless]')
             
-            save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=dcon, 
+            save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=dcon[0], 
                                    output_path='source_data.xlsx', sheet_name=f'Supp_Fig_5_{index}', 
                                    x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='Contribution of k_T term to MPSP [fraction as decimal]')
             
-            save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=resMPSPfrac, 
+            save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=resMPSPfrac[0], 
                                    output_path='source_data.xlsx', sheet_name=f'Supp_Fig_8_{index}', 
                                    x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='Fractional residual MPSP [fraction relative to simulated value]')
         
-            save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=recoveries_for_eval, 
+            save_xyz_grid_to_excel(x_values=yields_for_plot, y_values=titers_for_plot, z_values=recoveries_for_eval[0], 
                                    output_path='source_data.xlsx', sheet_name=f'Supp_Fig_3B_{index}', 
                                    x_title='Yield [g-fp/g-sugars]', y_title='Titer [g-fp/L]', z_title='Recovery [kg-p/kg-fp]')
             

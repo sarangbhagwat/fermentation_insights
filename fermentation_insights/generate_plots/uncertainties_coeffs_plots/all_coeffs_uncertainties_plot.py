@@ -54,7 +54,7 @@ for p,f in list(itertools.product(product_IDs, feedstock_IDs)):
 
 #%% Save baselines and percentiles
 coefficients = ['a', 'b', 'c', 'd', 'g'] # note 'g' is the same as 'r' (recoveries)
-coefficients_eq_11 = ['k_Y', 'k_0', 'k_V', 'k_T', 'g'] # note 'g' is the same as 'r' (recoveries)
+coefficients_eq_11 = ['k_Y', 'k_0', 'k_V', 'k_T', 'r'] # note 'g' is the same as 'r' (recoveries)
 
 all_coeff_uncs = {cf_eq_11: {} for cf_eq_11 in coefficients_eq_11} 
 
@@ -99,7 +99,7 @@ for cf, cf_eq_11 in zip(coefficients, coefficients_eq_11):
         if_sheet_exists="overlay", # or "new", "replace"
     ) as writer:
         
-        if cf==cf_eq_11=='g':
+        if cf=='g' and cf_eq_11=='r':
             sheet_name = 'Supp_Fig_3A'
         else:
             sheet_name = f'Fig_3{cf.upper()}'

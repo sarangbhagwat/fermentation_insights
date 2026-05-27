@@ -13,6 +13,9 @@ import scipy
 from matplotlib import pyplot as plt
 import pandas as pd
 
+from openpyxl import load_workbook
+from pathlib import Path
+
 #%%
 def loop_evaluate_across_param(
                           load_functions,
@@ -532,4 +535,18 @@ def save_xyz_grid_to_excel(x_values, y_values, z_values, output_path, sheet_name
         # Write z axis title to cell A1
         worksheet = writer.sheets[sheet_name]
         worksheet["A1"] = z_title
-        
+
+
+#%%
+def sort_excel_sheets_alphabetically(input_path, output_path=None):
+    input_path = Path(input_path)
+
+    if output_path is None:
+        output_path = input_path.with_stem(input_path.stem + "_sorted")
+
+    wb = load_workbook(input_path)
+
+    wb._sheets.sort(key=lambda ws: ws.title.casefold())
+
+    wb.save(output_path)
+    return output_path
