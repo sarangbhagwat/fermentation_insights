@@ -25,6 +25,12 @@ and add the 'biosteam' folder to your PYTHONPATH.
 pip install -r requirements.txt
 ```
 
+Documentation & Tutorials
+-------------------------
+- [BioSTEAM & BioIndustrial-Park](https://biosteam.readthedocs.io/en/latest/)
+- [GitHub](https://docs.github.com/en)
+- [Python](https://docs.python.org/3/)
+
 ## References
 <a id="1">[1]</a> 
     Bhagwat, S. S.; Rao, C.V.; Zhao, H.; Singh, V.; Guest, J. S. A Unifying Equation for Fermentation Sustainability across the Titer-Rate-Yield Landscape. Pre-print available online:  [https://doi.org/10.26434/chemrxiv-2025-rd5lg](https://doi.org/10.26434/chemrxiv-2025-rd5lg).
