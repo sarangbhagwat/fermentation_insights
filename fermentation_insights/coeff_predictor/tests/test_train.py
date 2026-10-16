@@ -8,9 +8,10 @@ import pytest
 import torch
 
 from fermentation_insights.coeff_predictor import train as T
-from fermentation_insights.coeff_predictor.model import ModelConfig, mpsp_equation_np
+from fermentation_insights.coeff_predictor.model import ModelConfig, mpsp_equation_np, make_layout
 from fermentation_insights.coeff_predictor.predict import CoefficientPredictor
-from fermentation_insights.coeff_predictor.features import MissingSpecError, ApplicabilityWarning
+from fermentation_insights.coeff_predictor.features import (MissingSpecError, ApplicabilityWarning,
+                                                            PRICE_COLUMNS, REGIME_FIELDS)
 from fermentation_insights.coeff_predictor.tests.conftest import FAST
 
 
@@ -137,7 +138,17 @@ def test_splitters_do_not_leak(tables):
 def test_conformal_quantile():
     s = np.arange(1, 101, dtype=float)
     assert T._conf_q(s, 0.1) == 91.
-    assert T._conf_q(np.array([1., 2.]), 0.1) == 2.
+    # too few scores for the level: the valid quantile is +inf (not the max)
+    with pytest.warns(UserWarning, match='too few'):
+        assert T._conf_q(np.array([1., 2.]), 0.1) == np.inf
+    with pytest.warns(UserWarning):
+        assert T._conf_q(np.arange(1., 6.), 0.1) == np.inf      # n=5: k=6 > 5
+    assert T._conf_q(np.arange(1., 10.), 0.1) == 9.             # n=9: k=9
+    # +inf scores are kept (not covered), only NaN is dropped
+    q, n, lev = T._conf_info(np.r_[np.arange(1., 19.), np.inf, np.inf, np.nan], 0.1)
+    assert n == 20 and q == np.inf          # rank 19 of 20 hits an inf score
+    q, n, lev = T._conf_info(np.r_[np.arange(1., 20.), np.inf], 0.1)   # n=20, k=19
+    assert n == 20 and q == 19. and np.isclose(lev, 19 / 21)
     assert np.isnan(T._conf_q(np.array([]), 0.1))
 
 
@@ -149,3 +160,132 @@ def test_plain_and_ablation_training_runs(tables):
         ens = T.train_ensemble(samples, points, 1, mcfg, lcfg, tc, calib_frac=0.1, seed=1)
         batch, outs = ens.predict_samples(samples.iloc[:4])
         assert outs['coef'].shape == (1, 4, 4) and np.isfinite(outs['coef']).all()
+
+
+def test_inner_split_grouping_and_fallbacks(tables):
+    samples, _, _ = tables
+    two = samples[samples['feedstock'].isin(['glucose', 'corn'])].reset_index(drop=True)
+    fit, val, used = T.inner_split(two, np.arange(len(two)), 0.15, 0, 'feedstock', return_group=True)
+    assert used == 'feedstock' and len(val) and not set(two.feedstock.iloc[fit]) & set(two.feedstock.iloc[val])
+    one = samples[samples['feedstock'] == 'glucose'].reset_index(drop=True)
+    with pytest.warns(UserWarning, match="grouped by 'config_id'"):
+        fit, val, used = T.inner_split(one, np.arange(len(one)), 0.15, 0, 'feedstock', return_group=True)
+    assert used == 'config_id' and not set(one.config_id.iloc[fit]) & set(one.config_id.iloc[val])
+    cfg1 = one[one.config_id == one.config_id.iloc[0]].reset_index(drop=True)
+    with pytest.warns(UserWarning, match='random sample-level'):
+        _, _, used = T.inner_split(cfg1, np.arange(len(cfg1)), 0.2, 0, 'feedstock', return_group=True)
+    assert used == 'sample'
+    assert T.SCHEME_GROUP['feedstock'] == 'feedstock' and T.SCHEME_GROUP['product'] == 'fermentation_product'
+
+
+def test_collocation_prices_nonnegative_and_in_box(fitted):
+    samples, points, spec, batch = fitted['samples'], fitted['points'], fitted['spec'], fitted['batch']
+    tb = T.make_tensors(spec, samples, points, make_layout(ModelConfig(), samples.columns), batch)
+    tb['prices'][::2, 2] = 0.   # rows without a natural-gas price
+    info = T._spec_info(spec, tb, torch.float32)
+    gen = torch.Generator().manual_seed(0)
+    for f0, f1 in ((1., 1.), (0.5, 1.5)):
+        cb = T._collocation(tb, torch.arange(len(samples)), None, info,
+                            T.LossConfig(colloc_price_range=(f0, f1)), gen)
+        P = cb['prices'].numpy()
+        lo, hi = info['price_range'][2]
+        pos = P[:, 2][P[:, 2] > 0]
+        assert (P >= 0).all() and (P[:, 2] == 0).any() and lo > 0
+        assert (pos >= lo * f0 * (1 - 1e-6)).all() and (pos <= hi * f1 * (1 + 1e-6)).all()
+
+
+def test_conformal_meta_and_price_explicit_ad(ensemble, tables):
+    samples, _, _ = tables
+    conf, meta = ensemble.conformal, ensemble.meta
+    assert meta['calib_group_used'] == 'config_id' and meta['n_calib_groups'] >= 2
+    assert 0 < meta['n_fit'] <= meta['n_train'] and set(meta['val_group_used']) == {'config_id'}
+    for k in ('a', 'g', 'mpsp'):
+        assert conf[f'{k}_n'] > 0 and 0 < conf[f'{k}_level'] <= 1
+    assert conf['mpsp_n'] == conf['n']          # one MPSP score per calibration sample
+    assert conf['calibration_grouping'] == 'config_id' and not conf['coverage_guaranteed']
+    st = ensemble.spec.price_stats
+    assert all(v['std'] >= 0.05 * abs(v['mean']) - 1e-15 for v in st.values())
+    P = CoefficientPredictor(ensemble)
+    rec = dict(samples.iloc[3].to_dict(), **ensemble.spec.price_fill)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        p0 = P.predict(rec)
+        p1 = P.predict(dict(rec, natural_gas_price=10 * rec['natural_gas_price']))
+    assert np.isclose(p1['ad_ratio'].iloc[0], p0['ad_ratio'].iloc[0])   # prices not in the AD distance
+    assert p1['price_outside_range'].iloc[0] == 'natural_gas_price' and p0['price_outside_range'].iloc[0] == ''
+
+
+def test_invalid_inputs_and_per_row_reporting(ensemble, tables):
+    samples, _, _ = tables
+    P = CoefficientPredictor(ensemble)
+    rec = samples.iloc[3].to_dict()
+    for bad in (dict(r=0.), dict(r=-1.), dict(fs_w_fermentable_sugar_eq=0.),
+                dict(final_product_stoich_mass_ratio=0.)):
+        with pytest.raises(MissingSpecError, match='invalid'):
+            P.predict(dict(rec, **bad))
+    b = ensemble.spec.transform(pd.DataFrame([rec, dict(rec, r=0.)]), strict=False)
+    assert list(b.invalid) == [False, True]
+    part = {k: v for k, v in rec.items() if k not in ('electricity_price', 'p_electricity_price')}
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        out = P.predict([rec, part])
+    assert 'electricity_price' not in out['imputed'].iloc[0] and 'electricity_price' in out['imputed'].iloc[1]
+    with pytest.warns(UserWarning, match='electricity_price'):
+        P.mpsp(part, y=0.5 * rec['inflection_yield'], t=50.)
+    with pytest.raises(ValueError):
+        P.mpsp(rec, y=[0., 0.3], t=50., warn=False)
+    ty = rec['theoretical_yield']
+    with pytest.warns(ApplicabilityWarning, match='theoretical'):
+        m = P.mpsp(rec, y=[0.5 * ty, 1.5 * ty], t=50.)
+    assert np.isfinite(m['MPSP'].iloc[0]) and np.isnan(m['MPSP'].iloc[1])
+    # every feedstock-price alias is checked (a NaN column must not shadow another)
+    base = {k: v for k, v in rec.items() if k not in ('feedstock_price', 'p_feedstock_price', 'fs_price')}
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        assert len(P.predict([dict(base, p_feedstock_price=0.2), dict(base, fs_price=0.2)])) == 2
+    spec = dict(feedstock='corn stover', fermentation_product='LA', final_product='LA', r=0.8,
+                feedstock_price=0.08)
+    with pytest.raises(MissingSpecError, match="did you mean 'cornstover'"):
+        P.predict(spec)
+    assert 'r' in P.field_units and 'wet' in P.field_units['feedstock_price']
+
+
+def test_predict_by_name_fills_regime_and_contextual(ensemble, tables):
+    samples, _, _ = tables
+    P = CoefficientPredictor(ensemble)
+    by_name = dict(feedstock='corn', fermentation_product='HP', final_product='AcrylicAcid', r=0.5,
+                   feedstock_price=0.2, electricity_price=0.07, natural_gas_price=0.25)
+    hp = samples[samples.fermentation_product == 'HP'].iloc[0]
+    explicit = dict(by_name, **{c: hp[c] for c in REGIME_FIELDS})
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        o1, o2 = P.predict(by_name), P.predict(explicit)
+    assert {'aerobic', 'neutralizing_agent', 'fermentation_mode'} <= set(o1['filled_from_registry'].iloc[0].split(', '))
+    np.testing.assert_allclose(o1[list('abcdg')].to_numpy(), o2[list('abcdg')].to_numpy(), rtol=1e-6)
+    assert 'p_IRR' in o1['contextual_defaults'].iloc[0] and 'feedstock_capacity' in o1['contextual_defaults'].iloc[0]
+    # applicable parameter omitted -> product baseline (indicator 0); not applicable -> indicator 1
+    df, det = P._frame([by_name, dict(by_name, fermentation_product='EtOH', final_product='EtOH')], details=True)
+    b = P.spec.transform(df, strict=False)
+    j = P.spec.columns.index('missing__p_boiler_efficiency')
+    assert b.X[0, j] == 0. and b.X[1, j] == 1.
+    # unknown product: omitted categoricals -> unknown level, reported
+    new = dict(feedstock='corn', fermentation_product='Mystery', final_product='Mystery', r=0.5,
+               feedstock_price=0.2, theoretical_yield=0.6, inflection_yield=0.5,
+               final_product_stoich_mass_ratio=1.0)
+    with pytest.warns(UserWarning, match='not in the registry'):
+        o = P.predict(new)
+    assert {'fermentation_mode', 'separation_principle'} <= set(o['imputed'].iloc[0].split(', '))
+    assert 'p_IRR' in o['contextual_defaults'].iloc[0]
+
+
+def test_no_channels_breakdown_sums_to_totals(tables):
+    samples, points, _ = tables
+    ens = T.train_ensemble(samples, points, 1, ModelConfig(width=16, depth=1, channels=False),
+                           T.LossConfig(w_ch=0.), T.TrainConfig(**{**FAST, 'epochs': 5}), seed=2)
+    assert ens.channel_names()[-1] == 'rest'
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        p = CoefficientPredictor(ens).predict(samples.iloc[2].to_dict())
+    for k in 'abcd':
+        ch = [c for c in p if c.startswith('ch__') and c.endswith(f'__{k}')]
+        assert len(ch) == 4 and np.isclose(sum(p[c].iloc[0] for c in ch), p[k].iloc[0], rtol=1e-6)

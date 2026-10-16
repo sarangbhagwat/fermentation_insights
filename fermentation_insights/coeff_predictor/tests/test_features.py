@@ -129,3 +129,12 @@ def test_applicability_domain(fitted):
     assert r_out[0] > 1 and len(o_out[0]) > 0
     ad2 = ApplicabilityDomain.from_dict(json.loads(json.dumps(ad.to_dict())), ad.Z)
     assert np.allclose(ad2.score(far)[0], r_out)
+
+
+def test_nonsugar_solids_not_computed_as_dry(fitted):
+    spec, samples = fitted['spec'], fitted['samples']
+    rec = samples.iloc[0].to_dict()
+    rec.pop('fs_w_water')
+    b = spec.transform([rec])
+    assert 'fs_w_water' in b.imputed and 'phys_fs_nonsugar_solids' in b.imputed
+    assert b.imputed_rows == [b.imputed] and not b.invalid.any()

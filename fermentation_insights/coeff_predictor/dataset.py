@@ -22,14 +22,30 @@ Raw reading
   complete when its ``sample_end`` is seen. If a sample_id is complete in
   several files (e.g. a ``_smoke`` file and a production file with the same
   seed), non-smoke files win, then the most recently modified file;
-* the last ``config`` record of each (biorefinery, config_id) is used;
+* each sample uses the ``config`` record of its chosen attempt's own file;
+  otherwise the record ranked like attempts (non-smoke first, then the most
+  recently modified file). Keys whose records differ between files are
+  counted (``stats['config_conflicts']``); samples whose chosen attempt comes
+  from a smoke file while a production file has a config record for the
+  same configuration are dropped (``smoke_superseded``);
 * columns absent in some adapters simply become NaN; see
   :func:`physics.opex_channels` for how missing cost columns are imputed
   (0 -> they fall into the remainder channels; recorded in
-  ``diag_imputed``).
+  ``diag_imputed``);
+* ``fs_*`` fields of a ``sample_start`` record (feedstock described after
+  applying the sample's parameters) override the config's baseline
+  description.
 
 Feasible points: ``status == 'ok'``, finite positive y, t, MPSP, recovery,
-and ``y <= inflection_yield`` (fitted domain of the publication).
+and ``y <= inflection_yield`` (fitted domain of the publication) with the
+sample's OWN inflection yield (min of the adapter's ``x_inflection_yield``
+over its points, else the config value; points flagged
+``x_above_inflection`` are dropped too); the samples table stores this
+sample-level ``inflection_yield`` (config value in
+``inflection_yield_config``). ``g`` is the median recovery over all ok
+points of the sample (before inflection clipping), as in the publication.
+The natural-gas pool (``physics.detect_ng_pool``) is decided once per
+configuration (majority of the per-sample votes, ``diag_ng_pool_vote``).
 
 Targets (per retained sample; see :mod:`physics`)
 -------------------------------------------------
@@ -38,11 +54,12 @@ Targets (per retained sample; see :mod:`physics`)
 (USD/kg), ``n_points``, ``ch__<channel>__<k>``, ``int__<fs|el|ng>__<k>``,
 ``phi`` [1/yr per USD of FCI, or of installed cost if FCI is unavailable --
 see ``diag_capital_basis``], ``F_fixed`` [USD/yr], ``closure_rel``, ``sum_check``,
-``channels_ok`` (bool: phi identified without fallback and closure below the
-threshold -- use it to mask channel losses), ``diag_*`` diagnostics.
+``channels_ok`` (bool: phi identified without fallback, closure below the
+threshold, natural-gas pool admissible and fixed costs >= 0 -- use it to mask
+channel losses), ``diag_*`` diagnostics.
 
 Quality filters (rejection reason in ``report['rejections']``), in order:
-``incomplete``, ``param_error``, ``too_few_points`` (< min_points ok
+``smoke_superseded``, ``incomplete``, ``param_error``, ``too_few_points`` (< min_points ok
 points), ``too_few_yields`` / ``too_few_titers`` (< 3 distinct values),
 ``missing_columns`` (no F_final_product / operating_hours -> no
 decomposition), ``nonfinite_targets``, ``bad_g`` (g <= 0 or > 1.05 x
@@ -105,6 +122,7 @@ class QualityFilters:
     max_g_over_stoich: float = 1.05
     require_complete: bool = True
     clip_to_inflection: bool = True
+    drop_superseded_smoke: bool = True
 
 
 # %% Raw reading
@@ -136,17 +154,39 @@ def _find_files(raw_dirs):
     return sorted(set(files))
 
 
+#: config-record fields ignored when checking two records of a key for conflicts
+_CONFIG_VOLATILE = ('load_seconds', 'versions', '_file', 'record', 'timestamp', 'time', 'seconds')
+
+
+def _config_signature(rec):
+    return json.dumps({k: v for k, v in rec.items() if k not in _CONFIG_VOLATILE},
+                      sort_keys=True, default=str)
+
+
+def _sid_key(sid):
+    """(biorefinery, config_id) from a sample id ``bio|config|s<seed>|idx``."""
+    parts = str(sid).rsplit('|', 2)[0].split('|', 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else (parts[0], None)
+
+
 def read_raw(raw_dirs, require_complete=True):
     """Read raw JSONL files.
 
     Returns ``(configs, starts, points, stats)``: DataFrame of config records
-    (last per biorefinery/config_id), DataFrame of chosen sample attempts
-    (sample_start fields + sample_end fields + ``_file``, ``_complete``),
-    DataFrame of their point records, and a stats dict."""
+    (one per biorefinery/config_id, ranked like sample attempts: non-smoke
+    files first, then the most recently modified, then the later file),
+    DataFrame of chosen sample attempts (sample_start fields + sample_end
+    fields + ``_file``, ``_complete``, ``_config`` = the config record of the
+    attempt's own file if it has one, ``_smoke_superseded`` = the attempt is
+    from a smoke file although a production file has a config record for its
+    configuration), DataFrame of their point records, and a stats dict
+    (``config_conflicts``: keys whose config records differ between files)."""
     stats = Counter()
     files = _find_files(raw_dirs)
     stats['files'] = len(files)
-    configs = {}
+    configs = {}       # key -> (rank, record)
+    file_configs = {}  # (file, key) -> record
+    conflicts = set()
     attempts = {}   # sid -> list of attempt dicts
     for fi, path in enumerate(files):
         mtime = os.path.getmtime(path)
@@ -156,7 +196,14 @@ def read_raw(raw_dirs, require_complete=True):
             kind = rec.get('record')
             if kind == 'config':
                 key = (rec.get('biorefinery'), rec.get('config_id'))
-                configs[key] = dict(rec, _file=path)
+                rec = dict(rec, _file=path)
+                file_configs[(path, key)] = rec
+                rank = (not smoke, mtime, fi)
+                old = configs.get(key)
+                if old is not None and _config_signature(old[1]) != _config_signature(rec):
+                    conflicts.add(key)
+                if old is None or rank >= old[0]:
+                    configs[key] = (rank, rec)
             elif kind == 'sample_start':
                 sid = rec.get('sample_id')
                 if sid is None:
@@ -186,6 +233,7 @@ def read_raw(raw_dirs, require_complete=True):
                     att['_complete'] = True
             else:
                 stats['unknown_records'] += 1
+    prod_keys = {k for k, (rank, _) in configs.items() if rank[0]}
     rows, pts = [], []
     for sid, atts in attempts.items():
         complete = [a for a in atts if a['_complete']]
@@ -198,20 +246,27 @@ def read_raw(raw_dirs, require_complete=True):
         start = {k: v for k, v in chosen['start'].items() if k != 'record'}
         end = chosen['end'] or {}
         row = dict(start)
+        key = _sid_key(sid)
         row.update({'n_ok_reported': end.get('n_ok'), 'param_error': end.get('param_error') or '',
                     'sample_seconds': end.get('seconds'), '_file': chosen['_file'],
-                    '_complete': chosen['_complete']})
+                    '_complete': chosen['_complete'],
+                    '_config': file_configs.get((chosen['_file'], key)),
+                    '_smoke_superseded': bool(not chosen['_rank'][0] and key in prod_keys)})
         rows.append(row)
         pts.extend(chosen['points'])
     starts = pd.DataFrame(rows)
     points = pd.DataFrame(pts)
     if len(points):
         points = points.drop(columns=['record'], errors='ignore')
-    cfg = pd.DataFrame([v for v in configs.values()]).drop(columns=['record'], errors='ignore')
+    cfg = pd.DataFrame([rec for _, rec in configs.values()]).drop(columns=['record'], errors='ignore')
     stats['config_records'] = len(cfg)
     stats['samples_seen'] = len(starts)
     stats['points_seen'] = len(points)
-    return cfg, starts, points, dict(stats)
+    stats['config_conflicts'] = len(conflicts)
+    stats = dict(stats)
+    if conflicts:
+        stats['config_conflict_keys'] = sorted(f'{b}|{c}' for b, c in conflicts)
+    return cfg, starts, points, stats
 
 
 # %% Building
@@ -281,15 +336,32 @@ def _feasible(P, inflection, clip):
         v = _num(P[c]) if c in P.columns else pd.Series(np.nan, index=P.index)
         m &= np.isfinite(v) & (v > 0)
     n_beyond = 0
-    if clip and inflection is not None and np.isfinite(inflection):
-        beyond = m & (_num(P['y']) > inflection * (1 + 1e-6))
+    if clip:
+        beyond = pd.Series(False, index=P.index)
+        if inflection is not None and np.isfinite(inflection):
+            beyond |= _num(P['y']) > inflection * (1 + 1e-6)
+        if 'x_above_inflection' in P.columns:   # flagged by the adapter itself
+            beyond |= P['x_above_inflection'].map(lambda v: v is True or str(v).lower() in ('true', '1', '1.0'))
+        beyond &= m
         n_beyond = int(beyond.sum())
         m &= ~beyond
     return m.to_numpy(), n_beyond
 
 
-def _decompose(P, phi_prior, ng_pool, capital_basis='auto'):
-    return physics.decompose_sample(P, phi_prior=phi_prior, ng_pool=ng_pool,
+def _sample_inflection(P, config_value):
+    """The sample's own inflection yield: min of the adapter-recorded
+    ``x_inflection_yield`` (depends on the sampled byproduct/cell-mass
+    yields) over its points, else the config (baseline) value."""
+    if 'x_inflection_yield' in P.columns:
+        v = _num(P['x_inflection_yield']).to_numpy(float)
+        v = v[np.isfinite(v) & (v > 0)]
+        if len(v):
+            return float(v.min())
+    return config_value
+
+
+def _decompose(P, phi_prior, ng_pool, capital_basis='auto', g=None):
+    return physics.decompose_sample(P, g=g, phi_prior=phi_prior, ng_pool=ng_pool,
                                     capital_basis=capital_basis)
 
 
@@ -318,10 +390,14 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
             continue
         bio = P['biorefinery'].iloc[0] if 'biorefinery' in P.columns else str(sid).split('|')[0]
         cid = P['config_id'].iloc[0] if 'config_id' in P.columns else None
-        crow = cfg_by_key.get((bio, cid))
+        # config record of the attempt's own file, else the ranked global one
+        crow = srow.get('_config') if isinstance(srow.get('_config'), dict) else cfg_by_key.get((bio, cid))
         if crow is None:
             stats['samples_without_config'] = stats.get('samples_without_config', 0) + 1
             crow = {'biorefinery': bio, 'config_id': cid}
+        if f.drop_superseded_smoke and srow.get('_smoke_superseded', False):
+            rejections['smoke_superseded'] += 1
+            continue
         if f.require_complete and not srow.get('_complete', False):
             rejections['incomplete'] += 1
             continue
@@ -330,8 +406,12 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
             continue
         infl = crow.get('inflection_yield')
         infl = float(infl) if infl is not None and pd.notna(infl) else None
+        infl = _sample_inflection(P, infl)
         mask, nb = _feasible(P, infl, f.clip_to_inflection)
         n_beyond_total += nb
+        # recovery g as in the publication: median over all ok points
+        # (before clipping to the fitted domain)
+        g_all = physics.median_recovery(_num(P.loc[_feasible(P, None, False)[0], 'recovery']))
         Pf = P.loc[mask].copy()
         if len(Pf) < f.min_points:
             rejections['too_few_points'] += 1
@@ -348,36 +428,59 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
         if need:
             rejections['missing_columns'] += 1
             continue
-        candidates.append((sid, srow, Pf, crow, bio, cid))
+        candidates.append((sid, srow, Pf, crow, bio, cid, infl, g_all))
 
     # pass 1: decompose without prior
     dec = {}
-    for sid, srow, Pf, crow, bio, cid in candidates:
+    pool_of = {}
+    for sid, srow, Pf, crow, bio, cid, infl, g_all in candidates:
+        pool_of[sid] = ng_pool
         try:
-            dec[sid] = _decompose(Pf, None, ng_pool, capital_basis)
+            dec[sid] = _decompose(Pf, None, ng_pool, capital_basis, g_all)
         except Exception as e:  # pragma: no cover - defensive
             dec[sid] = e
+    # natural-gas pool: one decision per configuration (majority of the
+    # per-sample votes; ties -> 'utility'), so that the materials_other /
+    # utilities_other targets do not jump between samples of one config
+    if ng_pool == 'auto':
+        votes = defaultdict(Counter)
+        for sid, srow, Pf, crow, bio, cid, infl, g_all in candidates:
+            d = dec[sid]
+            if isinstance(d, physics.SampleDecomposition) and d.diagnostics['ng_pool'] in ('material', 'utility'):
+                votes[(bio, cid)][d.diagnostics['ng_pool']] += 1
+        for sid, srow, Pf, crow, bio, cid, infl, g_all in candidates:
+            d = dec[sid]
+            if not isinstance(d, physics.SampleDecomposition):
+                continue
+            vote = d.diagnostics['ng_pool']
+            if vote in ('material', 'utility'):
+                c = votes[(bio, cid)]
+                pool_of[sid] = 'material' if c['material'] > c['utility'] else 'utility'
+                if pool_of[sid] != vote:
+                    dec[sid] = _decompose(Pf, None, pool_of[sid], capital_basis, g_all)
+            dec[sid].diagnostics['ng_pool_vote'] = vote
     # phi priors from identified samples
     phis = defaultdict(list)
-    for sid, srow, Pf, crow, bio, cid in candidates:
+    for sid, srow, Pf, crow, bio, cid, infl, g_all in candidates:
         d = dec[sid]
         if isinstance(d, physics.SampleDecomposition) and d.diagnostics.get('phi_flag') == 'ok' \
                 and d.closure_rel <= f.max_closure_rel:
             phis[('c', bio, cid)].append(d.phi)
             phis[('b', bio)].append(d.phi)
             phis[('all',)].append(d.phi)
-    for sid, srow, Pf, crow, bio, cid in candidates:
+    for sid, srow, Pf, crow, bio, cid, infl, g_all in candidates:
         d = dec[sid]
         if isinstance(d, physics.SampleDecomposition) and d.diagnostics.get('phi_flag') != 'ok':
             for key in (('c', bio, cid), ('b', bio), ('all',)):
                 if phis.get(key):
-                    d2 = _decompose(Pf, float(np.median(phis[key])), ng_pool, capital_basis)
+                    d2 = _decompose(Pf, float(np.median(phis[key])), pool_of[sid], capital_basis, g_all)
                     d2.diagnostics['phi_prior_level'] = key[0]
+                    d2.diagnostics['ng_pool_vote'] = d.diagnostics.get('ng_pool_vote', d2.diagnostics['ng_pool'])
                     dec[sid] = d2
                     break
 
     rows, prow_frames = [], []
-    for sid, srow, Pf, crow, bio, cid in candidates:
+    for sid, srow, Pf, crow, bio, cid, infl, g_all in candidates:
         d = dec[sid]
         if not isinstance(d, physics.SampleDecomposition):
             rejections['decomposition_error'] += 1
@@ -405,8 +508,16 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
                'seed': seed, 'sample_index': idx, 'source_file': os.path.basename(srow['_file'])}
         for c in SPEC_COLUMNS:
             out[c] = crow.get(c, np.nan)
+        # the sample's own inflection yield (fitted domain), config value kept
+        out['inflection_yield_config'] = out['inflection_yield']
+        out['inflection_yield'] = infl if infl is not None else np.nan
         for k, v in crow.items():
             if k.startswith(_DESC_PREFIXES):
+                out[k] = v
+        # feedstock described after applying the sample's parameters (when the
+        # harness records it in sample_start) overrides the baseline description
+        for k, v in srow.items():
+            if k.startswith('fs_') and v is not None and not (isinstance(v, float) and not np.isfinite(v)):
                 out[k] = v
         Pall = groups[sid]
         stc = Counter(Pall['status'].fillna('ok')) if 'status' in Pall.columns else Counter()
@@ -419,7 +530,9 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
                 out[k] = v
         out.update(row)
         out['channels_ok'] = bool(d.diagnostics.get('phi_flag') == 'ok'
-                                  and d.closure_rel <= f.max_closure_rel)
+                                  and d.closure_rel <= f.max_closure_rel
+                                  and d.diagnostics.get('ng_pool_admissible', True)
+                                  and not d.diagnostics.get('F_negative', False))
         rows.append(out)
         keep = [c for c in _POINT_KEEP if c in Pf.columns]
         pp = Pf[keep].reset_index(drop=True)
@@ -457,6 +570,8 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
             max_sum_check=float(samples['sum_check'].max()),
             phi_flags=dict(Counter(samples['diag_phi_flag'])),
             ng_pools=dict(Counter(samples['diag_ng_pool'])),
+            ng_pool_inadmissible=int((~samples['diag_ng_pool_admissible'].astype(bool)).sum()),
+            F_negative=int(samples['diag_F_negative'].astype(bool).sum()),
             capital_bases=dict(Counter(samples['diag_capital_basis'])),
             channels_ok=int(samples['channels_ok'].sum()),
             median_phi=float(samples['phi'].median()),
@@ -483,7 +598,8 @@ def summary(data: ProcessedData) -> str:
     st = rep.get('stats', {})
     L.append(f"files={st.get('files', 0)} bad_lines={st.get('bad_lines', 0)} "
              f"samples_seen={st.get('samples_seen', 0)} points_seen={st.get('points_seen', 0)} "
-             f"duplicates={st.get('duplicate_samples', 0)} restarted={st.get('restarted_attempts', 0)}")
+             f"duplicates={st.get('duplicate_samples', 0)} restarted={st.get('restarted_attempts', 0)} "
+             f"config_conflicts={st.get('config_conflicts', 0)}")
     L.append(f"candidates={rep.get('n_candidates', 0)} retained={rep.get('n_retained', 0)} "
              f"rejections={rep.get('rejections', {})} "
              f"points_beyond_inflection_dropped={rep.get('points_beyond_inflection_dropped', 0)}")

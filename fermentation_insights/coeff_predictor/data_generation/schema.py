@@ -40,7 +40,19 @@ AREA_QUANTITIES = (
     'electricity_consumption', # MW
     'electricity_production',  # MW
     'utility_cost',            # USD/h (heat + power utilities)
+    'installed_cost_osbl',     # USD, part of installed_cost from TEA OSBL units
 )
+
+#: Additional per-point columns written by harness v2 (generic, adapter-independent):
+#: natural gas split by BioSTEAM cost pool -- 'utility' (stream utility priced
+#: by ``bst.stream_prices``, part of TEA utility_cost) and 'material' (priced
+#: feed stream, part of TEA material_cost):
+#:   ng_flow_utility, ng_cost_utility, ng_flow_material, ng_cost_material
+#:   (kg/h, USD/h);
+#: labor_cost, labor_burden (TEA attributes, USD/yr and fraction, if present);
+#: fs_* feedstock descriptors of the feedstock stream at that point (sample-
+#: specific composition, e.g. when carbohydrate content is sampled).
+HARNESS_VERSION = 2
 
 #: Specification / design-decision columns (constant within a sample).
 SPEC_COLUMNS = (

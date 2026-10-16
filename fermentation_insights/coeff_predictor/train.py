@@ -32,9 +32,10 @@ the (source) sample:
 * ``nonneg_fs``, ``nonneg_ng`` feedstock / natural-gas intensities >= 0
 
 Collocation inputs copy training samples with log-uniform productivity over
-a range ``colloc_r_factor`` wider than the data, log-uniform prices over a
-widened training range and Gaussian noise on continuous features; only the
-physics residuals are evaluated there.
+a range ``colloc_r_factor`` wider than the data, log-uniform prices within
+the training price box (``colloc_price_range``; a source price of exactly 0
+is kept, prices are never negative) and Gaussian noise on continuous
+features; only the physics residuals are evaluated there.
 
 Run ``python -m fermentation_insights.coeff_predictor.train --processed DIR
 --out CKPT`` to train and save an ensemble.
@@ -44,6 +45,7 @@ import json
 import math
 import os
 import time
+import warnings
 from dataclasses import dataclass, field, asdict
 
 import numpy as np
@@ -59,7 +61,7 @@ __all__ = (
     'pad_points', 'compute_loss', 'physics_residuals', 'mpsp_dlogr', 'train_model', 'train_ensemble',
     'calibrate_conformal', 'check_constraints', 'apply_constraint_report',
     'split_random', 'split_group', 'split_productivity', 'make_splits', 'inner_split',
-    'SCHEMES', 'load_tables', 'setup_torch',
+    'ensemble_splits', 'SCHEMES', 'SCHEME_GROUP', 'load_tables', 'setup_torch',
 )
 
 RESIDUALS = ('mono_y', 'mono_t', 'positive', 'mono_r', 'nonneg_fs', 'nonneg_ng')
@@ -90,7 +92,13 @@ class LossConfig:
     collocation: bool = True
     colloc_ratio: float = 1.0
     colloc_r_factor: float = 3.0
-    colloc_price_range: tuple = (0.5, 1.5)
+    # prices of collocation rows are drawn log-uniformly in [f0*min, f1*max]
+    # of the training (positive) prices. The default keeps them inside the
+    # training box: the price-dependent residuals (mono_y, mono_t, positive,
+    # mono_r) are validated on the data only there (check_constraints), and
+    # exact linearity in price can turn a valid constraint into a violated one
+    # outside it. Widen only together with a matching validation.
+    colloc_price_range: tuple = (1.0, 1.0)
     colloc_noise: float = 0.1
 
     def active(self):
@@ -401,12 +409,13 @@ def _collocation(tb, idx, model, spec_info, lcfg, gen):
     P = b['prices'].clone()
     f0, f1 = lcfg.colloc_price_range
     for j, (pmin, pmax) in enumerate(spec_info['price_range']):
-        if pmin > 0 and pmax > 0:
+        # pmin = smallest strictly positive training price (zeros are imputed
+        # 'no such cost' values: such source rows keep their 0)
+        if np.isfinite(pmin) and pmin > 0 and pmax > 0:
             l0, l1 = math.log(pmin * f0), math.log(pmax * f1)
-            P[:, j] = torch.exp(l0 + (l1 - l0) * torch.rand(n, generator=gen, dtype=dt))
-        else:
-            span = pmax - pmin
-            P[:, j] = (pmin - (1 - f0) * span) + (span * (1 + (f1 - f0))) * torch.rand(n, generator=gen, dtype=dt)
+            draw = torch.exp(l0 + (l1 - l0) * torch.rand(n, generator=gen, dtype=dt))
+            P[:, j] = torch.where(P[:, j] > 0, draw, P[:, j])
+        P[:, j] = torch.clamp_min(P[:, j], 0.)
     b['prices'] = P
     if lcfg.colloc_noise > 0:
         cm = spec_info['cont_mask']
@@ -460,9 +469,14 @@ def compute_loss(model, tb, idx, lcfg, spec_info=None, gen=None, train=True, cat
 def _spec_info(spec, tb, dtype):
     P = tb['prices'].double().numpy()
     lr = tb['log_r'].double().numpy()
-    pr = [(float(P[:, j].min()), float(P[:, j].max())) for j in range(P.shape[1])]
+    pr, zf = [], []
+    for j in range(P.shape[1]):
+        pos = P[:, j][P[:, j] > 0]
+        pr.append((float(pos.min()) if len(pos) else float('nan'), float(P[:, j].max())))
+        zf.append(float(np.mean(P[:, j] == 0)) if len(P) else 0.)
     return dict(log_r_min=float(np.nanmin(lr)), log_r_max=float(np.nanmax(lr)),
-                price_range=pr, cont_mask=torch.as_tensor(spec.continuous_mask(), dtype=dtype),
+                price_range=pr, price_zero_frac=zf,
+                cont_mask=torch.as_tensor(spec.continuous_mask(), dtype=dtype),
                 blocks=spec.categorical_blocks())
 
 
@@ -638,8 +652,8 @@ SCHEMES = {
     'productivity': lambda s, k, seed: split_productivity(s),
 }
 #: grouping column used for inner validation splits of each scheme
-SCHEME_GROUP = {'random': None, 'config': 'config_id', 'feedstock': 'config_id',
-                'product': 'config_id', 'productivity': None}
+SCHEME_GROUP = {'random': None, 'config': 'config_id', 'feedstock': 'feedstock',
+                'product': 'fermentation_product', 'productivity': 'config_id'}
 
 
 def make_splits(samples, scheme, n_splits=5, seed=0):
@@ -649,24 +663,58 @@ def make_splits(samples, scheme, n_splits=5, seed=0):
     return SCHEMES[scheme](samples, n_splits, seed)
 
 
-def inner_split(samples, idx, frac=0.15, seed=0, group_col=None):
-    """Split positional indices ``idx`` into (fit, val), grouped by
-    ``group_col`` when given and when there are >= 4 groups."""
+def inner_split(samples, idx, frac=0.15, seed=0, group_col=None, return_group=False,
+                fallback=('config_id',)):
+    """Split positional indices ``idx`` into (fit, val), holding out whole
+    groups of ``group_col`` whenever there are >= 2 groups (at least one
+    group held out and one kept). With fewer than 2 groups it falls back to
+    the columns in ``fallback``, then to a random sample-level split (each
+    fallback issues a warning: held-out samples then share groups with the
+    fitted ones). With ``return_group`` the grouping actually used (column
+    name, 'sample' or 'none') is returned as a third value."""
     idx = np.asarray(idx)
     rng = np.random.RandomState(seed)
     if frac <= 0 or len(idx) < 4:
-        return idx, idx[:0]
-    if group_col is not None and group_col in samples:
-        g = samples[group_col].astype(str).to_numpy()[idx]
+        return (idx, idx[:0], 'none') if return_group else (idx, idx[:0])
+    cols = [] if group_col is None else [group_col] + [c for c in fallback if c != group_col]
+    for c in cols:
+        if c not in samples:
+            continue
+        g = samples[c].astype(str).to_numpy()[idx]
         u = np.array(sorted(set(g)))
-        if len(u) >= 4:
-            k = max(1, int(round(frac * len(u))))
+        if len(u) >= 2:
+            k = min(max(1, int(round(frac * len(u)))), len(u) - 1)
             vg = rng.choice(u, k, replace=False)
             m = np.isin(g, vg)
-            return idx[~m], idx[m]
+            if c != group_col:
+                warnings.warn(f'inner split: fewer than 2 {group_col!r} groups; grouped by {c!r} instead',
+                              UserWarning, stacklevel=2)
+            return (idx[~m], idx[m], c) if return_group else (idx[~m], idx[m])
+    if group_col is not None:
+        warnings.warn(f'inner split: fewer than 2 groups of {group_col!r} (or fallbacks {list(fallback)}); '
+                      'using a random sample-level split (held-out samples share groups with the fitted ones)',
+                      UserWarning, stacklevel=2)
     perm = rng.permutation(len(idx))
     k = max(1, int(round(frac * len(idx))))
-    return np.sort(idx[perm[k:]]), np.sort(idx[perm[:k]])
+    fit, val = np.sort(idx[perm[k:]]), np.sort(idx[perm[:k]])
+    return (fit, val, 'sample') if return_group else (fit, val)
+
+
+def ensemble_splits(samples, n_members=1, calib_frac=0.15, val_frac=0.15, group_col='config_id', seed=0):
+    """The splits :func:`train_ensemble` uses (positional indices into
+    ``samples``): ``dict(fit, calib, calib_group, members=[(tr, va, group)])``
+    with ``tr``/``va`` indices into ``samples.iloc[fit]``. Baselines can be
+    fit on exactly the samples the network members train on."""
+    samples = samples.reset_index(drop=True)
+    fit_idx, cal_idx, cg = inner_split(samples, np.arange(len(samples)), calib_frac, seed + 1000,
+                                       group_col, return_group=True)
+    s_fit = samples.iloc[fit_idx].reset_index(drop=True)
+    members = []
+    for mi in range(n_members):
+        tr, va, vg = inner_split(s_fit, np.arange(len(s_fit)), val_frac, seed + 7919 * mi, group_col,
+                                 return_group=True)
+        members.append((tr, va, vg))
+    return dict(fit=fit_idx, calib=cal_idx, calib_group=cg, members=members)
 
 
 # %% Constraint checks on data
@@ -858,8 +906,9 @@ class Ensemble:
 
     def member_outputs(self, batch):
         """Stacked numpy outputs over members: ``coef`` (M, n, 4), ``g`` (M, n),
-        ``channels`` (M, n, C_all, 4) incl. price channels first, and
-        ``intensities`` (M, n, J, 4)."""
+        ``channels`` (M, n, C_all, 4) incl. price channels first (and the
+        'rest' head last when channels are not resolved; names in
+        :meth:`channel_names`), and ``intensities`` (M, n, J, 4)."""
         inp = self._inputs(batch)
         res = {}
         with torch.no_grad():
@@ -871,6 +920,8 @@ class Ensemble:
                     chans.append(o['price_channels'])
                 if 'channels' in o:
                     chans.append(o['channels'])
+                if 'rest' in o:
+                    chans.append(o['rest'][:, None, :])
                 d = {'coef': o['coef'], 'g': o['g']}
                 if chans:
                     d['channels'] = torch.cat(chans, 1)
@@ -945,15 +996,18 @@ def _jsonable(o):
 
 
 def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None, calib_frac=0.15,
-                   group_col=None, check=True, bootstrap=False, alpha=0.1, seed=0, log=None,
+                   group_col='config_id', check=True, bootstrap=False, alpha=0.1, seed=0, log=None,
                    spec_kwargs=None, check_kwargs=None):
     """Train a deep ensemble.
 
     * the FeatureSpec and target scales are fit on the training rows only;
-    * ``calib_frac`` of the samples (grouped by ``group_col``) are held out
-      of training for split-conformal calibration;
-    * each member uses its own inner validation split (``tcfg.val_frac``) for
-      early stopping and its own seed (optionally a bootstrap resample);
+    * ``calib_frac`` of the samples (whole groups of ``group_col``, default
+      configurations; see :func:`inner_split` for the fallbacks) are held out
+      of training for split-conformal calibration; the grouping actually used
+      is stored in ``ens.meta`` and ``ens.conformal``;
+    * each member uses its own inner validation split (``tcfg.val_frac``,
+      same grouping) for early stopping and its own seed (optionally a
+      bootstrap resample) -- see :func:`ensemble_splits`;
     * with ``check``, physics residuals / hard bounds that the training
       targets violate in > 1 % of cases are disabled (see
       :func:`check_constraints`; ``check_kwargs`` sets its ``threshold``/``tol``).
@@ -963,8 +1017,8 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
     tcfg = copy.deepcopy(tcfg or TrainConfig())
     setup_torch(tcfg.threads)
     samples = samples.reset_index(drop=True)
-    all_idx = np.arange(len(samples))
-    fit_idx, cal_idx = inner_split(samples, all_idx, calib_frac, seed + 1000, group_col)
+    sp = ensemble_splits(samples, n_members, calib_frac, tcfg.val_frac, group_col, seed)
+    fit_idx, cal_idx = sp['fit'], sp['calib']
     s_fit = samples.iloc[fit_idx].reset_index(drop=True)
     report = None
     if check:
@@ -980,7 +1034,7 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
     members, hists = [], []
     for mi in range(n_members):
         ms = seed + 7919 * mi
-        tr, va = inner_split(s_fit, np.arange(len(s_fit)), tcfg.val_frac, ms, group_col)
+        tr, va, _ = sp['members'][mi]
         if bootstrap:
             tr = np.random.RandomState(ms).choice(tr, len(tr), replace=True)
         m, h = train_model(spec, s_fit, points, mcfg, lcfg, tcfg, layout=layout, scales=scales,
@@ -988,56 +1042,108 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
                            val_tensors=_index(tb_fit, torch.as_tensor(va)) if len(va) else None)
         members.append(m)
         hists.append(h)
-    ad = ApplicabilityDomain().fit(spec.full_matrix(batch), spec.full_columns())
+    ad = ApplicabilityDomain().fit(spec.ad_matrix(batch), spec.ad_columns())
+    ngroups = lambda d: int(d['config_id'].astype(str).nunique()) if 'config_id' in d else int(len(d))
+    s_cal = samples.iloc[cal_idx].reset_index(drop=True)
+    gcol = sp['calib_group'] if sp['calib_group'] in samples else None
+    n_fit_rows = sorted({int(i) for tr, _, _ in sp['members'] for i in tr})
     ens = Ensemble(members, spec, layout, scales, mcfg, lcfg, tcfg, constraint_report=report, ad=ad,
                    meta=dict(n_train=int(len(s_fit)), n_calib=int(len(cal_idx)),
-                             epochs=[len(h) for h in hists], seed=seed, group_col=group_col))
+                             n_fit=int(len(n_fit_rows)), n_fit_configs=ngroups(s_fit.iloc[n_fit_rows]),
+                             n_calib_groups=int(s_cal[gcol].astype(str).nunique()) if gcol else int(len(s_cal)),
+                             epochs=[len(h) for h in hists], seed=seed, group_col=group_col,
+                             calib_group_used=sp['calib_group'],
+                             val_group_used=[m[2] for m in sp['members']]))
     ens.histories = hists
     if len(cal_idx):
-        calibrate_conformal(ens, samples.iloc[cal_idx].reset_index(drop=True), points, alpha)
+        calibrate_conformal(ens, s_cal, points, alpha, group_col=gcol)
     return ens
 
 
 # %% Conformal calibration
 
-def _conf_q(scores, alpha):
-    """Split-conformal quantile: the ceil((n+1)(1-alpha))-th smallest score
-    (the largest score if that rank exceeds n)."""
-    s = np.sort(scores[np.isfinite(scores)])
+def _conf_q(scores, alpha, warn=True):
+    """Split-conformal quantile: the ceil((n+1)(1-alpha))-th smallest score.
+    Only NaN scores are dropped (+inf, e.g. a zero predicted MPSP, counts as
+    not covered). If that rank exceeds n the valid quantile is +inf (no
+    finite interval has the nominal coverage; a warning is issued)."""
+    return _conf_info(scores, alpha, warn)[0]
+
+
+def _conf_info(scores, alpha, warn=True):
+    """``(q, n, level)``: conformal quantile, number of scores and the
+    guaranteed coverage ``k/(n+1)`` (1 when ``q`` is infinite)."""
+    s = np.asarray(scores, float)
+    s = np.sort(s[~np.isnan(s)])
     n = len(s)
     if n == 0:
-        return float('nan')
+        return float('nan'), 0, float('nan')
     k = int(math.ceil((n + 1) * (1 - alpha)))
-    return float(s[min(k, n) - 1])
+    if k > n:
+        if warn:
+            warnings.warn(f'conformal calibration: {n} scores are too few for level {1 - alpha:g} '
+                          f'(needs >= {int(math.ceil((1 - alpha) / alpha))}); the interval is unbounded',
+                          UserWarning, stacklevel=3)
+        return float('inf'), n, 1.
+    return float(s[k - 1]), n, float(k / (n + 1))
 
 
-def calibrate_conformal(ens, samples, points, alpha=0.1):
+#: minimum number of calibration groups for which the reported coverage is
+#: treated as meaningful for new configurations
+MIN_CALIB_GROUPS = 10
+
+
+def calibrate_conformal(ens, samples, points, alpha=0.1, group_col=None):
     """Split-conformal scaling of ensemble spreads on held-out samples:
     score = |target - mean| / (std + eps) with eps = 0.1 * training target
     std (so a single member still gets valid, constant-width intervals);
-    MPSP uses relative errors with eps = 1 %. Stores quantiles in
-    ``ens.conformal``."""
+    MPSP uses relative errors with eps = 1 %, reduced to ONE score per sample
+    (max over its points -> simultaneous coverage of the sample's surface;
+    the exchangeable units are samples, not points). Rows with invalid
+    physical inputs are excluded explicitly. Stores quantiles in
+    ``ens.conformal`` with, per key, the number of scores ``<key>_n`` and the
+    guaranteed level ``<key>_level``, plus the calibration grouping and
+    ``coverage_guaranteed`` (finite-sample valid AND calibrated on >=
+    MIN_CALIB_GROUPS held-out groups)."""
     batch, outs = ens.predict_samples(samples, strict=False)
+    ok = ~batch.invalid if batch.invalid is not None else np.ones(len(samples), bool)
     coef, g = outs['coef'], outs['g']
     sc = ens.scales
-    conf = {'alpha': float(alpha), 'n': int(len(samples))}
+    n_groups = int(samples[group_col].astype(str).nunique()) if group_col and group_col in samples else len(samples)
+    conf = {'alpha': float(alpha), 'n': int(len(samples)), 'n_invalid': int((~ok).sum()),
+            'calibration_grouping': group_col or 'sample (within-config)', 'n_calib_groups': n_groups}
+    need = int(math.ceil((1 - alpha) / alpha))
+    if ok.sum() < need:
+        warnings.warn(f'conformal calibration on {int(ok.sum())} samples (< {need}): intervals are unbounded',
+                      UserWarning, stacklevel=2)
+
+    def put(key, scores):
+        q, n, lev = _conf_info(np.where(ok, scores, np.nan), alpha, warn=False)
+        conf[key], conf[f'{key}_n'], conf[f'{key}_level'] = q, n, lev
+
     tgt = np.column_stack([pd.to_numeric(samples[k], errors='coerce').to_numpy(float) for k in COEFF_KEYS])
     for k, key in enumerate(COEFF_KEYS):
         mu, sd = coef[:, :, k].mean(0), coef[:, :, k].std(0)
         eps = 0.1 * sc['coef_std'][k]
-        conf[key] = _conf_q(np.abs(tgt[:, k] - mu) / (sd + eps), alpha)
+        put(key, np.abs(tgt[:, k] - mu) / (sd + eps))
         conf[f'{key}_eps'] = eps
     gt = pd.to_numeric(samples['g'], errors='coerce').to_numpy(float)
     mu, sd = g.mean(0), g.std(0)
     conf['g_eps'] = 0.1 * sc['g_std']
-    conf['g'] = _conf_q(np.abs(gt - mu) / (sd + conf['g_eps']), alpha)
+    put('g', np.abs(gt - mu) / (sd + conf['g_eps']))
     Y, T, M, _, mask = pad_points(samples, points)
     mm = ens.mpsp_members(outs, Y, T)
     mu, sd = mm.mean(0), mm.std(0)
     with np.errstate(divide='ignore', invalid='ignore'):
         s = np.abs(M / mu - 1.) / (sd / np.abs(mu) + 0.01)
-    conf['mpsp'] = _conf_q(s[mask], alpha)
+    s = np.where(np.isnan(s), np.inf, s)          # mu = 0 -> not covered
+    s_sample = np.where(mask.any(1), np.where(mask, s, -np.inf).max(1), np.nan)
+    put('mpsp', s_sample)
     conf['mpsp_eps_rel'] = 0.01
+    conf['n_eff'] = int(conf['mpsp_n'])
+    conf['finite_sample_valid'] = bool(all(np.isfinite(conf[k]) for k in (*COEFF_KEYS, 'g', 'mpsp')))
+    conf['coverage_guaranteed'] = bool(conf['finite_sample_valid'] and group_col is not None
+                                       and n_groups >= MIN_CALIB_GROUPS)
     ens.conformal = conf
     return conf
 

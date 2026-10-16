@@ -63,7 +63,7 @@ __all__ = (
     'ApplicabilityWarning', 'resolve_chemical_descriptors', 'derive_features',
     'build_spec_registry', 'apply_spec_registry', 'register_chemical',
     'describe_new_chemical', 'psat_water', 'PRICE_COLUMNS', 'PRICE_KEYS',
-    'REQUIRED_FIELDS',
+    'PRICE_ALIASES', 'REQUIRED_FIELDS', 'FIELD_UNITS', 'REGIME_FIELDS',
 )
 
 try:
@@ -95,11 +95,32 @@ EXCLUDED_ALWAYS = ('p_feedstock_price', 'p_electricity_price', 'p_natural_gas_pr
                    'fs_price', 'fs_F_mass', 'p_feedstock_capacity')
 
 W_SUGAR = 'fs_w_fermentable_sugar_eq'
+#: upper bound of the glucose-eq. sugar fraction (pure glucan: 180.16/162.14)
+W_SUGAR_MAX = 1.12
 G_MAX = 'final_product_stoich_mass_ratio'
 
 #: Fields that cannot be imputed (prediction raises MissingSpecError).
 REQUIRED_FIELDS = ('r', 'theoretical_yield', 'inflection_yield', G_MAX, W_SUGAR,
                    'feedstock_price')
+
+#: Units / basis of user-facing input fields (see predict.py).
+FIELD_UNITS = {
+    'r': 'g/L/h (fermentation productivity, > 0)',
+    'feedstock_price': 'USD/kg wet (as-received) feedstock',
+    'electricity_price': 'USD/kWh',
+    'natural_gas_price': 'USD/kg natural gas',
+    'fs_w_*': 'kg/kg wet feedstock (mass fractions, wet basis)',
+    W_SUGAR: 'kg glucose-eq. fermentable sugar / kg wet feedstock, in (0, 1.12] '
+             '(> 1 only for anhydro sugars, e.g. pure starch 1.11)',
+    G_MAX: 'kg final product / kg fermentation product (stoichiometric, > 0)',
+    'theoretical_yield': 'g fermentation product / g glucose-eq. sugar',
+    'inflection_yield': 'g fermentation product / g glucose-eq. sugar',
+    'T_fermentation': 'K',
+    'p_feedstock_capacity': 'kg/h wet feedstock',
+    'y': 'g fermentation product / g glucose-eq. sugar',
+    't': 'g/L',
+    'MPSP': 'USD/kg final product',
+}
 
 SPEC_NUMERIC = ('n_acid_groups', 'pKa1', G_MAX, 'T_fermentation',
                 'theoretical_yield', 'inflection_yield')
@@ -296,16 +317,39 @@ def derive_features(df):
     cap = _col(df, 'p_feedstock_capacity')
     cap = cap.where(cap.notna(), _col(df, 'fs_F_mass'))
     out['phys_log10_capacity'] = _log10_pos(cap)
-    out['phys_fs_nonsugar_solids'] = (1. - _col(df, W_SUGAR) - _col(df, 'fs_w_water').fillna(0.)).to_numpy()
+    # NaN when the water fraction is unknown (then imputed and reported, not
+    # silently computed as if the feedstock were dry)
+    out['phys_fs_nonsugar_solids'] = (1. - _col(df, W_SUGAR) - _col(df, 'fs_w_water')).to_numpy()
     return pd.DataFrame(out, index=df.index)
 
 
 # %% Spec-level registry (fill omitted fields by name)
 
-_FS_REG_COLS = ('feedstock_type',)
+_FS_REG_COLS = ('feedstock_type', 'p_feedstock_capacity', 'fs_F_mass')
 _FP_REG_COLS = ('ferm_product_chemical', 'theoretical_yield', 'inflection_yield',
                 'n_acid_groups', 'pKa1', 'product_water_solubility')
 _PAIR_REG_COLS = ('final_product_chemical', G_MAX, 'upgrading')
+#: fermentation-regime fields, stored per 'fp|pp' and filled only where they
+#: are unique for that pair in training
+REGIME_FIELDS = ('neutralization', 'neutralizing_agent', 'aerobic', 'fermentation_mode',
+                 'T_fermentation', 'separation_principle')
+
+
+def _baseline_rows(grp):
+    if 'sample_kind' in grp:
+        b = grp[grp['sample_kind'].astype(str) == 'baseline']
+        if len(b):
+            return b
+    return grp
+
+
+def _regime_values(grp, c):
+    """Normalized regime values of a column (categoricals as in transform)."""
+    if c in SPEC_CATEGORICAL:
+        return _cat(grp[c])
+    if c in SPEC_BOOLEAN:
+        return _to_float(grp[c]).dropna().map(bool)
+    return _to_float(grp[c]).dropna().round(6)
 
 
 def _mode_or_median(s):
@@ -321,19 +365,51 @@ def _mode_or_median(s):
 
 def build_spec_registry(samples):
     """Per-name defaults learned from training samples so that users can
-    specify known feedstocks/products by name: {'feedstock': {name: {...}},
-    'fermentation_product': {...}, 'pair': {'fp|pp': {...}}}."""
-    reg = {'feedstock': {}, 'fermentation_product': {}, 'pair': {}}
+    specify known feedstocks/products by name: {'feedstock': {name: {...}}
+    (composition, type, baseline capacity), 'fermentation_product': {...},
+    'pair': {'fp|pp': {...}} (incl. the baseline median of every contextual
+    ``p_*`` parameter; None = never applicable for that pair in training),
+    'regime': {'fp|pp': {'fields': {unique regime values}, 'varying': [...],
+    'n_regimes': k}}, 'domain': {'fp|pp' | '__all__': {'t_min', 't_max'}}}."""
+    reg = {'feedstock': {}, 'fermentation_product': {}, 'pair': {}, 'regime': {}, 'domain': {}}
     if 'feedstock' in samples:
         cols = [c for c in samples if c.startswith('fs_w_')] + list(_FS_REG_COLS)
         for name, grp in samples.groupby('feedstock'):
-            reg['feedstock'][str(name)] = {c: _mode_or_median(grp[c]) for c in cols if c in grp}
+            base = _baseline_rows(grp)
+            reg['feedstock'][str(name)] = {c: _mode_or_median((base if c in ('p_feedstock_capacity', 'fs_F_mass')
+                                                               else grp)[c]) for c in cols if c in grp}
     if 'fermentation_product' in samples:
         for name, grp in samples.groupby('fermentation_product'):
             reg['fermentation_product'][str(name)] = {c: _mode_or_median(grp[c]) for c in _FP_REG_COLS if c in grp}
+    params = [c for c in samples if c.startswith('p_') and c not in EXCLUDED_ALWAYS]
     if 'fermentation_product' in samples and 'final_product' in samples:
         for (a, b), grp in samples.groupby(['fermentation_product', 'final_product']):
-            reg['pair'][f'{a}|{b}'] = {c: _mode_or_median(grp[c]) for c in _PAIR_REG_COLS if c in grp}
+            key = f'{a}|{b}'
+            e = {c: _mode_or_median(grp[c]) for c in _PAIR_REG_COLS if c in grp}
+            base = _baseline_rows(grp)
+            e.update({c: _mode_or_median(_to_float(base[c])) for c in params})
+            reg['pair'][key] = e
+            fields, varying = {}, []
+            for c in REGIME_FIELDS:
+                if c not in grp:
+                    continue
+                v = _regime_values(grp, c)
+                u = pd.unique(v)
+                if len(u) == 1:
+                    fields[c] = u[0].item() if hasattr(u[0], 'item') else u[0]
+                elif len(u) > 1:
+                    varying.append(c)
+            cols = [c for c in REGIME_FIELDS if c in grp]
+            n_reg = int(len(pd.DataFrame({c: _cat(grp[c]) for c in cols}).drop_duplicates())) if cols else 0
+            reg['regime'][key] = {'fields': fields, 'varying': varying, 'n_regimes': n_reg}
+            if 't_min' in grp and 't_max' in grp:
+                tmn, tmx = _to_float(grp['t_min']), _to_float(grp['t_max'])
+                if tmn.notna().any() and tmx.notna().any():
+                    reg['domain'][key] = {'t_min': float(tmn.min()), 't_max': float(tmx.max())}
+    if 't_min' in samples and 't_max' in samples and len(samples):
+        tmn, tmx = _to_float(samples['t_min']), _to_float(samples['t_max'])
+        if tmn.notna().any() and tmx.notna().any():
+            reg['domain']['__all__'] = {'t_min': float(tmn.min()), 't_max': float(tmx.max())}
     return reg
 
 
@@ -341,23 +417,51 @@ def _missing(v):
     return v is None or (isinstance(v, float) and not math.isfinite(v)) or (isinstance(v, str) and v == '')
 
 
-def apply_spec_registry(spec, reg):
+def _omitted(v):
+    """None / NaN (not given) -- unlike '' or 'none', which are explicit."""
+    return v is None or (isinstance(v, float) and not math.isfinite(v))
+
+
+def apply_spec_registry(spec, reg, info=None):
     """Return a copy of the dict ``spec`` with omitted fields filled from the
-    spec registry (user values always take precedence)."""
+    spec registry (user values always take precedence) and the list of
+    filled fields. Regime fields are filled only where unique for the
+    product pair in training. If a dict ``info`` is given, it receives
+    ``unknown`` ([(kind, name)] not in the registry) and ``ambiguous``
+    (omitted regime fields that vary for the pair in training)."""
     spec = dict(spec)
     filled = []
     entries = []
-    if spec.get('feedstock') is not None:
-        entries.append(reg.get('feedstock', {}).get(str(spec['feedstock']), {}))
-    if spec.get('fermentation_product') is not None:
-        entries.append(reg.get('fermentation_product', {}).get(str(spec['fermentation_product']), {}))
-        if spec.get('final_product') is not None:
-            entries.append(reg.get('pair', {}).get(f"{spec['fermentation_product']}|{spec['final_product']}", {}))
+    unknown, ambiguous = [], []
+
+    def lookup(kind, name):
+        e = reg.get(kind, {}).get(str(name))
+        if e is None and reg.get(kind):
+            unknown.append((kind, str(name)))
+        return e
+
+    if not _missing(spec.get('feedstock')):
+        entries.append(lookup('feedstock', spec['feedstock']) or {})
+    if not _missing(spec.get('fermentation_product')):
+        entries.append(lookup('fermentation_product', spec['fermentation_product']) or {})
+        if not _missing(spec.get('final_product')):
+            key = f"{spec['fermentation_product']}|{spec['final_product']}"
+            entries.append(lookup('pair', key) or {})
+            r = reg.get('regime', {}).get(key)
+            if r:
+                for k, v in r.get('fields', {}).items():
+                    if _omitted(spec.get(k)) and not _omitted(v):
+                        spec[k] = v
+                        filled.append(k)
+                ambiguous = [c for c in r.get('varying', []) if _omitted(spec.get(c))]
     for e in entries:
         for k, v in e.items():
             if _missing(spec.get(k)) and not _missing(v):
                 spec[k] = v
                 filled.append(k)
+    if info is not None:
+        info['unknown'] = unknown
+        info['ambiguous'] = ambiguous
     return spec, filled
 
 
@@ -394,17 +498,21 @@ class FeatureBatch:
     w_sugar: np.ndarray
     g_max: np.ndarray
     index: object = None
-    imputed: list = field(default_factory=list)
+    imputed: list = field(default_factory=list)       # union over rows
+    imputed_rows: list = None                         # per row: list of names
+    invalid: np.ndarray = None                        # per row: invalid physical input
 
     def __len__(self):
         return len(self.log_r)
 
     def subset(self, idx):
         idx = np.asarray(idx)
+        rows = None if self.imputed_rows is None else [self.imputed_rows[i] for i in np.arange(len(self))[idx]]
         return FeatureBatch(self.X[idx], self.log_r[idx], self.prices[idx],
                             self.w_sugar[idx], self.g_max[idx],
                             None if self.index is None else np.asarray(self.index)[idx],
-                            list(self.imputed))
+                            sorted({c for r in rows for c in r}) if rows is not None else list(self.imputed),
+                            rows, None if self.invalid is None else self.invalid[idx])
 
 
 class FeatureSpec:
@@ -554,7 +662,10 @@ class FeatureSpec:
                 float(np.median(v[fin])) if fin.any() else 0.)
             vv = np.where(fin, v, fill)
             self.price_fill[c] = fill
-            self.price_stats[c] = dict(mean=float(vv.mean()), std=float(max(vv.std(), 1e-12)),
+            # meaningful floor: a price constant in training must not turn into
+            # a near-infinite standardized dimension (full_matrix users)
+            self.price_stats[c] = dict(mean=float(vv.mean()),
+                                       std=float(max(vv.std(), 0.05 * abs(vv.mean()), 1e-6)),
                                        min=float(vv.min()), max=float(vv.max()))
         self.spec_registry = build_spec_registry(samples)
         self.fitted = True
@@ -588,23 +699,46 @@ class FeatureSpec:
         return out
 
     # ---- transform ----
-    def transform(self, data, descriptors=None, strict=True):
+    def transform(self, data, descriptors=None, strict=True, missing_categorical='none'):
         """Transform samples (DataFrame, dict or list of dicts) into a
-        :class:`FeatureBatch`. With ``strict``, missing REQUIRED_FIELDS raise
-        :class:`MissingSpecError`; otherwise they become NaN."""
+        :class:`FeatureBatch`. With ``strict``, missing REQUIRED_FIELDS or
+        physically invalid ones (``r <= 0``, ``fs_w_fermentable_sugar_eq``
+        outside (0, W_SUGAR_MAX], stoichiometric mass ratio <= 0) raise
+        :class:`MissingSpecError`; otherwise they become NaN and the rows are
+        flagged in ``batch.invalid``. ``missing_categorical='other'`` (user
+        queries) maps an omitted categorical (absent, None or NaN -- unlike an
+        explicit '' or 'none') to the ``__other__`` (unknown) level and reports
+        it as imputed; 'none' keeps the training semantics (NaN = 'none')."""
         if not self.fitted:
             raise RuntimeError('FeatureSpec is not fitted')
         df = _as_frame(data)
         df = self._prepare(df, descriptors)
         n = len(df)
-        missing_req = [c for c in REQUIRED_FIELDS
-                       if c not in df or not np.isfinite(_to_float(df[c]).to_numpy()).all()]
-        if missing_req and strict:
+        req = {c: (_to_float(df[c]).to_numpy() if c in df else np.full(n, np.nan)) for c in REQUIRED_FIELDS}
+        missing_req = [c for c in REQUIRED_FIELDS if not np.isfinite(req[c]).all()]
+        with np.errstate(invalid='ignore'):
+            bad_rng = {'r': req['r'] <= 0, W_SUGAR: (req[W_SUGAR] <= 0) | (req[W_SUGAR] > W_SUGAR_MAX),
+                       G_MAX: req[G_MAX] <= 0}
+        invalid_req = [c for c, m in bad_rng.items() if m.any()]
+        if (missing_req or invalid_req) and strict:
+            msg = []
+            if missing_req:
+                msg.append('missing required specification field(s): ' + ', '.join(missing_req))
+            if invalid_req:
+                msg.append('physically invalid field(s): ' + ', '.join(
+                    f'{c} (must be {FIELD_UNITS[c]})' for c in invalid_req))
             raise MissingSpecError(
-                'missing required specification field(s): ' + ', '.join(missing_req)
-                + '. Required: ' + ', '.join(REQUIRED_FIELDS)
+                '; '.join(msg) + '. Required: ' + ', '.join(REQUIRED_FIELDS)
                 + " (feedstock_price may also be given as 'p_feedstock_price' or 'fs_price').")
-        imputed = []
+        invalid = ~np.isfinite(np.column_stack([req[c] for c in REQUIRED_FIELDS])).all(1)
+        for m in bad_rng.values():
+            invalid |= m
+        rows = [[] for _ in range(n)]
+
+        def note(c, m):
+            for i in np.flatnonzero(m):
+                rows[i].append(c)
+
         Xn = np.empty((n, len(self.numeric)))
         miss = {}
         for j, d in enumerate(self.numeric):
@@ -616,7 +750,7 @@ class FeatureSpec:
             if not fin.all():
                 miss[c] = ~fin
                 if d['kind'] != 'param' and c not in self.indicators:
-                    imputed.append(c)  # never missing in training
+                    note(c, ~fin)  # never missing in training
             v = np.where(fin, v, d['fill'])
             Xn[:, j] = np.clip((v - d['mean']) / d['std'], -self.clip, self.clip)
         Xi = np.column_stack([miss.get(c, np.zeros(n, bool)).astype(float) for c in self.indicators]) \
@@ -625,23 +759,28 @@ class FeatureSpec:
         for c, levels in self.categoricals.items():
             s = _cat(df[c]) if c in df else pd.Series('none', index=df.index)
             idx = {lv: i for i, lv in enumerate(levels)}
-            k = s.map(lambda v: idx.get(v, len(levels) - 1)).to_numpy(int)
+            k = s.map(lambda v: idx.get(v, len(levels) - 1)).to_numpy(int).copy()
+            if missing_categorical == 'other':
+                om = (np.array([_omitted(v) for v in df[c]], bool) if c in df else np.ones(n, bool))
+                k[om] = len(levels) - 1
+                note(c, om)
             B = np.zeros((n, len(levels)))
             B[np.arange(n), k] = 1.
             blocks.append(B)
         X = np.hstack([Xn, Xi] + blocks)
-        r = _to_float(df['r']).to_numpy() if 'r' in df else np.full(n, np.nan)
+        r = req['r']
         with np.errstate(divide='ignore', invalid='ignore'):
             log_r = np.where(r > 0, np.log(np.where(r > 0, r, 1.)), np.nan)
         P = np.empty((n, len(PRICE_COLUMNS)))
         for j, c in enumerate(PRICE_COLUMNS):
             v = _col(df, c).to_numpy()
-            if not np.isfinite(v).all() and c != 'feedstock_price':
-                imputed.append(c)
+            if c != 'feedstock_price':
+                note(c, ~np.isfinite(v))
             P[:, j] = np.where(np.isfinite(v), v, self.price_fill[c])
-        w = _col(df, W_SUGAR).to_numpy()
-        gm = _col(df, G_MAX).to_numpy()
-        return FeatureBatch(X, log_r, P, w, gm, df.index.to_numpy(), sorted(set(imputed)))
+        w = np.where(bad_rng[W_SUGAR], np.nan, req[W_SUGAR])
+        gm = np.where(bad_rng[G_MAX], np.nan, req[G_MAX])
+        return FeatureBatch(X, log_r, P, w, gm, df.index.to_numpy(), sorted({c for r_ in rows for c in r_}),
+                            rows, invalid)
 
     def r_features(self, log_r):
         """Standardized (log r, 1/r) features (numpy; the model has a torch twin)."""
@@ -652,8 +791,8 @@ class FeatureSpec:
 
     def full_matrix(self, batch):
         """Encoder features + r-features + standardized prices (when not
-        already in ``X``): the design matrix for baselines and the
-        applicability-domain check."""
+        already in ``X``): the design matrix for baselines (the
+        applicability domain uses :meth:`ad_matrix`)."""
         parts = [batch.X, self.r_features(batch.log_r)]
         if self.price_explicit:
             st = [self.price_stats[c] for c in PRICE_COLUMNS]
@@ -666,6 +805,29 @@ class FeatureSpec:
         if self.price_explicit:
             cols += list(PRICE_COLUMNS)
         return cols
+
+    def ad_matrix(self, batch):
+        """Design matrix of the applicability domain: encoder features +
+        r-features. Price-explicit prices are left out (predictions are
+        exactly linear in them; see :meth:`price_outside_range`); otherwise
+        prices are already part of ``X``."""
+        return np.hstack([batch.X, self.r_features(batch.log_r)])
+
+    def ad_columns(self):
+        return self.columns + ['log_r', 'inv_r']
+
+    def price_outside_range(self, batch, tol=1e-9):
+        """Per row: names of prices outside the training range (informational:
+        the price-explicit channels extrapolate exactly linearly)."""
+        out = [[] for _ in range(len(batch))]
+        for j, c in enumerate(PRICE_COLUMNS):
+            s = self.price_stats.get(c)
+            if not s:
+                continue
+            span = tol * max(abs(s['max']), 1.)
+            for i in np.flatnonzero((batch.prices[:, j] < s['min'] - span) | (batch.prices[:, j] > s['max'] + span)):
+                out[i].append(c)
+        return out
 
     # ---- serialization ----
     def to_dict(self):
@@ -804,7 +966,7 @@ class ApplicabilityDomain:
 
 def warn_if_outside(ratio, oor, index=None):
     """Issue an ApplicabilityWarning for rows outside the domain."""
-    bad = [i for i, (r, o) in enumerate(zip(ratio, oor)) if r > 1 or o]
+    bad = [i for i, (r, o) in enumerate(zip(ratio, oor)) if not np.isfinite(r) or r > 1 or o]
     if bad:
         parts = []
         for i in bad[:5]:

@@ -34,7 +34,7 @@ from typing import Callable, Iterable, Optional
 
 import numpy as np
 
-from .schema import CANONICAL_AREAS, AREA_QUANTITIES
+from .schema import CANONICAL_AREAS, AREA_QUANTITIES, HARNESS_VERSION
 
 __all__ = (
     'InfeasibleSpecification', 'Parameter', 'BiorefineryAdapter',
@@ -291,7 +291,67 @@ def _get_chemicals(adapter):
         return None
 
 
-def collect_area_metrics(unit_groups: Iterable, area_map: dict) -> dict:
+def collect_natural_gas(system) -> dict:
+    """Natural gas flows [kg/h] and costs [USD/h] split by BioSTEAM cost pool.
+
+    BioSTEAM charges a stream registered as an inlet *utility* named like
+    'natural gas' at ``bst.stream_prices[name]`` (TEA utility cost) when the
+    stream itself has no price; otherwise its own price is a material cost.
+    Unregistered feeds that are mostly methane are material costs too.
+    """
+    import biosteam as bst
+    d = dict(ng_flow_utility=0., ng_cost_utility=0.,
+             ng_flow_material=0., ng_cost_material=0.)
+    seen = set()
+    try:
+        units = getattr(system, 'cost_units', None) or system.units
+    except Exception:
+        return {k: float('nan') for k in d}
+    prices = getattr(bst, 'stream_prices', {}) or {}
+    for u in units:
+        idx = getattr(u, '_inlet_utility_indices', {}) or {}
+        for name, i in idx.items():
+            if 'natural' not in name.lower() or 'gas' not in name.lower():
+                continue
+            try:
+                s = u.ins[i]
+            except Exception:
+                continue
+            if id(s) in seen:
+                continue
+            seen.add(id(s))
+            F = _safe(lambda: s.F_mass, 0.)
+            if _safe(lambda: s.price, 0.) == 0.:
+                d['ng_flow_utility'] += F
+                d['ng_cost_utility'] += F * float(prices.get(name, 0.))
+            else:
+                d['ng_flow_material'] += F
+                d['ng_cost_material'] += _safe(lambda: s.cost, 0.)
+    try:
+        feeds = system.feeds
+    except Exception:
+        feeds = []
+    for s in feeds:
+        if id(s) in seen:
+            continue
+        try:
+            F = s.F_mass
+            if F <= 0 or 'CH4' not in s.chemicals or s.imass['CH4'] / F < 0.5:
+                continue
+        except Exception:
+            continue
+        seen.add(id(s))
+        d['ng_flow_material'] += F
+        d['ng_cost_material'] += _safe(lambda: s.cost, 0.)
+    return d
+
+
+def collect_labor(tea) -> dict:
+    return {'labor_cost': _safe(lambda: tea.labor_cost),
+            'labor_burden': _safe(lambda: tea.labor_burden)}
+
+
+def collect_area_metrics(unit_groups: Iterable, area_map: dict, osbl_units=None) -> dict:
     """Sum UnitGroup metrics into canonical areas. Unmapped groups go to
     'facilities'. Material costs attribute each system feed to exactly one
     group (see :func:`_group_material_cost`)."""
@@ -303,6 +363,9 @@ def collect_area_metrics(unit_groups: Iterable, area_map: dict) -> dict:
             continue
         a = acc[area]
         a['installed_cost'] += _safe(g.get_installed_cost, 0.) * 1e6  # MM$ -> $
+        if osbl_units:
+            a['installed_cost_osbl'] += sum(
+                _safe(lambda: u.installed_cost, 0.) for u in g.units if u in osbl_units)
         a['material_cost'] += _safe(lambda: _group_material_cost(g, counted), 0.)  # USD/h
         a['heating_duty'] += _safe(g.get_heating_duty, 0.)  # GJ/h
         a['cooling_duty'] += _safe(g.get_cooling_duty, 0.)  # GJ/h
@@ -593,14 +656,18 @@ def _run_sample(adapter, fh, sid, config, dom, params, plan_item,
             'sample_kind': plan_item['kind'], 'config_id': config['config_id'],
             'r_mult': plan_item['r_mult']}
     t_sample = time.time()
-    _write_row(fh, {'record': 'sample_start', 'sample_id': sid, **values,
-                    'r': r, 'sample_kind': plan_item['kind']})
     param_error = ''
     try:
         for prm in params:
             prm.setter(values[prm.name])
     except Exception as e:  # parameter setting failed: record and skip
         param_error = f'{type(e).__name__}: {e}'[:300]
+    fs = getattr(adapter, 'feedstock_stream', None)
+    fs_desc = describe_feedstock(fs) if fs is not None else {}
+    _write_row(fh, {'record': 'sample_start', 'sample_id': sid, **values,
+                    'r': r, 'sample_kind': plan_item['kind'],
+                    'harness_version': HARNESS_VERSION,
+                    'param_error': param_error, **fs_desc})
     n_ok = 0
     design = try_design(dom, n_y, n_t, rng, plan_item['kind'] != 'baseline',
                         adapter.max_titer) if not param_error else []
@@ -623,7 +690,14 @@ def _run_sample(adapter, fh, sid, config, dom, params, plan_item,
                     res = adapter.collect()
                     res.update(collect_tea_metrics(adapter.tea,
                                                    getattr(adapter, 'product_stream', None)))
-                    res.update(collect_area_metrics(adapter.unit_groups, adapter.area_map))
+                    res.update(collect_area_metrics(
+                        adapter.unit_groups, adapter.area_map,
+                        set(getattr(adapter.tea, 'OSBL_units', None) or ())))
+                    res.update(collect_natural_gas(adapter.system))
+                    res.update(collect_labor(adapter.tea))
+                    fs = getattr(adapter, 'feedstock_stream', None)
+                    if fs is not None:
+                        res.update(describe_feedstock(fs))
                 mpsp = res.get('MPSP', float('nan'))
                 if mpsp is None or not np.isfinite(mpsp) or mpsp <= 0:
                     raise RuntimeError(f'invalid MPSP {mpsp}')

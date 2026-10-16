@@ -40,6 +40,7 @@ CLI::
 import copy
 import math
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -47,10 +48,11 @@ import pandas as pd
 from .features import FeatureSpec
 from .model import ModelConfig, COEFF_KEYS, mpsp_equation_np
 from .train import (LossConfig, TrainConfig, train_ensemble, make_splits, pad_points,
-                    constraint_case_values, load_tables, inner_split, SCHEMES, SCHEME_GROUP,
+                    constraint_case_values, load_tables, ensemble_splits, SCHEMES, SCHEME_GROUP,
                     setup_torch)
 
-__all__ = ('compute_metrics', 'fit_method', 'run_cv', 'summarize', 'ABLATIONS', 'METHODS', 'main')
+__all__ = ('compute_metrics', 'fit_method', 'run_cv', 'summarize', 'grouped_holdout', 'ABLATIONS',
+           'METHODS', 'main')
 
 TARGETS = COEFF_KEYS + ('g',)
 METHODS = ('pinn', 'plain', 'ridge', 'hgb', 'knn')
@@ -93,14 +95,21 @@ def _targets(samples):
     return np.column_stack([pd.to_numeric(samples[k], errors='coerce').to_numpy(float) for k in TARGETS])
 
 
+def _n_configs(df):
+    return int(df['config_id'].astype(str).nunique()) if 'config_id' in df else int(len(df))
+
+
 class _EnsembleMethod:
     def __init__(self, ens):
         self.ens = ens
+        m = ens.meta
+        self.fit_info = dict(n_fit=m.get('n_fit', m.get('n_train')), n_fit_configs=m.get('n_fit_configs'),
+                             n_calib=m.get('n_calib'), calib_group_used=m.get('calib_group_used'))
 
     def predict(self, df):
         batch, outs = self.ens.predict_samples(df, strict=False)
         return dict(coef=outs['coef'].mean(0), g=outs['g'].mean(0), members=outs,
-                    conformal=self.ens.conformal, g_max=batch.g_max,
+                    conformal=self.ens.conformal, g_max=batch.g_max, invalid=batch.invalid,
                     intensities=outs.get('intensities'), price_keys=self.ens.layout['price_keys'])
 
 
@@ -142,7 +151,7 @@ class _SklearnMethod:
             else:
                 Zs = np.column_stack([m.predict(X) for m in self.models])
         Z = Zs * self.sd + self.mu
-        return dict(coef=Z[:, :4], g=Z[:, 4], g_max=b.g_max)
+        return dict(coef=Z[:, :4], g=Z[:, 4], g_max=b.g_max, invalid=b.invalid)
 
 
 def _configs(method, mcfg_kw=None, lcfg_kw=None):
@@ -165,14 +174,25 @@ def _configs(method, mcfg_kw=None, lcfg_kw=None):
 def fit_method(method, samples, points, n_members=1, mcfg_kw=None, lcfg_kw=None, tcfg_kw=None,
                group_col=None, calib_frac=0.15, seed=0, log=None):
     """Fit ``method`` on training tables; returns an object with
-    ``predict(samples_df) -> dict(coef, g, ...)``."""
+    ``predict(samples_df) -> dict(coef, g, ...)`` and ``fit_info`` (samples /
+    configurations actually fitted). The sklearn baselines are fit on exactly
+    the samples the network members train on (same calibration and
+    early-stopping hold-outs, :func:`train.ensemble_splits`), so that methods
+    are compared at equal training data."""
     base = method.partition('-')[0]
+    tcfg = TrainConfig(**(tcfg_kw or {}))
     if base in ('ridge', 'hgb', 'knn'):
-        return _SklearnMethod(base, samples, seed)
+        samples = samples.reset_index(drop=True)
+        sp = ensemble_splits(samples, n_members, calib_frac, tcfg.val_frac, group_col, seed)
+        s_fit = samples.iloc[sp['fit']].reset_index(drop=True)
+        s_use = s_fit.iloc[sorted({int(i) for tr, _, _ in sp['members'] for i in tr})].reset_index(drop=True)
+        m = _SklearnMethod(base, s_use, seed)
+        m.fit_info = dict(n_fit=len(s_use), n_fit_configs=_n_configs(s_use), n_calib=len(sp['calib']),
+                          calib_group_used=sp['calib_group'])
+        return m
     if base not in ('pinn', 'plain'):
         raise ValueError(f'unknown method {method!r}')
     mcfg, lcfg = _configs(method, mcfg_kw, lcfg_kw)
-    tcfg = TrainConfig(**(tcfg_kw or {}))
     ens = train_ensemble(samples, points, n_members, mcfg, lcfg, tcfg, calib_frac=calib_frac,
                          group_col=group_col, seed=seed, log=log)
     return _EnsembleMethod(ens)
@@ -194,6 +214,8 @@ def compute_metrics(pred, samples, points, model=None, fd_delta=0.05, tol=1e-3):
     finite-difference ``mono_r`` check. Returns a list of
     ``(metric, target, value)``."""
     rows = []
+    if pred.get('invalid') is not None:
+        rows.append(('n_invalid', 'rows', float(np.sum(pred['invalid']))))
     Z = _targets(samples)
     P = np.column_stack([pred['coef'], pred['g']])
     for j, k in enumerate(TARGETS):
@@ -268,42 +290,70 @@ def compute_metrics(pred, samples, points, model=None, fd_delta=0.05, tol=1e-3):
 def run_cv(samples, points, scheme='random', methods=METHODS, n_splits=5, max_folds=None, n_members=1,
            mcfg_kw=None, lcfg_kw=None, tcfg_kw=None, seed=0, log=print, calib_frac=0.15):
     """Cross-validate ``methods`` under splitting ``scheme``. Feature and
-    target scaling are fit inside each training fold. Returns a tidy
-    DataFrame with columns ``scheme, fold, label, method, n_train, n_test,
-    seconds, metric, target, value``."""
+    target scaling are fit inside each training fold; inner calibration /
+    early-stopping splits are grouped like the scheme (``SCHEME_GROUP``).
+    Splits with an empty train or test set are skipped (logged). Returns a
+    tidy DataFrame with columns ``scheme, fold, label, method, n_train,
+    n_test, n_fit, n_fit_configs, n_calib, calib_group, seconds, metric,
+    target, value``
+    (``n_train`` = fold size; ``n_fit``/``n_fit_configs`` = samples /
+    configurations actually fitted; failures are ``metric='error'`` rows).
+    Pooled out-of-fold rows (fold -1) use only the folds in which every
+    method succeeded."""
     samples = samples.reset_index(drop=True)
     splits = make_splits(samples, scheme, n_splits, seed)
     if max_folds:
         splits = splits[:max_folds]
     group_col = SCHEME_GROUP.get(scheme)
     rows, oof = [], {}
+    ok_folds = {m: set() for m in methods}
     for f, (tr, te, label) in enumerate(splits):
+        if not len(tr) or not len(te):
+            if log:
+                log(f'[{scheme} fold {f} ({label})] skipped: empty {"train" if not len(tr) else "test"} set')
+            continue
         s_tr, s_te = samples.iloc[tr].reset_index(drop=True), samples.iloc[te].reset_index(drop=True)
         p_tr = points[points['sample_id'].astype(str).isin(set(s_tr['sample_id'].astype(str)))]
         p_te = points[points['sample_id'].astype(str).isin(set(s_te['sample_id'].astype(str)))]
         for meth in methods:
             t0 = time.time()
+            info = {}
             try:
                 model = fit_method(meth, s_tr, p_tr, n_members, mcfg_kw, lcfg_kw, tcfg_kw,
                                    group_col=group_col, calib_frac=calib_frac, seed=seed + f)
+                info = getattr(model, 'fit_info', {}) or {}
                 pred = model.predict(s_te)
                 mets = compute_metrics(pred, s_te, p_te, model)
-                oof.setdefault(meth, []).append((pred, s_te, p_te))
+                oof.setdefault(meth, {})[f] = (pred, s_te, p_te)
+                ok_folds[meth].add(f)
             except Exception as e:  # keep the CV going; record the failure
                 mets = [('error', type(e).__name__ + ': ' + str(e)[:200], np.nan)]
+                if log:
+                    log(f'[{scheme} fold {f} ({label})] {meth} FAILED: {type(e).__name__}: {e}')
             dt = time.time() - t0
             for metric, target, value in mets:
                 rows.append(dict(scheme=scheme, fold=f, label=label, method=meth, n_train=len(tr),
-                                 n_test=len(te), seconds=dt, metric=metric, target=target, value=value))
+                                 n_test=len(te), n_fit=info.get('n_fit', np.nan),
+                                 n_fit_configs=info.get('n_fit_configs', np.nan),
+                                 n_calib=info.get('n_calib', np.nan),
+                                 calib_group=info.get('calib_group_used'), seconds=dt, metric=metric,
+                                 target=target, value=value))
             if log:
                 mm = {(m, t): v for m, t, v in mets}
                 log(f'[{scheme} fold {f} ({label})] {meth:18s} mpsp_mape={mm.get(("mpsp_mape", "MPSP"), np.nan):.4f} '
                     f'oracle={mm.get(("oracle_mape", "MPSP"), np.nan):.4f} R2(a,b,c,d,g)='
                     + ','.join(f'{mm.get(("R2", k), np.nan):.3f}' for k in TARGETS) + f' ({dt:.0f}s)')
     # pooled out-of-fold metrics (R^2 within a single held-out group is not
-    # meaningful for leave-one-group-out schemes)
+    # meaningful for leave-one-group-out schemes), over the common folds
+    common = set.intersection(*ok_folds.values()) if ok_folds else set()
+    if any(ok_folds[m] != common for m in ok_folds):
+        warnings.warn(f'run_cv({scheme}): methods failed in different folds; pooled metrics use only the '
+                      f'{len(common)} fold(s) in which every method succeeded', UserWarning, stacklevel=2)
     if len(splits) > 1:
         for meth, parts in oof.items():
+            parts = [parts[f] for f in sorted(common)]
+            if not parts:
+                continue
             pred = {k: np.concatenate([p[0][k] for p in parts]) for k in ('coef', 'g', 'g_max')}
             s_all = pd.concat([p[1] for p in parts], ignore_index=True)
             p_all = pd.concat([p[2] for p in parts], ignore_index=True)
@@ -315,16 +365,52 @@ def run_cv(samples, points, scheme='random', methods=METHODS, n_splits=5, max_fo
     return pd.DataFrame(rows)
 
 
-def summarize(results, metrics=('mpsp_mape', 'oracle_mape', 'R2', 'MAE', 'violation_rate', 'coverage')):
+def summarize(results, metrics=('mpsp_mape', 'oracle_mape', 'R2', 'MAE', 'violation_rate', 'coverage'),
+              common_folds=True):
     """Mean over folds per (method, metric, target); R^2 and MAE are the
-    pooled out-of-fold values when available."""
-    r = results[results['metric'].isin(metrics)]
+    pooled out-of-fold values for the (scheme, method) pairs that have them.
+    With ``common_folds`` the per-fold means use only the folds in which
+    every method of the scheme succeeded (a warning lists exclusions). Adds
+    the row ``n_folds_ok`` (folds without error) per scheme and method."""
+    res = results
+    err = res[res['metric'] == 'error']
+    folds = res[res['fold'] != -1][['scheme', 'method', 'fold']].drop_duplicates()
+    failed = set(map(tuple, err[['scheme', 'method', 'fold']].to_numpy()))
+    folds = folds.assign(ok=[(s, m, f) not in failed for s, m, f in folds.to_numpy()])
+    n_ok = folds.groupby(['scheme', 'method'])['ok'].sum().astype(float)
+    r = res[res['metric'].isin(metrics)]
     pooled = r[r['fold'] == -1]
     per = r[r['fold'] != -1]
+    if common_folds and len(failed):
+        bad = {(s, f) for s, m, f in failed}
+        drop = np.array([(s, f) in bad for s, f in zip(per['scheme'], per['fold'])], bool)
+        if drop.any():
+            warnings.warn(f'summarize: excluded fold(s) {sorted(bad)} where some method failed', UserWarning,
+                          stacklevel=2)
+            per = per[~drop]
     if len(pooled):
-        per = per[~per['metric'].isin(['R2', 'MAE'])]
+        keys = set(zip(pooled['scheme'], pooled['method']))
+        has = np.array([(s, m) in keys for s, m in zip(per['scheme'], per['method'])], bool)
+        per = per[~(per['metric'].isin(['R2', 'MAE']).to_numpy() & has)]
         per = pd.concat([per, pooled[pooled['metric'].isin(['R2', 'MAE'])]])
-    return per.groupby(['scheme', 'method', 'metric', 'target'])['value'].mean().unstack('method')
+    out = per.groupby(['scheme', 'method', 'metric', 'target'])['value'].mean()
+    nk = pd.Series(n_ok.to_numpy(), index=pd.MultiIndex.from_tuples(
+        [(s, m, 'n_folds_ok', 'folds') for s, m in n_ok.index], names=out.index.names))
+    return pd.concat([out, nk]).unstack('method')
+
+
+def grouped_holdout(samples, frac, seed=12345, col='config_id'):
+    """Strict grouped final hold-out: ``round(frac * n_groups)`` whole groups
+    (at least 1, at least 1 kept). Raises ValueError with fewer than 2
+    groups (a random split would not be a hold-out of configurations)."""
+    g = samples[col].astype(str).to_numpy()
+    u = np.array(sorted(set(g)))
+    if len(u) < 2:
+        raise ValueError(f'a grouped final test set needs >= 2 distinct {col!r} values (found {len(u)})')
+    k = min(max(1, int(round(frac * len(u)))), len(u) - 1)
+    held = np.random.RandomState(seed).choice(u, k, replace=False)
+    te = np.isin(g, held)
+    return np.flatnonzero(~te), np.flatnonzero(te)
 
 
 # %% CLI
@@ -350,19 +436,25 @@ def main(argv=None):
     ap.add_argument('--w-phys', type=float, default=0.1)
     ap.add_argument('--w-ch', type=float, default=0.5)
     ap.add_argument('--holdout-frac', type=float, default=0.,
-                    help='set aside a final test set (grouped by config) before CV')
+                    help='set aside a final test set of whole configurations before CV '
+                         '(needs >= 2 configurations)')
     ap.add_argument('--report-final', action='store_true',
                     help='also train on all CV data and report once on the final test set')
     ap.add_argument('--threads', type=int, default=1)
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--out', default='cv_results.csv')
     a = ap.parse_args(argv)
+    if a.report_final and not a.holdout_frac > 0:
+        ap.error('--report-final requires --holdout-frac > 0')
     setup_torch(a.threads)
     samples, points, _ = load_tables(a.processed)
     samples = samples.reset_index(drop=True)
     final = None
     if a.holdout_frac > 0:
-        cv_idx, te_idx = inner_split(samples, np.arange(len(samples)), a.holdout_frac, 12345, 'config_id')
+        try:
+            cv_idx, te_idx = grouped_holdout(samples, a.holdout_frac, 12345, 'config_id')
+        except ValueError as e:
+            ap.error(f'--holdout-frac: {e}')
         final = samples.iloc[te_idx].reset_index(drop=True)
         samples = samples.iloc[cv_idx].reset_index(drop=True)
     methods = [m for m in a.methods.split(',') if m]
@@ -379,8 +471,12 @@ def main(argv=None):
         for meth in methods:
             model = fit_method(meth, samples, p_tr, a.members, mk, lk, tk, group_col='config_id', seed=a.seed)
             for metric, target, value in compute_metrics(model.predict(final), final, p_te, model):
+                info = getattr(model, 'fit_info', {}) or {}
                 rows.append(dict(scheme='final_test', fold=0, label='final', method=meth, n_train=len(samples),
-                                 n_test=len(final), seconds=np.nan, metric=metric, target=target, value=value))
+                                 n_test=len(final), n_fit=info.get('n_fit', np.nan),
+                                 n_fit_configs=info.get('n_fit_configs', np.nan),
+                                 n_calib=info.get('n_calib', np.nan), seconds=np.nan, metric=metric,
+                                 target=target, value=value))
         res = pd.concat([res, pd.DataFrame(rows)], ignore_index=True)
     res.to_csv(a.out, index=False)
     with pd.option_context('display.width', 200, 'display.max_columns', 20, 'display.max_rows', 200):

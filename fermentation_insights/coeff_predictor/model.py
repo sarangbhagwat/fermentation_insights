@@ -227,8 +227,9 @@ class CoefficientNet(nn.Module):
     def forward(self, X, log_r, prices, w_sugar, g_max):
         """Return a dict with ``coef`` (n, 4) totals a', b', c', d' (primed
         basis), ``g`` (n,), and, depending on the configuration,
-        ``channels`` (n, C, 4), ``intensities`` (n, J, 4) and
-        ``price_channels`` (n, J, 4) = price x intensity."""
+        ``channels`` (n, C, 4), ``intensities`` (n, J, 4),
+        ``price_channels`` (n, J, 4) = price x intensity and, without channel
+        heads, ``rest`` (n, 4) = all non-price costs."""
         h = self.encode(X, log_r)
         n = X.shape[0]
         if self.cfg.kind == 'plain':
@@ -255,7 +256,11 @@ class CoefficientNet(nn.Module):
             out['channels'] = ch
             total = total + ch.sum(1)
         else:
-            total = total + self.rest_mean + self.rest_std * self.rest_head(h)
+            # all non-price costs in one head; returned so that the reported
+            # channel breakdown still sums to the totals
+            rest = self.rest_mean + self.rest_std * self.rest_head(h)
+            out['rest'] = rest
+            total = total + rest
         zg = self.g_head(h)[:, 0]
         if self.cfg.g_bound:
             g = g_max * (1. + self.cfg.g_margin) * torch.sigmoid(self.g_logit0 + zg)
@@ -271,8 +276,10 @@ class CoefficientNet(nn.Module):
         return mpsp_equation(out['coef'][:, None, :], out['g'][:, None], y, t)
 
     def channel_names(self):
-        """Names of all channels in output order (price-explicit first)."""
-        return [INTENSITY_CHANNEL[k] for k in self.layout['price_keys']] + list(self.layout['channels'])
+        """Names of all channels in output order (price-explicit first; 'rest'
+        when the other channels are not resolved, ``channels=False``)."""
+        rest = ['rest'] if self.cfg.kind != 'plain' and not self.n_channels else []
+        return [INTENSITY_CHANNEL[k] for k in self.layout['price_keys']] + list(self.layout['channels']) + rest
 
     def describe(self):
         n = sum(p.numel() for p in self.parameters())

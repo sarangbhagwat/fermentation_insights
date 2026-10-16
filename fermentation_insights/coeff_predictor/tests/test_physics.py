@@ -185,3 +185,57 @@ def test_capital_basis_fci_vs_installed():
     cap = sum(d_fci.point_contrib[f'm__{c}'] for c in physics.CAPEX_CHANNEL_AREAS)
     h, Ff = df['operating_hours'], df['F_final_product']
     np.testing.assert_allclose(cap * Ff * h, d_fci.phi * df['FCI'], rtol=1e-10)
+
+
+def test_ng_split_pools_and_mispriced_ng():
+    # SYNA: NG is a stream utility. Record the NG cost per pool at the price
+    # actually charged while the recorded natural_gas_price is wrong (x3).
+    df, _ = _synthetic_sample('SYNA')
+    ref = physics.decompose_sample(df)
+    cost = df['natural_gas_flow'] * df['natural_gas_price']
+    bad = df.assign(natural_gas_price=3 * df['natural_gas_price'])
+    d_bad = physics.decompose_sample(bad)
+    assert not d_bad.diagnostics['ng_pool_admissible']      # legacy: flagged, not silently wrong
+    split = bad.assign(ng_cost_utility=cost, ng_cost_material=0.)
+    d = physics.decompose_sample(split)
+    assert d.diagnostics['ng_pool'] == 'split' and d.diagnostics['ng_pool_admissible']
+    for ch in ('natural_gas', 'materials_other', 'utilities_other'):
+        np.testing.assert_allclose(d.channel_coef[ch], ref.channel_coef[ch], rtol=1e-9, atol=1e-12)
+    assert d.prices['ng'] == pytest.approx(ref.prices['ng'], rel=1e-12)   # cost-weighted price
+    np.testing.assert_allclose(d.channel_coef['natural_gas'], d.prices['ng'] * d.intensity_coef['ng'],
+                               rtol=1e-9, atol=1e-14)
+
+
+def test_fixed_from_foc_is_robust_to_dcf_weights():
+    # VOC carried with a DCF weight != 1 (startup fractions): the legacy free
+    # intercept absorbs it, the FOC-based fixed channel stays at the labor cost
+    df, ad = _synthetic_sample('SYNB')
+    E, info = physics.opex_channels(df)
+    extra = 0.0067 * (E['feedstock'] + E['materials_other'] + E['utilities_other'])
+    df2 = df.assign(MPSP=df['MPSP'] + extra / (df['F_final_product'] * df['operating_hours']))
+    F_true = synthetic.fixed_cost(ad.bio, ad.values)
+    d = physics.decompose_sample(df2)
+    assert d.diagnostics['fixed_basis'] == 'FOC'
+    assert d.F_fixed == pytest.approx(F_true, rel=1e-9) and d.closure_rel > 0
+    d_old = physics.decompose_sample(df2, fixed_basis='intercept')
+    assert abs(d_old.F_fixed / F_true - 1) > 1e-3
+    assert d.sum_check < 1e-11
+
+
+def test_capex_weights_tdc_contributions():
+    # with the OSBL part of each area recorded, ISBL areas carry (1 + f) more
+    # capital per installed USD; synthetic FCI = 1.6*(I + 0.175*ISBL)
+    df, _ = _synthetic_sample('SYNB')
+    osbl = {a: (df[f'{a}__installed_cost'] if a in ('wastewater', 'chp', 'facilities') else 0. * df['y'])
+            for a in physics.AREAS}
+    df2 = df.assign(**{f'{a}__installed_cost_osbl': v for a, v in osbl.items()})
+    d = physics.decompose_sample(df2)
+    assert d.diagnostics['capex_weights'] == 'tdc'
+    assert d.diagnostics['isbl_factor'] == pytest.approx(0.175, rel=1e-6)
+    pc = d.point_contrib
+    r_isbl = pc['m__capex_fermentation'] / df['fermentation__installed_cost']
+    r_osbl = pc['m__capex_wastewater'] / df['wastewater__installed_cost']
+    np.testing.assert_allclose(r_isbl / r_osbl, 1.175, rtol=1e-6)
+    cap = sum(pc[f'm__{c}'] for c in physics.CAPEX_CHANNEL_AREAS)
+    np.testing.assert_allclose(cap * df['F_final_product'] * df['operating_hours'], d.phi * df['FCI'], rtol=1e-9)
+    assert physics.decompose_sample(df).diagnostics['capex_weights'] == 'installed'

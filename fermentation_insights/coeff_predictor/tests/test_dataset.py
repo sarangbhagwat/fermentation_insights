@@ -156,3 +156,53 @@ def test_quality_filters(raw):
 def test_empty_dir(tmp_path):
     data = dataset.build([str(tmp_path)])
     assert len(data.samples) == 0 and data.report['n_retained'] == 0
+
+
+def test_sample_level_inflection_config_ranking_and_fs(raw, tmp_path):
+    src, _ = raw
+    d = tmp_path / 'raw'
+    shutil.copytree(src, d)
+    pa = d / 'SYNA' / 'SYNA.jsonl'
+    recs = [json.loads(l) for l in open(pa)]
+    cfg0 = next(r for r in recs if r['record'] == 'config')
+    sids = [r['sample_id'] for r in recs if r['record'] == 'sample_start'
+            and r['sample_id'].split('|')[1] == cfg0['config_id']]
+    sid0, sid1 = sids[0], sids[1]
+    for r in recs:
+        if r.get('sample_id') == sid1 and r['record'] == 'point':
+            r['x_inflection_yield'] = 0.7          # the sample's own (lower) inflection
+        if r.get('sample_id') == sid1 and r['record'] == 'sample_start':
+            r['fs_w_fermentable_sugar_eq'] = 0.5   # feedstock described after sampling
+    with open(pa, 'w') as fh:
+        fh.writelines(json.dumps(r) + '\n' for r in recs)
+    # stale smoke file (sorts after the production file) with a different
+    # config record and a smoke-only sample of the same configuration
+    stale = dict(cfg0, pKa1=9.99)
+    smoke_only = sid0.rsplit('|', 1)[0] + '|999'
+    extra = [dict(r, sample_id=smoke_only) for r in recs if r.get('sample_id') == sid0]
+    with open(d / 'SYNA' / 'SYNA_smoke.jsonl', 'w') as fh:
+        fh.writelines(json.dumps(r) + '\n' for r in [stale] + extra)
+    data = dataset.build([str(d)])
+    s = data.samples.set_index('sample_id')
+    assert data.report['stats']['config_conflicts'] == 1
+    assert data.report['rejections'].get('smoke_superseded') == 1 and smoke_only not in s.index
+    assert (s.loc[s['config_id'] == cfg0['config_id'], 'pKa1'] == cfg0['pKa1']).all()
+    assert s.loc[sid1, 'inflection_yield'] == 0.7
+    assert s.loc[sid1, 'inflection_yield_config'] == cfg0['inflection_yield']
+    assert (data.points.loc[data.points['sample_id'] == sid1, 'y'] <= 0.7 + 1e-12).all()
+    assert s.loc[sid0, 'inflection_yield'] == cfg0['inflection_yield']
+    assert s.loc[sid1, 'fs_w_fermentable_sugar_eq'] == 0.5
+    assert s.loc[sid0, 'fs_w_fermentable_sugar_eq'] == cfg0['fs_w_fermentable_sugar_eq']
+    # g is the median over all ok points (before clipping), as published
+    rec1 = [r['recovery'] for r in recs if r.get('sample_id') == sid1 and r['record'] == 'point'
+            and r.get('status', 'ok') == 'ok' and r.get('recovery') is not None]
+    assert s.loc[sid1, 'g'] == pytest.approx(float(np.median(rec1)), rel=1e-12)
+
+
+def test_ng_pool_consistent_per_config(built):
+    data, _, _ = built
+    s = data.samples
+    has = s[s['diag_ng_pool'] != 'none']
+    assert (has.groupby(['biorefinery', 'config_id'])['diag_ng_pool'].nunique() == 1).all()
+    assert s['diag_ng_pool_admissible'].all() and 'diag_ng_pool_vote' in s
+    assert (s['diag_fixed_basis'] == 'FOC').all() and not s['diag_F_negative'].any()
