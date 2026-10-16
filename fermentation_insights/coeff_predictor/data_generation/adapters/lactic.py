@@ -39,9 +39,11 @@ stream (0.88), i.e. USD/kg pure lactic acid. Recovery = lactic acid in product
 
 Domain: yields 0.30 g/g (TRY scripts) to the inflection yield
 1 - X_acetic - X_cell = 0.91 g/g at the baseline byproduct conversions (above it
-``set_yield`` lowers the acetic acid conversion); titers 20-200 g/L (TRY script
-max 200 g/L; min lowered from 40-50 g/L so that SSCF still has a usable titer
-span at low yields, where the undiluted titer is only ~0.3 x 125 = 37 g/L);
+``set_yield`` lowers the acetic acid conversion); titers 40-200 g/L (TRY script
+max 200 g/L; the module's design range starts at ~40-50 g/L -- below it the
+evaporator losses collapse recovery and MPSP leaves the unifying-equation form.
+At the lowest yields SSCF's undiluted titer (~0.3 x 125 = 37 g/L) is below
+40 g/L, so those yields are infeasible and dropped by the harness);
 productivity baseline 0.89 g/L/h. ``max_titer(y)`` (98% of the attainable
 titer) is calibrated per parameter sample by simulating only the upstream
 (pretreatment + conversion) section: SSCF at each yield without dilution water;
@@ -406,7 +408,8 @@ class Adapter(BiorefineryAdapter):
         lo, hi = FEED_PRICE_RANGE
         params.append(self._wrap(Parameter(
             name='p_feedstock_price', baseline=float(fs.price),
-            inverse_cdf=lambda u: (lo + (hi - lo) * float(u)) / feedstock_factor,
+            # bind bounds at definition (lo/hi are rebound below)
+            inverse_cdf=lambda u, lo=lo, hi=hi: (lo + (hi - lo) * float(u)) / feedstock_factor,
             setter=self._set_feedstock_price,
             description=f'TEA: Feedstock unit price [USD/kg wet] = U({lo:g}, {hi:g}) $/dry-ton '
                         f'/ {feedstock_factor:.2f} (3_feedstock_carb-price.py; models.py '
@@ -415,7 +418,7 @@ class Adapter(BiorefineryAdapter):
         lo, hi = CARB_RANGE
         params.append(self._wrap(Parameter(
             name='bp_feedstock_carbohydrate_content', baseline=self._carb_baseline,
-            inverse_cdf=lambda u: lo + (hi - lo) * float(u),
+            inverse_cdf=lambda u, lo=lo, hi=hi: lo + (hi - lo) * float(u),
             setter=self._set_carbs,
             description=f'Feedstock: carbohydrate (glucan+xylan+arabinan+galactan+mannan) '
                         f'content [dry-weight fraction] = U({lo:g}, {hi:g}), balance with '

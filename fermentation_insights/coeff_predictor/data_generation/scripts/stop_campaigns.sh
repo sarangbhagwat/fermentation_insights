@@ -7,8 +7,10 @@
 set -u
 names=("$@"); [ ${#names[@]} -eq 0 ] && names=("")
 for n in "${names[@]}"; do
-    pat="scripts/run_${n}"
-    pgrep -f "$pat" | xargs -r kill 2>/dev/null
+    # outer launcher scripts and their per-worker 'bash -c' config loops (whose
+    # command line holds the loop text with '--adapter <name>')
+    pgrep -f "scripts/run_${n}" | xargs -r kill 2>/dev/null
+    pgrep -f "^bash -c.*--adapter ${n:-[A-Za-z]}" | xargs -r kill 2>/dev/null
 done
 sleep 1
 for n in "${names[@]}"; do
