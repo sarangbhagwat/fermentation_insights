@@ -477,7 +477,8 @@ class FeatureSpec:
                 cands.append((c, 'feedstock'))
         for c in df.columns:
             if c.startswith('phys_'):
-                cands.append((c, 'derived'))
+                # capacity is contextual (baseline-imputed like p_* parameters)
+                cands.append((c, 'param' if c == 'phys_log10_capacity' else 'derived'))
         params = list(CANONICAL_PARAMETERS) + sorted(
             c for c in df.columns if c.startswith('p_') and c not in CANONICAL_PARAMETERS)
         for c in params:

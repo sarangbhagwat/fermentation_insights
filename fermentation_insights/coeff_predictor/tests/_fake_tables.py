@@ -110,6 +110,7 @@ def make_fake_tables(n_samples_per_config=6, products=None, feedstocks=None, see
                         p_IRR=0.10, p_income_tax=0.21, p_operating_days=330.,
                         p_boiler_efficiency=0.8, p_feedstock_capacity=cap)
             bp0 = rng.uniform(0, 1)
+            g0, cl0 = float(np.clip(gfrac + rng.normal(0, 0.01), 0.5, 0.99)), rng.normal(0., 0.003, 4)
             for i in range(n_samples_per_config):
                 if i == 0:
                     kind, params, rm = 'baseline', dict(base), 1.
@@ -129,7 +130,10 @@ def make_fake_tables(n_samples_per_config=6, products=None, feedstocks=None, see
                     params['p_boiler_efficiency'] = np.nan  # not mapped by this adapter
                 r = r0 * rm
                 q, ch, phi = _channels(fs, prod, params, r, rng)
-                g = ratio * float(np.clip(gfrac + rng.normal(0, 0.01), 0.5, 0.99))
+                if kind == 'random':
+                    g = ratio * float(np.clip(gfrac + rng.normal(0, 0.01), 0.5, 0.99))
+                else:  # baseline/productivity series share all other draws
+                    g, ch['closure'] = ratio * g0, cl0.copy()
                 tot = sum(ch[c] for c in CHANNELS)
                 y_min, y_max = 0.1 * ty, 0.8 * ty
                 t_min, t_max = 10., min(150., 0.5 * sol + 10.)

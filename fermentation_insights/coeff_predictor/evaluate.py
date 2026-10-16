@@ -69,6 +69,26 @@ ABLATIONS = {
 
 # %% Methods
 
+class _limit_threads:
+    """Limit BLAS/OpenMP threads of sklearn (OpenMP spin-waiting is very slow
+    on the shared, oversubscribed machine)."""
+
+    def __init__(self, n=1):
+        self.n, self.ctx = n, None
+
+    def __enter__(self):
+        try:
+            from threadpoolctl import threadpool_limits
+            self.ctx = threadpool_limits(self.n)
+        except Exception:  # pragma: no cover
+            self.ctx = None
+        return self
+
+    def __exit__(self, *exc):
+        if self.ctx is not None:
+            self.ctx.restore_original_limits()
+
+
 def _targets(samples):
     return np.column_stack([pd.to_numeric(samples[k], errors='coerce').to_numpy(float) for k in TARGETS])
 
@@ -86,9 +106,6 @@ class _EnsembleMethod:
 
 class _SklearnMethod:
     def __init__(self, kind, samples, seed=0):
-        from sklearn.linear_model import RidgeCV
-        from sklearn.ensemble import HistGradientBoostingRegressor
-        from sklearn.neighbors import KNeighborsRegressor
         self.spec = FeatureSpec(price_explicit=False).fit(samples)
         X = self.spec.full_matrix(self.spec.transform(samples, strict=False))
         Z = _targets(samples)
@@ -97,6 +114,13 @@ class _SklearnMethod:
         self.mu, self.sd = Z.mean(0), Z.std(0) + 1e-12
         Zs = (Z - self.mu) / self.sd
         self.kind = kind
+        with _limit_threads(1):
+            self._fit(kind, X, Zs, seed)
+
+    def _fit(self, kind, X, Zs, seed):
+        from sklearn.linear_model import RidgeCV
+        from sklearn.ensemble import HistGradientBoostingRegressor
+        from sklearn.neighbors import KNeighborsRegressor
         if kind == 'ridge':
             self.models = [RidgeCV(alphas=np.logspace(-3, 3, 13)).fit(X, Zs)]
         elif kind == 'knn':
@@ -112,10 +136,11 @@ class _SklearnMethod:
     def predict(self, df):
         b = self.spec.transform(df, strict=False)
         X = np.nan_to_num(self.spec.full_matrix(b))
-        if len(self.models) == 1:
-            Zs = self.models[0].predict(X)
-        else:
-            Zs = np.column_stack([m.predict(X) for m in self.models])
+        with _limit_threads(1):
+            if len(self.models) == 1:
+                Zs = self.models[0].predict(X)
+            else:
+                Zs = np.column_stack([m.predict(X) for m in self.models])
         Z = Zs * self.sd + self.mu
         return dict(coef=Z[:, :4], g=Z[:, 4], g_max=b.g_max)
 
@@ -251,7 +276,7 @@ def run_cv(samples, points, scheme='random', methods=METHODS, n_splits=5, max_fo
     if max_folds:
         splits = splits[:max_folds]
     group_col = SCHEME_GROUP.get(scheme)
-    rows = []
+    rows, oof = [], {}
     for f, (tr, te, label) in enumerate(splits):
         s_tr, s_te = samples.iloc[tr].reset_index(drop=True), samples.iloc[te].reset_index(drop=True)
         p_tr = points[points['sample_id'].astype(str).isin(set(s_tr['sample_id'].astype(str)))]
@@ -263,6 +288,7 @@ def run_cv(samples, points, scheme='random', methods=METHODS, n_splits=5, max_fo
                                    group_col=group_col, calib_frac=calib_frac, seed=seed + f)
                 pred = model.predict(s_te)
                 mets = compute_metrics(pred, s_te, p_te, model)
+                oof.setdefault(meth, []).append((pred, s_te, p_te))
             except Exception as e:  # keep the CV going; record the failure
                 mets = [('error', type(e).__name__ + ': ' + str(e)[:200], np.nan)]
             dt = time.time() - t0
@@ -274,13 +300,31 @@ def run_cv(samples, points, scheme='random', methods=METHODS, n_splits=5, max_fo
                 log(f'[{scheme} fold {f} ({label})] {meth:18s} mpsp_mape={mm.get(("mpsp_mape", "MPSP"), np.nan):.4f} '
                     f'oracle={mm.get(("oracle_mape", "MPSP"), np.nan):.4f} R2(a,b,c,d,g)='
                     + ','.join(f'{mm.get(("R2", k), np.nan):.3f}' for k in TARGETS) + f' ({dt:.0f}s)')
+    # pooled out-of-fold metrics (R^2 within a single held-out group is not
+    # meaningful for leave-one-group-out schemes)
+    if len(splits) > 1:
+        for meth, parts in oof.items():
+            pred = {k: np.concatenate([p[0][k] for p in parts]) for k in ('coef', 'g', 'g_max')}
+            s_all = pd.concat([p[1] for p in parts], ignore_index=True)
+            p_all = pd.concat([p[2] for p in parts], ignore_index=True)
+            for metric, target, value in compute_metrics(pred, s_all, p_all):
+                if metric in ('MAE', 'RMSE', 'R2', 'mpsp_mape', 'mpsp_mape_median', 'oracle_mape', 'fit_mape'):
+                    rows.append(dict(scheme=scheme, fold=-1, label='pooled', method=meth, n_train=np.nan,
+                                     n_test=len(s_all), seconds=np.nan, metric=metric, target=target,
+                                     value=value))
     return pd.DataFrame(rows)
 
 
 def summarize(results, metrics=('mpsp_mape', 'oracle_mape', 'R2', 'MAE', 'violation_rate', 'coverage')):
-    """Mean over folds per (method, metric, target)."""
+    """Mean over folds per (method, metric, target); R^2 and MAE are the
+    pooled out-of-fold values when available."""
     r = results[results['metric'].isin(metrics)]
-    return r.groupby(['scheme', 'method', 'metric', 'target'])['value'].mean().unstack('method')
+    pooled = r[r['fold'] == -1]
+    per = r[r['fold'] != -1]
+    if len(pooled):
+        per = per[~per['metric'].isin(['R2', 'MAE'])]
+        per = pd.concat([per, pooled[pooled['metric'].isin(['R2', 'MAE'])]])
+    return per.groupby(['scheme', 'method', 'metric', 'target'])['value'].mean().unstack('method')
 
 
 # %% CLI

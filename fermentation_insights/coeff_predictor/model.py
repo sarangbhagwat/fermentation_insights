@@ -26,7 +26,8 @@ Architecture
 * channel heads: coefficients (4 each) of every other cost channel;
 * totals ``a', b', c', d'`` = sum over channels (hard identity);
 * recovery ``g = g_max * sigmoid(z_g)`` with ``g_max`` the stoichiometric mass
-  ratio of final to fermentation product (hard upper bound);
+  ratio of final to fermentation product (hard upper bound; an optional small
+  relative ``g_margin`` absorbs rounding-level excesses found in the data);
 * equation layer: :func:`mpsp_equation`.
 
 All raw head outputs are affine-scaled by per-target training means and
@@ -85,7 +86,8 @@ class ModelConfig:
     price_explicit: bool = True  # price x intensity channels (prices not in encoder)
     structured_fs: bool = True   # b'_fs = exp(z)/w_sugar
     fs_eta_bound: bool = True    # z >= 0  (eta <= 1)
-    g_bound: bool = True         # g = g_max * sigmoid(.)
+    g_bound: bool = True         # g = g_max * (1 + g_margin) * sigmoid(.)
+    g_margin: float = 0.0        # relative slack of the bound (set from data checks)
     head_init: float = 0.1       # scale of the initial head weights
 
     def __post_init__(self):
@@ -256,7 +258,7 @@ class CoefficientNet(nn.Module):
             total = total + self.rest_mean + self.rest_std * self.rest_head(h)
         zg = self.g_head(h)[:, 0]
         if self.cfg.g_bound:
-            g = g_max * torch.sigmoid(self.g_logit0 + zg)
+            g = g_max * (1. + self.cfg.g_margin) * torch.sigmoid(self.g_logit0 + zg)
         else:
             g = self.g_mean + self.g_std * zg
         out['coef'] = total

@@ -29,7 +29,7 @@ the (source) sample:
 * ``mono_t``  ``c' + d'/y >= 0``  (dMPSP/dt <= 0)
 * ``positive`` ``a' + b'/y + c'/t + d'/(y t) > 0``
 * ``mono_r``  ``dMPSP/dlog r <= 0`` by autograd w.r.t. the productivity input
-* ``nonneg_int`` feedstock and natural-gas intensities >= 0
+* ``nonneg_fs``, ``nonneg_ng`` feedstock / natural-gas intensities >= 0
 
 Collocation inputs copy training samples with log-uniform productivity over
 a range ``colloc_r_factor`` wider than the data, log-uniform prices over a
@@ -62,7 +62,7 @@ __all__ = (
     'SCHEMES', 'load_tables', 'setup_torch',
 )
 
-RESIDUALS = ('mono_y', 'mono_t', 'positive', 'mono_r', 'nonneg_int')
+RESIDUALS = ('mono_y', 'mono_t', 'positive', 'mono_r', 'nonneg_fs', 'nonneg_ng')
 
 
 def setup_torch(threads=1):
@@ -232,7 +232,9 @@ def fit_target_scales(samples, points, layout, batch):
     cs = np.array([_robust_std(coef[:, k], 1e-6 * max(1., abs(cm[k]))) for k in range(4)])
     sc['coef_mean'], sc['coef_std'] = cm.tolist(), cs.tolist()
     sc['g_mean'] = float(np.nanmean(g))
-    sc['g_std'] = _robust_std(g, 1e-3 * max(abs(sc['g_mean']), 1e-3))
+    # floor: recovery errors below ~1 % are immaterial (MPSP ~ 1/g) and a nearly
+    # constant g must not dominate the loss / early-stopping criterion
+    sc['g_std'] = _robust_std(g, 0.01 * max(abs(sc['g_mean']), 0.1))
     if ch.shape[1]:
         chm = np.nan_to_num(np.nanmean(ch, 0))
         chs = np.array([[_robust_std(ch[:, c, k], 0.01 * cs[k]) for k in range(4)] for c in range(ch.shape[1])])
@@ -368,22 +370,19 @@ def physics_residuals(model, out, Y, T, mask, active, log_r=None):
     if 'positive' in active:
         N = a + b / Y + c / T + d / (Y * T)
         res['positive'] = _mmean(torch.relu(-N) ** 2, mask) / sc['num_scale'] ** 2
-    if 'nonneg_int' in active:
-        terms = []
-        pk = model.layout['price_keys']
-        for j, key in enumerate(pk):
-            if key in ('fs', 'ng') and 'intensities' in out:
-                q = out['intensities'][:, j]
-                I = q[:, 0:1] + q[:, 1:2] / Y + q[:, 2:3] / T + q[:, 3:4] / (Y * T)
-                terms.append(_mmean(torch.relu(-I) ** 2, mask) / sc['int_point_scale'][j] ** 2)
-        chn = model.layout['channels']
-        for name in ('feedstock', 'natural_gas'):
-            if name in chn and 'channels' in out:
-                q = out['channels'][:, chn.index(name)]
-                I = q[:, 0:1] + q[:, 1:2] / Y + q[:, 2:3] / T + q[:, 3:4] / (Y * T)
-                terms.append(_mmean(torch.relu(-I) ** 2, mask) / sc['num_scale'] ** 2)
-        if terms:
-            res['nonneg_int'] = sum(terms) / len(terms)
+    for res_name, key, name in (('nonneg_fs', 'fs', 'feedstock'), ('nonneg_ng', 'ng', 'natural_gas')):
+        if res_name not in active:
+            continue
+        pk, chn = model.layout['price_keys'], model.layout['channels']
+        if key in pk and 'intensities' in out:
+            j = pk.index(key)
+            q, scale = out['intensities'][:, j], sc['int_point_scale'][j]
+        elif name in chn and 'channels' in out:
+            q, scale = out['channels'][:, chn.index(name)], sc['num_scale']
+        else:
+            continue
+        I = q[:, 0:1] + q[:, 1:2] / Y + q[:, 2:3] / T + q[:, 3:4] / (Y * T)
+        res[res_name] = _mmean(torch.relu(-I) ** 2, mask) / scale ** 2
     if 'mono_r' in active and log_r is not None and log_r.requires_grad:
         dM = mpsp_dlogr(out, log_r, Y, T)
         res['mono_r'] = _mmean(torch.relu(dM) ** 2, mask) / sc['mpsp_scale'] ** 2
@@ -568,7 +567,7 @@ def train_model(spec, samples, points, mcfg=None, lcfg=None, tcfg=None, val=None
         hist.append(rec)
         if not np.isfinite(crit):
             break
-        if crit < best - 1e-6 * abs(best):
+        if not np.isfinite(best) or crit < best - 1e-6 * abs(best):
             best, bad = crit, 0
             best_state = copy.deepcopy(model.state_dict())
         else:
@@ -712,10 +711,14 @@ def _mono_r_pairs(samples, coef, g, Y, T, mask, tol=1e-3):
     keycols = [c for c in samples.columns if (c.startswith(('p_', 'bp_')) or c in PRICE_COLUMNS)]
     key = samples['config_id'].astype(str)
     if keycols:
-        vals = samples[keycols].apply(pd.to_numeric, errors='coerce').astype(float)
-        vals = vals.apply(lambda v: np.round(v, 12 - int(np.floor(np.log10(max(np.nanmax(np.abs(v)), 1e-300))))
-                                    if np.isfinite(v).any() else v)).fillna(-1.2345e300)
-        key = key + '|' + pd.util.hash_pandas_object(vals, index=False).astype(str)
+        V = np.column_stack([pd.to_numeric(samples[c], errors='coerce').to_numpy(float)
+                             for c in dict.fromkeys(keycols)])
+        with np.errstate(invalid='ignore'):
+            scale = np.nanmax(np.abs(V), 0) if len(V) else np.ones(V.shape[1])
+        scale = np.where(np.isfinite(scale) & (scale > 0), scale, 1.)
+        Vr = np.round(V / scale, 9)
+        Vr = np.where(np.isfinite(Vr), Vr, -9e9) + 0.  # +0. maps -0.0 to 0.0
+        key = key + '|' + pd.Series([row.tobytes().hex() for row in Vr], index=samples.index)
     r = pd.to_numeric(samples['r'], errors='coerce').to_numpy(float)
     res = []
     for _, ix in pd.Series(np.arange(len(samples))).groupby(key.to_numpy()):
@@ -758,27 +761,27 @@ def check_constraints(samples, points, threshold=0.99, tol=1e-3):
     vals = constraint_case_values(coef, g, Y, T, mask, None, q_fs, q_ng, tol)
     rows = []
 
-    def add(name, kind, v, note='', default=False):
+    def add(name, kind, v, note='', default=False, stat=float('nan')):
         v = np.asarray(v, float)
         v = v[np.isfinite(v)]
         frac = float(v.mean()) if len(v) else float('nan')
         en = bool(frac >= threshold) if len(v) else default
         rows.append(dict(constraint=name, type=kind, n_cases=int(len(v)), frac_satisfied=frac,
-                         enabled=en, note=note if len(v) else (note or 'not checkable')))
+                         enabled=en, stat=stat, note=note if len(v) else (note or 'not checkable')))
+
+    s_tot = np.nanstd(coef, 0) + 1e-12  # identities: errors relative to the total's spread
 
     for k in ('mono_y', 'mono_t', 'positive'):
         add(k, 'residual', vals[k])
     pairs = _mono_r_pairs(samples, coef, g, Y, T, mask, tol)
     add('mono_r', 'residual', pairs, 'consecutive productivity pairs', default=True)
-    nn_ = [vals[k] for k in ('nonneg_fs', 'nonneg_ng') if k in vals]
-    if nn_:
-        both = np.where(np.isnan(nn_[0]), np.nan, np.nanmin(np.column_stack(nn_), 1)) if len(nn_) > 1 else nn_[0]
-        add('nonneg_int', 'residual', both, 'feedstock & natural-gas intensities')
-    else:
-        add('nonneg_int', 'residual', [], 'no intensity targets', default=False)
+    for k, lab in (('nonneg_fs', 'feedstock intensity'), ('nonneg_ng', 'natural-gas intensity')):
+        add(k, 'residual', vals.get(k, []), lab if k in vals else 'no intensity targets')
     gm = col(G_MAX)
     ok = np.isfinite(g) & np.isfinite(gm)
-    add('g_le_gmax', 'structural', np.where(ok, (g <= gm * (1 + tol)).astype(float), np.nan))
+    gr = float(np.max(g[ok] / gm[ok])) if ok.any() else float('nan')
+    add('g_le_gmax', 'structural', np.where(ok, (g <= gm * (1 + tol)).astype(float), np.nan),
+        f'max g/g_max = {gr:.4f}', stat=gr)
     if q_fs is not None:
         w = col(W_SUGAR)
         v = q_fs[:, 1] * w
@@ -787,8 +790,7 @@ def check_constraints(samples, points, threshold=0.99, tol=1e-3):
     chs = sorted({c.split('__')[1] for c in samples.columns if c.startswith('ch__') and c.count('__') == 2})
     if chs:
         S = np.column_stack([np.nansum(np.column_stack([col(f'ch__{c}__{k}') for c in chs]), 1) for k in COEFF_KEYS])
-        sc = np.nanstd(coef, 0) + 1e-12
-        err = np.abs(S - coef) / sc
+        err = np.abs(S - coef) / s_tot
         add('channel_sum', 'identity', np.where(np.isfinite(err).all(1), (err.max(1) <= 1e-4).astype(float), np.nan))
     lin = []
     for key, ch in INTENSITY_CHANNEL.items():
@@ -797,16 +799,18 @@ def check_constraints(samples, points, threshold=0.99, tol=1e-3):
         if q is None or pc not in samples or f'ch__{ch}__a' not in samples:
             continue
         C = np.column_stack([col(f'ch__{ch}__{k}') for k in COEFF_KEYS])
-        e = np.abs(C - col(pc)[:, None] * q) / (np.nanstd(C, 0) + 1e-12)
+        e = np.abs(C - col(pc)[:, None] * q) / s_tot
         lin.append(np.where(np.isfinite(e).all(1), (e.max(1) <= 1e-4).astype(float), np.nan))
     if lin:
         add('price_linear', 'identity', np.nanmin(np.column_stack(lin), 1))
     return pd.DataFrame(rows)
 
 
-def apply_constraint_report(report, mcfg, lcfg):
+def apply_constraint_report(report, mcfg, lcfg, max_g_margin=0.02):
     """Return copies of (mcfg, lcfg) with residuals / hard bounds disabled
-    where the training data do not satisfy them."""
+    where the training data do not satisfy them. If ``g > g_max`` occurs but
+    by at most ``max_g_margin`` (relative), the bound is relaxed to
+    ``g_max * (1 + g_margin)`` instead of being dropped."""
     mcfg, lcfg = copy.deepcopy(mcfg), copy.deepcopy(lcfg)
     en = dict(zip(report['constraint'], report['enabled']))
     res = dict(lcfg.residuals)
@@ -815,7 +819,12 @@ def apply_constraint_report(report, mcfg, lcfg):
             res[r] = False
     lcfg.residuals = res
     if 'g_le_gmax' in en and not en['g_le_gmax']:
-        mcfg.g_bound = False
+        # small excesses (rounding, impurities) -> widen the hard bound instead
+        gr = report.set_index('constraint').loc['g_le_gmax', 'stat'] if 'stat' in report else np.nan
+        if np.isfinite(gr) and gr <= 1 + max_g_margin:
+            mcfg.g_margin = max(mcfg.g_margin, float(gr - 1) + 1e-3)
+        else:
+            mcfg.g_bound = False
     if 'fs_eta_le_1' in en and not en['fs_eta_le_1']:
         mcfg.fs_eta_bound = False
     return mcfg, lcfg
@@ -844,7 +853,7 @@ class Ensemble:
 
     def _inputs(self, batch):
         dt = self.dtype
-        return [torch.as_tensor(np.asarray(a, float), dtype=dt)
+        return [torch.tensor(np.asarray(a, float), dtype=dt)
                 for a in (batch.X, batch.log_r, batch.prices, batch.w_sugar, batch.g_max)]
 
     def member_outputs(self, batch):
@@ -937,7 +946,7 @@ def _jsonable(o):
 
 def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None, calib_frac=0.15,
                    group_col=None, check=True, bootstrap=False, alpha=0.1, seed=0, log=None,
-                   spec_kwargs=None):
+                   spec_kwargs=None, check_kwargs=None):
     """Train a deep ensemble.
 
     * the FeatureSpec and target scales are fit on the training rows only;
@@ -947,7 +956,7 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
       early stopping and its own seed (optionally a bootstrap resample);
     * with ``check``, physics residuals / hard bounds that the training
       targets violate in > 1 % of cases are disabled (see
-      :func:`check_constraints`).
+      :func:`check_constraints`; ``check_kwargs`` sets its ``threshold``/``tol``).
     """
     mcfg = copy.deepcopy(mcfg or ModelConfig())
     lcfg = copy.deepcopy(lcfg or LossConfig())
@@ -959,7 +968,7 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
     s_fit = samples.iloc[fit_idx].reset_index(drop=True)
     report = None
     if check:
-        report = check_constraints(s_fit, points)
+        report = check_constraints(s_fit, points, **(check_kwargs or {}))
         if mcfg.kind == 'physics':
             mcfg, lcfg = apply_constraint_report(report, mcfg, lcfg)
     spec = FeatureSpec(price_explicit=mcfg.price_explicit, **(spec_kwargs or {})).fit(s_fit)

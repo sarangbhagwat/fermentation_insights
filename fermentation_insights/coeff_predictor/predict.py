@@ -137,7 +137,7 @@ class CoefficientPredictor:
             res['g_lo'] = np.maximum(mu - hw, 0.)
             hi = mu + hw
             if ens.mcfg.g_bound:
-                hi = np.minimum(hi, batch.g_max)
+                hi = np.minimum(hi, batch.g_max * (1. + ens.mcfg.g_margin))
             res['g_hi'] = hi
         if 'channels' in outs:
             for c, name in enumerate(ens.channel_names()):
@@ -158,7 +158,7 @@ class CoefficientPredictor:
         out['imputed'] = ', '.join(batch.imputed)
         out['filled_from_registry'] = [', '.join(f) for f in filled]
         if warn and batch.imputed:
-            warnings.warn('imputed with training medians (not specified): ' + ', '.join(batch.imputed),
+            warnings.warn('not specified, assumed training baseline/median values: ' + ', '.join(batch.imputed),
                           UserWarning, stacklevel=2)
         return out
 

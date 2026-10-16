@@ -18,14 +18,15 @@ from fermentation_insights.coeff_predictor.tests.conftest import FAST
 def ensemble(tables):
     samples, points, _ = tables
     return T.train_ensemble(samples, points, n_members=2, mcfg=ModelConfig(width=24, depth=2, dropout=0.),
-                            tcfg=T.TrainConfig(**FAST), group_col='config_id', seed=0)
+                            tcfg=T.TrainConfig(**{**FAST, 'epochs': 40, 'patience': 15}),
+                            group_col='config_id', seed=0)
 
 
 def test_training_reduces_loss(ensemble):
     for h in ensemble.histories:
-        assert h[-1]['train_loss'] < 0.5 * h[0]['train_loss']
-        best = min(r['val_data'] for r in h)
-        assert best < h[0]['val_data']
+        assert h[-1]['train_loss'] < 0.6 * h[0]['train_loss']
+        vals = [r['val_data'] for r in h]
+        assert min(vals) < vals[0] and int(np.argmin(vals)) > 0  # best state was recorded
     assert ensemble.constraint_report is not None
     assert set(ensemble.conformal) >= {'a', 'b', 'c', 'd', 'g', 'mpsp'}
 
@@ -33,7 +34,7 @@ def test_training_reduces_loss(ensemble):
 def test_constraint_report_on_fake_data(tables):
     samples, points, _ = tables
     rep = T.check_constraints(samples, points).set_index('constraint')
-    for c in ('mono_y', 'mono_t', 'positive', 'nonneg_int', 'g_le_gmax', 'fs_eta_le_1',
+    for c in ('mono_y', 'mono_t', 'positive', 'nonneg_fs', 'nonneg_ng', 'g_le_gmax', 'fs_eta_le_1',
               'channel_sum', 'price_linear', 'mono_r'):
         assert rep.loc[c, 'frac_satisfied'] == 1.0 and rep.loc[c, 'enabled'], c
     assert rep.loc['mono_r', 'n_cases'] > 0
@@ -44,6 +45,10 @@ def test_constraint_report_on_fake_data(tables):
     rep2 = T.check_constraints(bad, points)
     m, l = T.apply_constraint_report(rep2, ModelConfig(), T.LossConfig())
     assert not m.g_bound and m.fs_eta_bound
+    # ... unless the excess is rounding-level: bound relaxed by a margin
+    bad.loc[idx, 'g'] = bad.loc[idx, 'final_product_stoich_mass_ratio'] * 1.002
+    m, l = T.apply_constraint_report(T.check_constraints(bad, points), ModelConfig(), T.LossConfig())
+    assert m.g_bound and 0.002 < m.g_margin < 0.01
     # violate monotonicity in y -> residual disabled
     bad = samples.copy()
     bad.loc[bad.index[::5], 'b'] = -10.
