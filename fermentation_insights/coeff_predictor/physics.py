@@ -40,13 +40,18 @@ Natural-gas accounting: BioSTEAM charges an inlet stream registered as a
 ``Unit.utility_cost``, hence TEA ``utility_cost``) unless the stream itself
 carries a price, in which case it is a priced feed and part of TEA
 ``material_cost`` (as is any other mostly-methane feed, which may well be
-unpriced, e.g. TAL's dryer gas). Harness v2 records flow and cost per pool
+unpriced). Harness v2 missed the boiler's natural gas -- BioSTEAM's
+``BoilerTurbogenerator`` registers it as the stream utility 'Fuel' -- and
+booked it as such an unpriced material feed (the "unpriced dryer gas" of TAL
+and the large unpriced CH4 feed of succinic were this boiler gas); harness v3
+books it in the utility pool and :mod:`data_patches` (D3) corrects v2 rows.
+Harness v2 records flow and cost per pool
 (``ng_flow_utility``, ``ng_cost_utility``, ``ng_flow_material``,
 ``ng_cost_material`` [kg/h, USD/h], at the prices BioSTEAM actually
 charges); whenever these are present (pool 'split', :func:`natural_gas_pools`)
 they replace the adapter's ``natural_gas_flow``/``natural_gas_price`` (which
-proved unreliable: e.g. TAL priced its unpriced dryer gas, corn ethanol
-reported price 0 for utility gas charged at 0.218 USD/kg):
+proved unreliable: e.g. corn ethanol adapter v1 reported price 0 for utility
+gas charged at 0.218 USD/kg):
 
 * ``natural_gas = ng_cost_utility + ng_cost_material``; each part is removed
   from its own pool remainder (``utilities_other``, ``materials_other``), so
@@ -56,7 +61,8 @@ reported price 0 for utility gas charged at 0.218 USD/kg):
   ``cost/flow`` over the sample's points. For a pool holding only priced (or
   only unpriced) streams this is exactly the pool flow if its cost > 0 (else
   0). Approximation: a pool that mixes priced and unpriced streams (e.g.
-  succinic: a priced CH4 feed plus a large unpriced one) has a unit price
+  uncorrected harness v2 succinic rows: the priced dryer gas plus the
+  unpriced-looking boiler gas, D3) has a unit price
   that varies with the mix; its max is the priced streams' price only if
   some point is (nearly) free of unpriced gas, otherwise ``p_pool`` is a
   lower bound and the intensity an upper bound (flagged by

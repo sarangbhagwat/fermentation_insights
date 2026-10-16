@@ -31,6 +31,16 @@ Requires the fi-TAL branch of Bioindustrial-Park (biosteam 2.54 port).
 Each configuration builds module-level systems on a shared flowsheet, so only
 ONE configuration can be loaded per Python process; run configurations in
 separate processes (``--configs <config_id>``; see scripts/run_TAL.sh).
+
+adapter_version 2 (config field): ``p_cell_mass_yield`` is mapped (BioSTEAM
+lower-cases parameter names after the first character, so the
+'Y. lipolytica' key never matched; v1 recorded it as
+``bp_fermentation_fermentation_y_lipolytica_yield``); ``neutralizing_agent``
+= 'NaOH' (pH-control base; ``neutralization`` stays False because the product
+is not neutralized; ``base_cost`` is this NaOH); ``product_water_solubility``
+= 9.8 g/L water at 25 C from experimental data instead of the fitted model's
+5.41 g/L. Rows of earlier versions are corrected by
+``coeff_predictor/data_patches.py``.
 """
 from __future__ import annotations
 
@@ -66,12 +76,24 @@ _CANONICAL = {
     'Boiler efficiency': 'p_boiler_efficiency',
     'Turbogenerator efficiency': 'p_turbogenerator_efficiency',
 }
+#: BioSTEAM capitalizes only the first character of parameter names
+#: ('Fermentation y. lipolytica yield'): match case-insensitively.
+_CANONICAL_LC = {k.lower(): v for k, v in _CANONICAL.items()}
 
 # Parameters of the distribution files that have no effect on the model and
 # are therefore excluded: a dummy, and 'Fermentation acetate loading', whose
 # load statement sets `R302.acetate_loading`, an attribute the fermenter never
 # reads (the acetate spiking target is `R302.acetate_target_loading`).
 _EXCLUDED = ('Blank parameter', 'Fermentation acetate loading')
+_EXCLUDED_LC = tuple(i.lower() for i in _EXCLUDED)
+
+#: TAL water solubility [g TAL/L water] at 25 C: log-linear interpolation of the
+#: experimental data shipped with the TAL module
+#: (biorefineries/TAL/models/solubility/experimental_data_TAL_solubility_in_water.xlsx:
+#: 8.92 g/L at 22 C, 16.46 g/L at 42 C), consistent with the handbook value of
+#: 8.60 g/L at 20 C. (The module's fitted one-parameter van Laar model gives
+#: 5.41 g/L at 25 C, well below the data.)
+_TAL_WATER_SOLUBILITY_25C = 9.8
 
 _AREA_MAP = {
     'feedstock acquisition': 'feedstock',
@@ -177,8 +199,10 @@ class Adapter(BiorefineryAdapter):
                     final_product='KSA' if upgrading else 'TAL',
                     ferm_product_chemical='TAL',
                     final_product_chemical='PotassiumSorbate' if upgrading else 'TAL',
+                    adapter_version=2,
                     neutralization=False,  # TAL is not neutralized
-                    neutralizing_agent='',
+                    # base dosed in fermentation (pH control; base_cost = its cost)
+                    neutralizing_agent='NaOH',
                     pH_control_base='NaOH',  # pH 6.5 by neutralizing byproduct acids (citrate, acetate, phosphate)
                     n_acid_groups=0,  # lactone; acidic enol (vinylogous acid), no carboxylic group
                     pKa1=4.7,
@@ -194,7 +218,7 @@ class Adapter(BiorefineryAdapter):
                     aerobic=True,
                     fermentation_mode='batch',
                     T_fermentation=28. + 273.15,
-                    product_water_solubility=float('nan'),  # set in load (TAL solubility model)
+                    product_water_solubility=_TAL_WATER_SOLUBILITY_25C,  # g/L water, 25 C
                 ))
         return configs
 
@@ -247,14 +271,6 @@ class Adapter(BiorefineryAdapter):
 
         # Unit groups for the harness (copies; TAL's own groups are untouched)
         self.unit_groups = self._make_unit_groups(models.unit_groups)
-
-        # Product water solubility from TAL's fitted solubility model [g/L water, 25 C]
-        try:
-            from biorefineries.TAL.models.solubility.fit_TAL_solubility_in_water_one_parameter_van_laar_activity import \
-                get_TAL_solubility_in_water_gpL
-            config['product_water_solubility'] = float(get_TAL_solubility_in_water_gpL(298.15))
-        except Exception:
-            config['product_water_solubility'] = 8.6
 
         # Baseline state as in the TRY scripts: baseline parameter values, baseline TRY
         for p in self.model.parameters:
@@ -319,9 +335,9 @@ class Adapter(BiorefineryAdapter):
         if self._parameters is None:
             params = []
             for p in self.model.parameters:
-                if p.name in _EXCLUDED:
+                if p.name.lower() in _EXCLUDED_LC:
                     continue
-                prm = Parameter.from_biosteam(p, name=_CANONICAL.get(p.name))
+                prm = Parameter.from_biosteam(p, name=_CANONICAL_LC.get(p.name.lower()))
                 prm.description = f'{p.element}: {p.name} [{p.units}]'
                 if prm.name == 'p_natural_gas_price':
                     # In biosteam >= 2.5x the boiler's natural gas is a stream

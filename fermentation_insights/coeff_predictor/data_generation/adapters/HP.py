@@ -37,6 +37,22 @@ same process; run each configuration in its own process (``--configs``).
 HP and HP_neutral of the same feedstock/separation share a module and *can*
 run in one process (neutralization is toggled and the baseline re-simulated),
 but the launcher still runs one configuration per process.
+
+``base_cost`` = cost of the purchased fermentation lime (``lime_fresh`` ->
+T604 -> ``fermentation_lime``, linked streams) at its sampled price
+``p_base_price``. In the low-pH configurations the module still buys the
+medium lime (``R302.lime_mol_per_L_loading``) although it never enters the
+broth (BIP ``HP/units.py`` mixes the effluent without it), so ``base_cost``
+is nonzero there too (~340-650 USD/h): it is a fermentation-base purchase,
+not a neutralization cost.
+
+adapter_version 2 (config field): ``base_cost`` from ``lime_fresh`` (v1 used
+``fermentation_lime``, whose price is frozen at the module's 0.286 USD/kg);
+per-point ``x_inflection_yield`` = (1 - cell-mass - succinic - xylitol
+regular conversions) x theoretical yield (cell-mass conversion =
+``p_cell_mass_yield``) and ``x_above_inflection``; ``separation_principle``
+starts with 'acidulation+' only in the neutral configurations. Rows of
+earlier versions are corrected by ``coeff_predictor/data_patches.py``.
 """
 from __future__ import annotations
 
@@ -154,6 +170,7 @@ class Adapter(BiorefineryAdapter):
                     final_product='AcrylicAcid',
                     ferm_product_chemical='HP',
                     final_product_chemical='AcrylicAcid',
+                    adapter_version=2,
                     neutralization=neutral,
                     neutralizing_agent='Ca(OH)2' if neutral else '',
                     n_acid_groups=1,
@@ -161,9 +178,9 @@ class Adapter(BiorefineryAdapter):
                     final_product_stoich_mass_ratio=_MW_AA / _MW_HP,
                     upgrading=True,  # catalytic (TiO2) dehydration of 3-HP to acrylic acid
                     separation_variant='hexanol_extraction' if hexanol else '',
-                    separation_principle=(
-                        'acidulation+evaporation+LLE(hexanol)+distillation' if hexanol else
-                        'acidulation+adsorption+ion_exchange+evaporation'
+                    separation_principle=('acidulation+' if neutral else '') + (
+                        'evaporation+LLE(hexanol)+distillation' if hexanol else
+                        'adsorption+ion_exchange+evaporation'
                     ) + '|dehydration+distillation',
                     aerobic=True,
                     fermentation_mode='batch',
@@ -223,6 +240,7 @@ class Adapter(BiorefineryAdapter):
             if isinstance(i, bst.MultiEffectEvaporator)]
         self.evaporators = [i for i in system.units if isinstance(i, bst.MultiEffectEvaporator)]
         self._acid_feeds = self._find_acidulation_acid_feeds()
+        self._lime_fresh = self._purchased_feed(R302.ins[5])
         self._gypsum = getattr(models.s, 'gypsum', None)
         self.utility_facilities = [i for i in system.units
                                    if isinstance(i, (bst.BoilerTurbogenerator, bst.CoolingTower,
@@ -261,6 +279,19 @@ class Adapter(BiorefineryAdapter):
             self.system.simulate()
         except Exception as e:
             self._bugfix_barrage(e)
+
+    @staticmethod
+    def _purchased_feed(stream):
+        """The source-less priced feed that ``stream`` is passed on from through
+        single-inlet units (lime_fresh -> T604 -> fermentation_lime), else
+        ``stream`` itself."""
+        s = stream
+        for _ in range(10):
+            u = s.source
+            if u is None or len(u.ins) != 1:
+                break
+            s = u.ins[0]
+        return s if (s.source is None and s.price) else stream
 
     def _find_acidulation_acid_feeds(self):
         """Purchased sulfuric acid feeds upstream of acidulation but not upstream
@@ -527,6 +558,10 @@ class Adapter(BiorefineryAdapter):
         except Exception:
             GWP = FEC = float('nan')
         acid_cost = sum([s.cost for s in self._acid_feeds])
+        # the sample's own inflection yield (cell-mass conversion is sampled)
+        inflection = (1. - R302.regular_biomass_conversion
+                      - R302.regular_succinic_acid_conversion
+                      - R302.regular_xylitol_conversion) * self.theoretical_yield
         out = dict(
             MPSP=MPSP,
             recovery=F_AA / F_fp,
@@ -540,7 +575,7 @@ class Adapter(BiorefineryAdapter):
             F_water_broth=broth.imass['Water'],
             V_fermenters=N * V_reactor,
             tau_fermentation=R302.tau,
-            base_cost=lime.cost,
+            base_cost=self._lime_fresh.cost,  # purchased lime at its (sampled) price
             acid_cost=acid_cost,
             heating_duty=utils.get_heating_duty(heat_utilities),
             cooling_duty=utils.get_cooling_duty(heat_utilities),
@@ -579,5 +614,7 @@ class Adapter(BiorefineryAdapter):
             x_HXN_energy_balance_percent_error=getattr(self.HXN, 'energy_balance_percent_error', float('nan')),
             x_n_bugfix_attempts=getattr(self, '_n_barrage', 0),
             x_cell_mass_conversion=R302.glucose_to_biomass_rxn.X,
+            x_inflection_yield=inflection,
+            x_above_inflection=bool(y_req > inflection + 1e-9),
         )
         return out

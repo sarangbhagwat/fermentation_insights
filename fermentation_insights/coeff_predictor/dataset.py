@@ -22,8 +22,10 @@ Raw reading
   complete when its ``sample_end`` is seen. If a sample_id is complete in
   several files (e.g. a ``_smoke`` file and a production file with the same
   seed), non-smoke files win, then the most recently modified file;
-* each sample uses the ``config`` record of its chosen attempt's own file;
-  otherwise the record ranked like attempts (non-smoke first, then the most
+* each sample uses the latest ``config`` record of its configuration that
+  precedes its chosen attempt in that attempt's own file (a resumed campaign
+  appends a new config record, possibly of a newer adapter version), else
+  the last such record of the file; otherwise the record ranked like attempts (non-smoke first, then the most
   recently modified file). Keys whose records differ between files are
   counted (``stats['config_conflicts']``); samples whose chosen attempt comes
   from a smoke file while a production file has a config record for the
@@ -37,6 +39,13 @@ Raw reading
   stream at every point), else the ``sample_start`` record (feedstock
   described after applying the sample's parameters), else the config's
   baseline description.
+
+Data corrections (:mod:`data_patches`, ``build(..., patches=True)``): recorded
+rows of harness/adapter versions that predate a fix are corrected right after
+reading (counts in ``report['data_patches']``; samples carry
+``harness_version``, ``adapter_version`` and the applied patch ids
+``data_patches``); samples that cannot be corrected (ethanol_corn adapter v1,
+D2) are rejected (``unpatchable_D2``).
 
 Feasible points: ``status == 'ok'``, finite positive y, t, MPSP, recovery,
 and ``y <= inflection_yield`` (fitted domain of the publication) with the
@@ -67,7 +76,7 @@ threshold, natural-gas pool admissible, fixed costs >= 0 and measured labor
 not above FOC -- use it to mask channel losses), ``diag_*`` diagnostics.
 
 Quality filters (rejection reason in ``report['rejections']``), in order:
-``smoke_superseded``, ``incomplete``, ``param_error``, ``too_few_points`` (< min_points ok
+``smoke_superseded``, ``incomplete``, ``unpatchable_<id>``, ``param_error``, ``too_few_points`` (< min_points ok
 points), ``too_few_yields`` / ``too_few_titers`` (< 3 distinct values),
 ``missing_columns`` (no F_final_product / operating_hours -> no
 decomposition), ``nonfinite_targets``, ``bad_g`` (g <= 0 or > 1.05 x
@@ -89,7 +98,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import physics
+from . import data_patches, physics
 
 __all__ = ('DEFAULT_RAW_DIR', 'DEFAULT_PROCESSED_DIR', 'QualityFilters',
            'ProcessedData', 'read_raw', 'build', 'load', 'TOTAL_TARGETS',
@@ -201,12 +210,14 @@ def read_raw(raw_dirs, require_complete=True):
         mtime = os.path.getmtime(path)
         smoke = 'smoke' in os.path.basename(path).lower()
         current = {}  # sid -> attempt dict in this file
+        current_cfg = {}  # key -> latest config record read so far in this file
         for rec in _iter_jsonl(path, stats):
             kind = rec.get('record')
             if kind == 'config':
                 key = (rec.get('biorefinery'), rec.get('config_id'))
                 rec = dict(rec, _file=path)
                 file_configs[(path, key)] = rec
+                current_cfg[key] = rec
                 rank = (not smoke, mtime, fi)
                 old = configs.get(key)
                 if old is not None and _config_signature(old[1]) != _config_signature(rec):
@@ -221,7 +232,8 @@ def read_raw(raw_dirs, require_complete=True):
                 if sid in current and not current[sid]['_complete']:
                     stats['restarted_attempts'] += 1
                 att = {'start': rec, 'end': None, 'points': [], '_file': path,
-                       '_complete': False, '_rank': (not smoke, mtime, fi)}
+                       '_complete': False, '_rank': (not smoke, mtime, fi),
+                       '_config': current_cfg.get(_sid_key(sid))}
                 current[sid] = att
                 attempts.setdefault(sid, []).append(att)
             elif kind == 'point':
@@ -259,7 +271,7 @@ def read_raw(raw_dirs, require_complete=True):
         row.update({'n_ok_reported': end.get('n_ok'), 'param_error': end.get('param_error') or '',
                     'sample_seconds': end.get('seconds'), '_file': chosen['_file'],
                     '_complete': chosen['_complete'],
-                    '_config': file_configs.get((chosen['_file'], key)),
+                    '_config': chosen.get('_config') or file_configs.get((chosen['_file'], key)),
                     '_smoke_superseded': bool(not chosen['_rank'][0] and key in prod_keys)})
         rows.append(row)
         pts.extend(chosen['points'])
@@ -401,11 +413,15 @@ def _decompose(P, phi_prior, ng_pool, capital_basis='auto', g=None):
 
 
 def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None,
-          ng_pool='auto', capital_basis='auto', verbose=False) -> ProcessedData:
-    """Read raw dirs, fit/decompose every sample, filter, and (optionally)
-    save the three tables to ``out_dir``."""
+          ng_pool='auto', capital_basis='auto', verbose=False, patches=True) -> ProcessedData:
+    """Read raw dirs, correct recorded data of older harness/adapter versions
+    (:mod:`data_patches`, unless ``patches=False``), fit/decompose every
+    sample, filter, and (optionally) save the three tables to ``out_dir``."""
     f = filters or QualityFilters()
     cfg, starts, points, stats = read_raw(raw_dirs, f.require_complete)
+    patch_counts = {}
+    if patches and len(starts):
+        cfg, starts, points, patch_counts = data_patches.apply(cfg, starts, points)
     rejections = Counter()
     rej_bio = defaultdict(Counter)
 
@@ -416,7 +432,8 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
     n_beyond_total = 0
     if not len(starts) or not len(points):
         empty = ProcessedData(pd.DataFrame(), pd.DataFrame(), cfg,
-                              {'stats': stats, 'rejections': {}, 'n_retained': 0})
+                              {'stats': stats, 'rejections': {}, 'n_retained': 0,
+                               'data_patches': patch_counts})
         if out_dir:
             empty.save(out_dir)
         return empty
@@ -441,6 +458,10 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
             continue
         if f.require_complete and not srow.get('_complete', False):
             _rej('incomplete', sid)
+            continue
+        unpatchable = srow.get('_unpatchable')
+        if isinstance(unpatchable, str) and unpatchable:
+            _rej(f'unpatchable_{unpatchable}', sid)
             continue
         if srow.get('param_error'):
             _rej('param_error', sid)
@@ -568,6 +589,9 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
         for k, v in srow.items():
             if k.startswith(('p_', 'bp_')):
                 out[k] = v
+        out['harness_version'] = srow.get('harness_version', np.nan)
+        out['adapter_version'] = srow.get('adapter_version', np.nan)
+        out['data_patches'] = srow.get('data_patches', '') or ''
         out.update(row)
         out['channels_ok'] = bool(d.diagnostics.get('phi_flag') == 'ok'
                                   and d.closure_rel <= f.max_closure_rel
@@ -602,7 +626,8 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
     report = {'stats': stats, 'rejections': dict(rejections),
               'points_beyond_inflection_dropped': n_beyond_total,
               'n_candidates': len(candidates), 'n_retained': len(samples),
-              'filters': f.__dict__, 'ng_pool': ng_pool, 'capital_basis': capital_basis}
+              'filters': f.__dict__, 'ng_pool': ng_pool, 'capital_basis': capital_basis,
+              'patches': bool(patches), 'data_patches': patch_counts}
     if len(samples):
         report.update(
             median_R2=float(samples['R2'].median()),
@@ -752,12 +777,14 @@ def main(argv=None):
     ap.add_argument('--no-inflection-clip', action='store_true')
     ap.add_argument('--ng-pool', default='auto', choices=('auto', 'split', 'utility', 'material'))
     ap.add_argument('--capital-basis', default='auto', choices=('auto', 'FCI', 'installed_cost'))
+    ap.add_argument('--no-patches', action='store_true',
+                    help='do not correct recorded data of older harness/adapter versions')
     a = ap.parse_args(argv)
     f = QualityFilters(min_points=a.min_points, min_R2=a.min_R2, max_closure_rel=a.max_closure,
                        require_complete=not a.include_incomplete,
                        clip_to_inflection=not a.no_inflection_clip)
     data = build(a.raw, out_dir=a.out, filters=f, ng_pool=a.ng_pool,
-                 capital_basis=a.capital_basis)
+                 capital_basis=a.capital_basis, patches=not a.no_patches)
     print(summary(data))
     print(f'-> {a.out}')
     return data

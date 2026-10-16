@@ -29,6 +29,46 @@ parameters × one productivity. Each sample has ~25 simulated TY points with
 MPSP, recovery, TEA totals, per-process-area costs/utilities, and mass/energy
 flows (see `data_generation/schema.py`).
 
+### Data corrections
+
+A review of the seven adapters found defects in data that had already been
+recorded. Forward fixes are versioned, so that every recorded row says
+whether it contains them:
+
+* harness fixes by `harness_version` (written into every `sample_start`;
+  v3 = D3 below);
+* adapter fixes by `adapter_version` (a field of each configuration dict,
+  written into the `config` record; 2 = fixed, missing = 1). A sample's
+  configuration is the latest `config` record that precedes its
+  `sample_start` in its own file. A resumed campaign appends a new record,
+  so a file that mixes versions is still handled row by row.
+
+`data_patches.py` corrects rows whose version predates a fix. `dataset.build`
+applies it right after reading the raw JSONL (`patches=True`, CLI
+`--no-patches`). A patch only changes rows that still show the defect, and it
+is idempotent: patched rows and records get the patch id in `data_patches`.
+The counts per patch go to `report.json['data_patches']`, and each sample
+carries `harness_version`, `adapter_version` and `data_patches`.
+
+| id | affected rows | correction |
+|---|---|---|
+| D3 | harness < 3: HP, oxalic, isobutanol, TAL, succinic, ethanol cornstover/sugarcane | v2 booked the boiler's natural gas (BioSTEAM `BoilerTurbogenerator` stream utility 'Fuel', which the TEA charges at `stream_prices['Fuel']` = `BT.natural_gas_price`) as an unpriced material feed. The boiler gas `B` moves to the utility pool at `natural_gas_price`: `ng_flow_utility += B`, `ng_cost_utility += B·natural_gas_price`, `ng_flow_material -= B`. `B` = `ng_flow_material` for HP, oxalic and isobutanol (all their material gas is the boiler's), and `x_natural_gas_BT` for the others. Unaffected: lactic (its boiler gas is priced) and ethanol corn (no boiler). |
+| D4 | ethanol_sugarcane, adapter < 2 | The MPSP was net of the module's RIN credit, recorded as `coproduct_sales` (0.2593 USD per kg of denatured product, checked to be constant before patching). Patched: `x_RIN_credit = coproduct_sales/h`, `MPSP += coproduct_sales/(h·F_final_product)`, `x_MPSP_denatured`/`x_MESP_…` raised by the credit, `coproduct_sales = 0`. |
+| D6 | HP, adapter < 2 | `base_cost = x_lime_fermentation · p_base_price`. The TEA charges `lime_fresh`, which is linked to `fermentation_lime`, at the sampled price. v1 read `fermentation_lime`, whose price was frozen. |
+| D7 | HP, adapter < 2 | `x_inflection_yield = (1 − p_cell_mass_yield)·theoretical_yield`, `x_above_inflection = y > x_inflection_yield`. Basis checked: the config inflection is 0.755 = 1 − 0.245, and `x_cell_mass_conversion` equals `p_cell_mass_yield` at low y. |
+| D2 | ethanol_corn, adapter < 2 | The molar yeast growth destroyed sugar mass. This cannot be patched, so the samples are rejected (`unpatchable_D2`) and the configuration was regenerated. |
+| M1 | TAL, succinic low-pH, adapter < 2 | `neutralizing_agent` = 'NaOH' (TAL pH control) or 'Ca(OH)2' (succinic partial pH control). `neutralization` stays False. |
+| M3 | TAL, adapter < 2 | `bp_fermentation_fermentation_y_lipolytica_yield` → `p_cell_mass_yield`, in the sample values and in the config's parameter list. |
+| M12 | TAL, adapter < 2 | `product_water_solubility` = 9.8 g/L water at 25 °C, interpolated from the TAL module's experimental data. v1 used 5.41 from the fitted model. |
+| M23 | HP non-neutral, adapter < 2 | `separation_principle` loses its 'acidulation+' prefix. |
+
+Resumed samples append duplicate rows (M11). `read_raw` already keeps only
+the points of each sample's chosen, complete attempt. Points above the
+sample's own inflection are dropped (`x_inflection_yield`, `x_above_inflection`;
+§7). Defects that need regeneration or are not corrected here (HP acid
+regeneration D5, TAL substrate basis D8, lactic D1/D9, isobutanol D10, oxalic
+D13/D14, and the minor items not listed) are tracked in the review report.
+
 ## 2. Physics layer 1 — exact cost-channel decomposition (system-level data)
 
 At each TY point `i` of a sample, the product revenue required at the MPSP is

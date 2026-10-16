@@ -38,7 +38,7 @@ find a bug there, work around it in your adapter and report it.
 | `V_broth`, `F_water_broth` | m3/h and kg/h water of the broth leaving fermentation |
 | `V_fermenters` | m3 total volume of all main fermentation vessels |
 | `tau_fermentation` | h |
-| `base_cost`, `acid_cost` | USD/h of neutralization base and of acid used for acidulation/regeneration (0 if none) |
+| `base_cost`, `acid_cost` | USD/h of base dosed in fermentation (neutralization *or* pH control, at its purchase price: the purchased feed, not an intermediate stream) and of acid used for acidulation/regeneration (0 if none). With `neutralization=False` `base_cost` can still be nonzero: TAL (NaOH pH control), succinic low-pH (partial lime pH control), HP low-pH (medium lime bought although it never enters the broth); `neutralizing_agent` names that base |
 | `heating_duty`, `cooling_duty` | GJ/h, sums over process units (exclude utility-producing facilities such as the boiler) |
 | `electricity_consumption`, `electricity_production` | MW |
 | `natural_gas_flow` | kg/h purchased natural gas (0 if none) |
@@ -61,7 +61,7 @@ dict(
     ferm_product_chemical='HP',         # thermosteam chemical ID in the system
     final_product_chemical='AcrylicAcid',
     neutralization=True,                # pH control by base addition during fermentation
-    neutralizing_agent='Ca(OH)2',       # '' if none
+    neutralizing_agent='Ca(OH)2',       # base dosed in fermentation (also pH control); '' if none
     n_acid_groups=1,                    # carboxylic acid groups on the fermentation product
     pKa1=4.51,                          # nan if not an acid
     final_product_stoich_mass_ratio=0.80,  # theoretical kg final / kg fermentation product
@@ -72,8 +72,40 @@ dict(
     fermentation_mode='batch',          # batch | fed-batch | continuous
     T_fermentation=305.15,              # K
     product_water_solubility=1000.,     # g/L at 25 C (literature; use 1000 if miscible)
+    adapter_version=2,                  # bump when a fix changes recorded semantics
 )
 ```
+
+**Versioning.** A campaign runs each configuration in its own process, so an
+edited adapter takes effect at the next configuration a campaign starts.
+Whenever a fix changes what a recorded column means or holds, add or bump
+`adapter_version` in every configuration dict of the adapter. It is written
+into the `config` record. Then add the matching correction for older rows
+to `coeff_predictor/data_patches.py` if one can be derived from recorded
+columns (DESIGN.md, "Data corrections"). Harness changes bump
+`schema.HARNESS_VERSION`, which is written into each `sample_start`.
+Changes so far:
+
+* harness v3: the boiler's natural gas (`BoilerTurbogenerator`'s stream
+  utility 'Fuel') and any inlet utility of >= 50 wt% CH4 are now natural gas
+  in the utility pool (`ng_*_utility`). v2 booked the boiler gas as unpriced
+  material (D3).
+* HP v2: `base_cost` is the purchased `lime_fresh` at the sampled
+  `p_base_price`. There is now a per-point `x_inflection_yield` = (1 − sampled
+  cell-mass conversion − succinic − xylitol conversions) × theoretical, plus
+  `x_above_inflection`. `separation_principle` starts with 'acidulation+' only
+  when neutral.
+* TAL v2: `p_cell_mass_yield` is mapped (the canonical names now match
+  case-insensitively), `neutralizing_agent='NaOH'`, and
+  `product_water_solubility` is 9.8 g/L (experimental data).
+* succinic v2: `neutralizing_agent='Ca(OH)2'` also in the low-pH configurations.
+* ethanol v2: the corn yeast growth now conserves mass (BIP fi-ethanol).
+  Corn `natural_gas_flow`/`natural_gas_price` cover all natural-gas
+  utilities at the price BioSTEAM charges. There is a new corn
+  `p_natural_gas_price` (`stream_prices['Natural gas']`, ±10 %), and the
+  no-effect heating-agent price parameter is gone. Sugarcane RIN credits are
+  zeroed, with the foregone credit recorded as `x_RIN_credit` [USD/h], so the
+  MPSP is no longer net of policy credits.
 
 ### `load(config)`
 Build/load the system; set `self.system`, `self.tea`, `self.unit_groups`
@@ -87,7 +119,11 @@ run in separate processes via `--configs`).
 Return `theoretical_yield`, `inflection_yield` (yield above which the
 cell-mass/byproduct regime changes; the fitted region ends here), `y_min`,
 `y_max` (= inflection yield, absolute g/g), `t_min`, `t_max` (g/L),
-`baseline_productivity`, `baseline_yield`, `baseline_titer`. Use the same ranges
+`baseline_productivity`, `baseline_yield`, `baseline_titer`. If the inflection
+depends on a sampled parameter (e.g. a cell-mass yield), also return
+`x_inflection_yield` (the sample's own) and `x_above_inflection`
+(`y > x_inflection_yield`) from `collect()`. `dataset.build` drops flagged
+points and uses the per-sample inflection. Use the same ranges
 as the biorefinery's own TRY-analysis scripts / the fermentation_insights
 publication (e.g. HP: yields 5–75.5% of theoretical, titers 10–200 g/L).
 

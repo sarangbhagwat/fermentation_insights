@@ -118,10 +118,13 @@ class Adapter(BiorefineryAdapter):
                     final_product='SuccinicAcid',
                     ferm_product_chemical='SuccinicAcid',
                     final_product_chemical='SuccinicAcid',
+                    adapter_version=2,
                     neutralization=neutral,
-                    neutralizing_agent='Ca(OH)2' if neutral else '',
-                    # low-pH case still doses lime for partial pH control (0.42 mol-OH-eq/mol SA
-                    # baseline); the base does not convert the product (no acidulation downstream)
+                    # base dosed in fermentation (base_cost = its cost); the low-pH case
+                    # still doses lime for partial pH control (0.42 mol-OH-eq/mol SA
+                    # baseline) but does not convert the product (no acidulation
+                    # downstream), hence neutralization=False there (v1: agent '')
+                    neutralizing_agent='Ca(OH)2',
                     partial_pH_control_base='' if neutral else 'Ca(OH)2',
                     n_acid_groups=2,
                     pKa1=4.21, pKa2=5.64,

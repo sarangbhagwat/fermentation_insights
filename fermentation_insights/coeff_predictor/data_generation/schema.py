@@ -52,7 +52,15 @@ AREA_QUANTITIES = (
 #: labor_cost, labor_burden (TEA attributes, USD/yr and fraction, if present);
 #: fs_* feedstock descriptors of the feedstock stream at that point (sample-
 #: specific composition, e.g. when carbohydrate content is sampled).
-HARNESS_VERSION = 2
+#: v3: natural-gas inlet utilities include BioSTEAM's boiler 'Fuel' utility
+#: (``BoilerTurbogenerator.define_utility('Fuel', ...)``, priced at
+#: ``bst.stream_prices['Fuel']`` = ``BT.natural_gas_price``) and any inlet
+#: utility stream >= 50 wt% CH4, priced at ``bst.stream_prices[name]`` when the
+#: stream's own price is 0. v2 missed 'Fuel' and booked the boiler gas as an
+#: unpriced material feed (review defect D3; v2 rows are corrected by
+#: ``coeff_predictor/data_patches.py``). Adapter-level fixes are versioned by
+#: the 'adapter_version' field of the configuration (config record).
+HARNESS_VERSION = 3
 
 #: Specification / design-decision columns (constant within a sample).
 SPEC_COLUMNS = (
@@ -91,7 +99,10 @@ POINT_COLUMNS = (
     'F_water_broth',        # kg/h water in broth
     'V_fermenters',         # m3 total fermenter volume (all vessels)
     'tau_fermentation',     # h
-    'base_cost',            # USD/h neutralization base (0 if none)
+    'base_cost',            # USD/h base dosed in fermentation at its purchase price:
+                            # neutralization or pH control (TAL NaOH, succinic low-pH
+                            # lime) and HP's medium lime (bought also when not
+                            # neutralizing); 0 if none. See data_generation/ADAPTERS.md
     'acid_cost',            # USD/h acid for acidulation/regeneration (0 if none)
     'heating_duty', 'cooling_duty',            # GJ/h, system totals (process units)
     'electricity_consumption', 'electricity_production',  # MW

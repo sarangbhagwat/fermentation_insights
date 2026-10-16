@@ -25,7 +25,28 @@ Bioindustrial-Park changes required on BioSTEAM 2.54 (branch ``fi-ethanol``):
 arguments in the wrong order (N_reactors passed as V_wf and V_wf as V_max),
 which sized the cornstover SSCF vessels as ~3700 x 0.9 m3 tanks (fermentor
 capital ~0); (ii) ``corn/units.py``: the SSF unit inherits a 1-inlet size from
-``bst.BatchBioreactor`` but is given mash + yeast; ``_N_ins = 2`` was added.
+``bst.BatchBioreactor`` but is given mash + yeast; ``_N_ins = 2`` was added;
+(iii) ``corn/units.py``: the SSF yeast growth ``Glucose -> Yeast`` was molar
+(180 g glucose -> 22.6 g yeast, destroying ~87 % of the unconverted sugar's
+mass); it is now defined by weight, as in ``bst.Fermentation``.
+
+adapter_version 2 (config field; rows of earlier versions are corrected by
+``coeff_predictor/data_patches.py`` where possible):
+
+* corn: mass-conserving yeast growth (BIP fix iii; v1 corn data cannot be
+  patched and was regenerated); ``natural_gas_flow`` = all natural-gas inlet
+  utilities (DDGS dryer and thermal oxidizer, 'Natural gas'/'Fuel'; v1 only
+  summed feeds whose ID contains 'natural_gas'), ``natural_gas_price`` = their
+  flow-weighted price (stream price, else ``bst.stream_prices[name]``; v1
+  recorded the unpriced stream's 0); new parameter ``p_natural_gas_price``
+  (``bst.stream_prices['Natural gas']``, +-10 % triangular); the BioSTEAM
+  default price parameter of the 'natural_gas' heating agent is dropped when
+  no unit uses that agent (it had no effect; renamed
+  ``bp_natural_gas_heating_agent_price`` otherwise, as for cornstover).
+* sugarcane: the module's RIN policy credits ('Ethanol RIN D5', ...) are set
+  to 0 so the MPSP is not net of a policy credit (v1: 0.2593 USD/kg denatured
+  ethanol credited as coproduct sales); the foregone credit at the module's
+  prices is recorded as ``x_RIN_credit`` [USD/h].
 
 How titer, rate and yield (TRY) are imposed
 -------------------------------------------
@@ -141,17 +162,17 @@ CONFIGURATIONS = (
     dict(config_id='ethanol_cornstover', feedstock='cornstover',
          feedstock_type='lignocellulose', fermentation_mode='batch',
          T_fermentation=305.15, organism='Z. mobilis (co-fermenting)',
-         cell_recycle=False,
+         cell_recycle=False, adapter_version=2,
          module='biorefineries.cellulosic:corn stover ethanol', **_COMMON),
     dict(config_id='ethanol_sugarcane', feedstock='sugarcane',
          feedstock_type='sugar_juice', fermentation_mode='batch',
          T_fermentation=305.15, organism='S. cerevisiae',
-         cell_recycle=True,
+         cell_recycle=True, adapter_version=2,
          module='biorefineries.cane:S1 (YRCP2025)', **_COMMON),
     dict(config_id='ethanol_corn', feedstock='corn',
          feedstock_type='starch', fermentation_mode='batch',
          T_fermentation=305.15, organism='S. cerevisiae',
-         cell_recycle=False,
+         cell_recycle=False, adapter_version=2,
          module='biorefineries.corn:conventional dry-grind', **_COMMON),
 )
 
@@ -631,6 +652,12 @@ class _Sugarcane(_Impl):
         cane.YRCP2025()
         br = cane.Biorefinery('S1')
         self.br = br
+        # Policy credits are outside the MPSP basis of the other biorefineries:
+        # zero the RIN credits the module registers (review D4); the foregone
+        # credit is recorded as x_RIN_credit.
+        self.RIN_prices = {k: float(v) for k, v in bst.stream_prices.items() if 'RIN' in k}
+        for k in self.RIN_prices:
+            bst.stream_prices[k] = 0.
         self.system = sys = br.system
         self.tea = br.tea
         s, u = br.flowsheet.stream, br.flowsheet.unit
@@ -817,8 +844,20 @@ class _Sugarcane(_Impl):
         return {1: 'feedstock', 2: 'conversion', 3: 'separation', 4: 'chp',
                 5: 'facilities', 6: 'facilities', 7: 'wastewater'}.get(n)
 
+    def RIN_credit(self):
+        """Foregone RIN credit [USD/h] at the module's credit prices."""
+        tot = 0.
+        for u in self.system.units:
+            for name, i in (getattr(u, '_outlet_revenue_indices', None) or {}).items():
+                if name in self.RIN_prices:
+                    tot += u.outs[i].F_mass * self.RIN_prices[name]
+            for name, i in (getattr(u, '_inlet_cost_indices', None) or {}).items():
+                if name in self.RIN_prices:
+                    tot -= u.ins[i].F_mass * self.RIN_prices[name]
+        return tot
+
     def extra(self):
-        return dict(x_natural_gas_BT=self.BT.ins[3].F_mass)
+        return dict(x_natural_gas_BT=self.BT.ins[3].F_mass, x_RIN_credit=self.RIN_credit())
 
 
 class _Corn(_Impl):
@@ -962,7 +1001,35 @@ class _Corn(_Impl):
             x_module_IRR_breakeven=self.module_IRR_breakeven,
         )
 
+    def natural_gas_agent_used(self):
+        """Whether any unit uses the 'natural_gas' heating agent."""
+        return any(getattr(hu.agent, 'ID', None) == 'natural_gas'
+                   for u in self.system.units for hu in u.heat_utilities)
+
+    def natural_gas(self):
+        """Purchased natural gas [kg/h] and its flow-weighted unit price
+        [USD/kg]: all natural-gas inlet utilities (DDGS dryer, thermal
+        oxidizer; 'Natural gas' / 'Fuel'), each at its stream's own price if
+        nonzero, else ``bst.stream_prices[name]`` (as BioSTEAM charges it)."""
+        import biosteam as bst
+        from ..harness import _is_natural_gas_utility
+        F = C = 0.
+        seen = set()
+        for u in self.system.units:
+            for name, i in (getattr(u, '_inlet_utility_indices', None) or {}).items():
+                s = u.ins[i]
+                if id(s) in seen or not _is_natural_gas_utility(name, s):
+                    continue
+                seen.add(id(s))
+                p = s.price or bst.stream_prices.get(name, 0.)
+                F += s.F_mass
+                C += s.F_mass * p
+        price = C / F if F > 0 else float(bst.stream_prices.get('Natural gas', nan))
+        return F, price
+
     def parameters(self):
+        import biosteam as bst
+        from biosteam.evaluation.evaluation_tools import triang
         model, params = _default_parameters(self.system, self.feedstock,
                                             exclude_streams=(self.ethanol,))
         canonical = {
@@ -971,7 +1038,23 @@ class _Corn(_Impl):
             ('Electricity', 'Price'): 'p_electricity_price',
             ('TEA', 'Income tax'): 'p_income_tax',
             ('sulfuric_acid', 'Price'): 'p_acid_price',
+            ('Natural gas', 'Price'): 'p_natural_gas_price',
+            ('natural_gas', 'Price'): 'bp_natural_gas_heating_agent_price',
         }
+        # BioSTEAM's default 'natural_gas' heating-agent price has no effect
+        # when no unit uses that agent (the corn module buys its natural gas
+        # as the 'Natural gas' stream utility): drop it then (review D12).
+        if not self.natural_gas_agent_used():
+            params = [p for p in params if _param_key(p) != ('natural_gas', 'Price')]
+        # The purchased natural gas price (DDGS dryer, thermal oxidizer):
+        # BioSTEAM default uncertainty, +-10 % triangular around the baseline.
+        ng0 = float(bst.stream_prices['Natural gas'])
+
+        @model.parameter(element='Natural gas', kind='cost', distribution=triang(ng0),
+                         baseline=ng0, name='Price', units='USD/kg')
+        def set_natural_gas_price(price):
+            bst.stream_prices['Natural gas'] = price
+        params = params + [model.parameters[-1]]
         return _wrap(params, canonical)
 
     _feedstock_units = ('MH101', 'V102', 'MH103', 'M104', 'V105', 'W106', 'V107')
@@ -1104,14 +1187,15 @@ class Adapter(BiorefineryAdapter):
         units = tea.units
         heating, cooling = _heat_duties(self.system.units)
         group = bst.UnitGroup('all', units)
-        ng_streams = [s for s in self.system.feeds if 'natural_gas' in s.ID]
-        BT = getattr(impl, 'BT', None)
-        if BT is None:
-            BT = getattr(impl.br, 'BT', None)
-        if BT is not None and hasattr(BT, 'natural_gas_price'):
-            ng_price = BT.natural_gas_price
+        if isinstance(impl, _Corn):  # no boiler; NG stream utilities (dryer, oxidizer)
+            ng_flow, ng_price = impl.natural_gas()
         else:
-            ng_price = ng_streams[0].price if ng_streams else nan  # corn: dryer NG unpriced (0)
+            ng_streams = [s for s in self.system.feeds if 'natural_gas' in s.ID]
+            ng_flow = sum(s.F_mass for s in ng_streams)
+            BT = getattr(impl, 'BT', None)
+            if BT is None:
+                BT = getattr(impl.br, 'BT', None)
+            ng_price = BT.natural_gas_price
         b = impl.broth
         out = dict(
             MPSP=MPSP,
@@ -1124,7 +1208,7 @@ class Adapter(BiorefineryAdapter):
             heating_duty=heating, cooling_duty=cooling,
             electricity_consumption=group.get_electricity_consumption(),
             electricity_production=group.get_electricity_production(),
-            natural_gas_flow=sum(s.F_mass for s in ng_streams),
+            natural_gas_flow=ng_flow,
             electricity_price=bst.PowerUtility.price,
             natural_gas_price=ng_price,
             GWP=nan, FEC=nan,

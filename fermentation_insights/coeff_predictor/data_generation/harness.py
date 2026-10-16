@@ -291,15 +291,38 @@ def _get_chemicals(adapter):
         return None
 
 
-def collect_natural_gas(system) -> dict:
+def _is_natural_gas_utility(name, stream) -> bool:
+    """Whether an inlet stream utility is natural gas: named like 'natural
+    gas', BioSTEAM's boiler fuel (``BoilerTurbogenerator`` registers its
+    natural gas as ``define_utility('Fuel', ...)``; its ``natural_gas_price``
+    is an alias of ``bst.stream_prices['Fuel']``), or a utility stream that is
+    >= 50 wt% CH4."""
+    lname = str(name).lower()
+    if ('natural' in lname and 'gas' in lname) or lname == 'fuel':
+        return True
+    try:
+        F = stream.F_mass
+        return F > 0 and 'CH4' in stream.chemicals and stream.imass['CH4'] / F >= 0.5
+    except Exception:
+        return False
+
+
+def collect_natural_gas(system, prices=None) -> dict:
     """Natural gas flows [kg/h] and costs [USD/h] split by BioSTEAM cost pool.
 
-    BioSTEAM charges a stream registered as an inlet *utility* named like
-    'natural gas' at ``bst.stream_prices[name]`` (TEA utility cost) when the
-    stream itself has no price; otherwise its own price is a material cost.
-    Unregistered feeds that are mostly methane are material costs too.
+    BioSTEAM charges a stream registered as an inlet *utility* at
+    ``bst.stream_prices[name]`` (TEA utility cost) when the stream itself has
+    no price; otherwise its own price is a material cost. Natural-gas
+    utilities are those of :func:`_is_natural_gas_utility` (incl. the boiler's
+    'Fuel'; harness v2 missed it and booked the boiler gas as an unpriced
+    material feed -- fixed in v3, see ``coeff_predictor/data_patches.py``).
+    They are marked as seen before the feeds pass, in which unregistered
+    feeds that are mostly methane are material costs. ``prices`` defaults to
+    ``bst.stream_prices``.
     """
-    import biosteam as bst
+    if prices is None:
+        import biosteam as bst
+        prices = getattr(bst, 'stream_prices', {}) or {}
     d = dict(ng_flow_utility=0., ng_cost_utility=0.,
              ng_flow_material=0., ng_cost_material=0.)
     seen = set()
@@ -307,17 +330,14 @@ def collect_natural_gas(system) -> dict:
         units = getattr(system, 'cost_units', None) or system.units
     except Exception:
         return {k: float('nan') for k in d}
-    prices = getattr(bst, 'stream_prices', {}) or {}
     for u in units:
         idx = getattr(u, '_inlet_utility_indices', {}) or {}
         for name, i in idx.items():
-            if 'natural' not in name.lower() or 'gas' not in name.lower():
-                continue
             try:
                 s = u.ins[i]
             except Exception:
                 continue
-            if id(s) in seen:
+            if id(s) in seen or not _is_natural_gas_utility(name, s):
                 continue
             seen.add(id(s))
             F = _safe(lambda: s.F_mass, 0.)
