@@ -142,11 +142,17 @@ def _numeric_area(ID):
     return int(digits[0]) if digits else None
 
 
-def _make_unit_groups(units, assign, group_class=None):
+def _make_unit_groups(tea, system, assign, group_class=None):
+    """One UnitGroup per canonical area holding the TEA units plus the
+    zero-cost system units (mixers, splitters, WWT internals) so that every
+    system feed is attributed to an area."""
     import biosteam as bst
     group_class = group_class or bst.UnitGroup
     groups = {a: [] for a in CANONICAL_AREAS}
     unassigned = []
+    tea_units = set(tea.units)
+    units = list(tea.units) + [u for u in system.units
+                               if u not in tea_units and not u.purchase_cost]
     for u in units:
         a = assign(u)
         if a is None:
@@ -376,7 +382,7 @@ class _Cornstover(_Impl):
         # maximum sugar concentration (no saccharification water)
         V_min = mb['V_broth'] - mb['W_sacc'] / 1000.
         self.S_max = S_tot / V_min  # kg/m3 = g/L
-        self.unit_groups, self.unassigned = _make_unit_groups(self.tea.units, self._assign)
+        self.unit_groups, self.unassigned = _make_unit_groups(self.tea, self.system, self._assign)
 
     def _snapshot(self):
         S = self._sugars()
@@ -583,9 +589,9 @@ class _Cornstover(_Impl):
 class _Sugarcane(_Impl):
     name = 'sugarcane'
     #: Maximum fermentable sugar in the fermentor feed [g glucose-eq./L]
-    #: (very-high-gravity limit; module baseline ~245 g/L). The module's own
+    #: (very-high-gravity limit; module baseline ~300 g/L). The module's own
     #: limit (first-effect evaporation V <= 0.5) corresponds to >1000 g/L.
-    S_feed_max = 300.
+    S_feed_max = 350.
 
     def load(self):
         import biosteam as bst
@@ -620,7 +626,7 @@ class _Sugarcane(_Impl):
         # maximum sugar concentration [g/L broth] at the feed limit S_feed_max
         mb = self.module_baseline
         self.S_max = self.S_feed_max * (mb['S'] / mb['V_broth']) / mb['S_feed']
-        self.unit_groups, self.unassigned = _make_unit_groups(self.tea.units, self._assign)
+        self.unit_groups, self.unassigned = _make_unit_groups(self.tea, self.system, self._assign)
         self._needs_reset = False
 
     def _sugar_fed(self):
@@ -805,7 +811,7 @@ class _Corn(_Impl):
         dW = out.imass['Water'] - W_min_total
         self.S_max = mb['S'] / (mb['V_broth'] - dW / 1000.)
         self.unit_groups, self.unassigned = _make_unit_groups(
-            self.tea.units, self._assign, _lang_factor_group_class(self.tea))
+            self.tea, self.system, self._assign, _lang_factor_group_class(self.tea))
 
     def _dry_corn(self):
         f = self.feedstock
