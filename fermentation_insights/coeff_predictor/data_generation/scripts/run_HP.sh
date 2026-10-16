@@ -32,7 +32,14 @@ export MPLBACKEND=Agg
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMBA_NUM_THREADS=1
 
 MOD=fermentation_insights.coeff_predictor.data_generation.run
-mapfile -t CONFIGS < <("$ENV/bin/python" -m $MOD --adapter HP --out "$OUT" --list-configs)
+# CONFIGS_OVERRIDE="cfg1 cfg2 ..." restricts the run to those configurations
+# (e.g. to add workers on configurations no running worker will touch);
+# WORKER_OFFSET shifts the worker/log index so existing logs are not reused.
+if [ -n "${CONFIGS_OVERRIDE:-}" ]; then
+    read -ra CONFIGS <<< "$CONFIGS_OVERRIDE"
+else
+    mapfile -t CONFIGS < <("$ENV/bin/python" -m $MOD --adapter HP --out "$OUT" --list-configs)
+fi
 
 for ((k = 0; k < N_WORKERS; k++)); do
     mine=()
@@ -40,7 +47,7 @@ for ((k = 0; k < N_WORKERS; k++)); do
     if [ ${#mine[@]} -eq 0 ]; then
         echo "worker $k: no configurations"; continue
     fi
-    LOG="$LOG_DIR/campaign_HP_$k.log"
+    LOG="$LOG_DIR/campaign_HP_$((k + ${WORKER_OFFSET:-0})).log"
     nohup nice -n 5 bash -c '
         MOD=$1; ENV=$2; OUT=$3; N_RANDOM=$4; N_PROD=$5; SEED=$6; EXTRA_ARGS=$7; shift 7
         for cid in "$@"; do
