@@ -163,3 +163,4 @@ cython_debug/
 
 # coeff_predictor large/intermediate data
 fermentation_insights/coeff_predictor/data/raw/
+fermentation_insights/coeff_predictor/data/processed/

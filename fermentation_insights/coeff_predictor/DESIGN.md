@@ -36,8 +36,10 @@ costs and capital, so
     R_i = Σ_c  E_c,i  +  φ·I_i  +  F  +  ε_i
 
 where `E_c,i` are annual operating cost channels measured directly from the
-simulation, `I_i` installed equipment cost, `φ` an effective capital charge
-factor (annualized capital recovery at the IRR incl. taxes, working capital and
+simulation, `I_i` the fixed capital investment (TEA `FCI`; installed equipment
+cost is used only if FCI is unavailable — FCI/installed varies by 1.69–1.82
+across TY points, and regressing on installed cost biased `F`), `φ` an
+effective capital charge factor per USD of FCI (annualized capital recovery at the IRR incl. taxes, working capital and
 FCI-proportional fixed costs) and `F` fixed annual costs (labor etc.). `φ` and
 `F` are obtained per sample by least squares across the sample's TY points
 (financial parameters are constant within a sample); `ε_i` is the closure
@@ -53,7 +55,7 @@ Channels (contribution to MPSP = channel USD/yr ÷ (F_final·h)):
 | `neutralization` | base for pH control + acid for acidulation | no |
 | `materials_other` | all other purchased materials (enzymes, nutrients, catalysts, solvents, boiler chemicals …) | no |
 | `utilities_other` | non-electric utility agents (net, after boiler offsets) | no |
-| `capex_upstream` | φ × installed cost of feedstock + conversion areas | no |
+| `capex_upstream` | φ × FCI × (installed-cost share of feedstock + conversion areas) | no |
 | `capex_fermentation` | φ × installed cost of fermentation | no |
 | `capex_downstream` | φ × installed cost of separation + upgrading | no |
 | `capex_wastewater` | φ × installed cost of wastewater | no |
@@ -61,6 +63,11 @@ Channels (contribution to MPSP = channel USD/yr ÷ (F_final·h)):
 | `fixed` | F (labor etc.) | no |
 | `coproducts` | − coproduct sales | no |
 | `closure` | ε (should be small) | no |
+
+(The other capex channels are split by installed-cost share likewise.
+Natural gas is a stream utility in current BioSTEAM, i.e. part of TEA
+`utility_cost`; the decomposition detects per sample whether it sits in the
+material or the utility pool so that it is never double counted.)
 
 Each channel's contribution `m_c(y, t)` is fitted with the same OLS design
 matrix `[1, 1/y, 1/t, 1/(y·t)]` as the total; by linearity of OLS the channel
