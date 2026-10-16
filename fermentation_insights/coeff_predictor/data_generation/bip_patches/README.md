@@ -20,6 +20,6 @@ git am /path/to/fi-HP.patch
 | fi-TAL | 3 | API ports via `TAL/_bst_compat.py`; restores pump flow linking, feed-scaled fire-water tank, autorename default, upgrading-reactor volume basis; CaSO4 locked as solid |
 | fi-succinic | 1 | StirredTankReactor import; `autorename=False`; thermosteam `trim_cache` workaround; shared cellulosic/corn fixes; `load_yield` cell-mass conversion fix above inflection |
 | fi-lactic | 7 | titer specifications moved onto units (nested-system specs skipped in biosteam 2.54); solver accuracy and SHF fixes; parameter fix for acetic acid yield; pandas 3 |
-| fi-ethanol | 1 | cellulosic `size_batch` argument order (fermenter sizing); corn SSF `_N_ins = 2` |
+| fi-ethanol | 2 | cellulosic `size_batch` argument order (fermenter sizing); corn SSF `_N_ins = 2`; corn SSF mass-conserving yeast growth (`Glucose -> Yeast` by weight, as `bst.Fermentation`) |
 | fi-oxalic | 1 | pandas 3; `Model(metrics=...)` → `indicators`; negative-flow guard in a polishing filter; shared HP/cellulosic fixes |
 | fi-isobutanol | 2 | nskinetics pin update; beer-column Rmin guard fix |
