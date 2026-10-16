@@ -1,0 +1,331 @@
+From bc9bba0ba19205a5c71e7fe344cf33729543d928 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 10:14:34 +0000
+Subject: [PATCH] oxalic: port to biosteam 2.54 / thermosteam 0.54.2 / pandas 3
+
+- oxalic/units.py, HP/units.py (imported by oxalic's process specification):
+  StirredTankReactor is no longer exported by biosteam.units; BatchBioreactor
+  `V` keyword renamed `V_max` (same patch as fi-HP).
+- oxalic/process_areas.py: positional Series indexing via .iloc (pandas 3).
+- oxalic/models/model_utils.py: Model(metrics=...) renamed `indicators`.
+- cellulosic create_facilities: FireWaterTank has no streams in biosteam >= 2.52;
+  CoolingTower blowdown is outs[0] (CT-1 is now evaporation) (same patch as
+  fi-succinic).
+- oxalic sugarcane system: when F301 evaporates nothing, the wastewater is only
+  the AceticAcid placeholder and the high-rate WWT polishing filter (U503)
+  returns slightly negative water, giving complex RO costs that break
+  solve_price; clip negative U503 outlet flows. Guard the TEA-breakdown figure
+  (UnitGroup.df_from_groups fails with pandas 3 read-only arrays).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/HP/units.py                     |  11 +-
+ .../cellulosic/systems/cellulosic_ethanol.py  |  23 ++-
+ biorefineries/oxalic/models/model_utils.py    |   8 +-
+ biorefineries/oxalic/process_areas.py         |   4 +-
+ .../systems/sugarcane/system_sc_broth.py      | 138 ++++++++++--------
+ biorefineries/oxalic/units.py                 |  11 +-
+ 6 files changed, 118 insertions(+), 77 deletions(-)
+
+diff --git a/biorefineries/HP/units.py b/biorefineries/HP/units.py
+index 718a8afe..036f2541 100644
+--- a/biorefineries/HP/units.py
++++ b/biorefineries/HP/units.py
+@@ -26,7 +26,11 @@ from warnings import warn
+ from flexsolve import aitken_secant
+ from biosteam import Unit
+ from biosteam.units import Flash, HXutility, Mixer, MixTank, Pump, \
+-    SolidsSeparator, StorageTank, LiquidsSplitSettler, StirredTankReactor, BatchBioreactor, Compressor
++    SolidsSeparator, StorageTank, LiquidsSplitSettler, BatchBioreactor, Compressor
++try:
++    from biosteam.units import StirredTankReactor
++except ImportError: # biosteam >= 2.52: alias only in abstract_stirred_tank_reactor
++    from biosteam.units.abstract_stirred_tank_reactor import StirredTankReactor
+ from biosteam.units.decorators import cost
+ from thermosteam import Stream, MultiStream
+ from biorefineries.HP.process_settings import price
+@@ -893,7 +897,10 @@ class BatchCoFermentation(BatchBioreactor):
+                  aeration_rate_basis='DO saturation basis', # 'fixed rate basis' or 'DO saturation basis'
+                  ferm_ratio = 1.
+                  ):
+-        BatchBioreactor._init(self,  T=T, P=P, tau=tau, V=V)
++        try: # biosteam >= 2.53.5 renamed V (maximum vessel volume) to V_max
++            BatchBioreactor._init(self,  T=T, P=P, tau=tau, V_max=V)
++        except TypeError:
++            BatchBioreactor._init(self,  T=T, P=P, tau=tau, V=V)
+         
+         self.ferm_ratio = ferm_ratio
+         self.aeration_rate_basis = aeration_rate_basis
+diff --git a/biorefineries/cellulosic/systems/cellulosic_ethanol.py b/biorefineries/cellulosic/systems/cellulosic_ethanol.py
+index 7910e137..0f89fc0b 100644
+--- a/biorefineries/cellulosic/systems/cellulosic_ethanol.py
++++ b/biorefineries/cellulosic/systems/cellulosic_ethanol.py
+@@ -43,9 +43,10 @@ def create_facilities(
+     
+     bst.facilities.ChilledWaterPackage(area or 'CWP')
+     CT = bst.facilities.CoolingTower(area or 'CT')
++    CT_blowdown = CT.blowdown_water # CT-1 before biosteam 2.53 (CoolingTower outs changed)
+     
+     process_water_streams = (*process_water_streams,
+-                              BT-1, CT-1)
++                              BT-1, CT_blowdown)
+             
+     makeup_water = Stream('makeup_water', price=0.00025353160151260924)
+     
+@@ -53,7 +54,7 @@ def create_facilities(
+         ins=(RO_water, '', recycle_process_water, makeup_water),
+         outs=(),
+         thermo=None,
+-        makeup_water_streams=(BT-1, CT-1),
++        makeup_water_streams=(BT-1, CT_blowdown),
+         process_water_streams=process_water_streams,
+     )
+     
+@@ -69,15 +70,21 @@ def create_facilities(
+     @ADP.add_specification(run=True)
+     def adjust_plant_air(): plant_air.imass['N2'] = feedstock.F_mass * ADP.plant_air_over_feedstock
+         
+-    fire_water = Stream('fire_water', Water=8343, units='kg/hr')
+-    FT = bst.FireWaterTank(area or 'FT', fire_water)
+-    FT.fire_water_over_feedstock = 0.08
+-    @FT.add_specification(run=True)
+-    def adjust_fire_water(): fire_water.imass['Water'] = feedstock.F_mass * FT.fire_water_over_feedstock
++    if bst.FireWaterTank._N_ins == 0: # biosteam >= 2.53: no inlet; flow rate is an attribute
++        FT = bst.FireWaterTank(area or 'FT')
++        FT.fire_water_over_feedstock = 0.08
++        @FT.add_specification(run=True)
++        def adjust_fire_water(): FT.fire_water_flow_rate = feedstock.F_mass * FT.fire_water_over_feedstock
++    else:
++        fire_water = Stream('fire_water', Water=8343, units='kg/hr')
++        FT = bst.FireWaterTank(area or 'FT', fire_water)
++        FT.fire_water_over_feedstock = 0.08
++        @FT.add_specification(run=True)
++        def adjust_fire_water(): fire_water.imass['Water'] = feedstock.F_mass * FT.fire_water_over_feedstock
+     
+     ### Complete system
+     if blowdown_to_wastewater:
+-        bst.BlowdownMixer(area or 'blowdown_mixer', (BT-1, CT-1), blowdown_to_wastewater)
++        bst.BlowdownMixer(area or 'blowdown_mixer', (BT-1, CT_blowdown), blowdown_to_wastewater)
+ 
+ @bst.SystemFactory(
+     ID='cornstover_sys',
+diff --git a/biorefineries/oxalic/models/model_utils.py b/biorefineries/oxalic/models/model_utils.py
+index d7352638..91270c23 100644
+--- a/biorefineries/oxalic/models/model_utils.py
++++ b/biorefineries/oxalic/models/model_utils.py
+@@ -48,8 +48,12 @@ class EasyInputModel(Model):
+     def __init__(self, system, metrics=None, specification=None, 
+                  parameters=None, retry_evaluation=True, exception_hook='warn',
+                  namespace_dict={}):
+-        Model.__init__(self, system=system, metrics=metrics, specification=specification, 
+-                     parameters=parameters, retry_evaluation=retry_evaluation, exception_hook=exception_hook)
++        try:
++            Model.__init__(self, system=system, metrics=metrics, specification=specification,
++                         parameters=parameters, retry_evaluation=retry_evaluation, exception_hook=exception_hook)
++        except TypeError: # biosteam >= 2.52 renamed `metrics` to `indicators`
++            Model.__init__(self, system=system, indicators=metrics, specification=specification,
++                         parameters=parameters, retry_evaluation=retry_evaluation, exception_hook=exception_hook)
+         self.namespace_dict = namespace_dict
+         # globals().update(namespace_dict)
+     
+diff --git a/biorefineries/oxalic/process_areas.py b/biorefineries/oxalic/process_areas.py
+index 572172f7..83f63148 100644
+--- a/biorefineries/oxalic/process_areas.py
++++ b/biorefineries/oxalic/process_areas.py
+@@ -309,8 +309,8 @@ def create_oxalic_broth_cell_gypsum_separation_process(ins, outs, fermentation_r
+     
+     # Remove solids from fermentation broth, modified from the pressure filter in Humbird et al.
+     S401_index = [splits_df.index[0]] + splits_df.index[2:].to_list()
+-    S401_cell_mass_split = [splits_df['stream_571'][0]] + splits_df['stream_571'][2:].to_list()
+-    S401_filtrate_split = [splits_df['stream_535'][0]] + splits_df['stream_535'][2:].to_list()
++    S401_cell_mass_split = [splits_df['stream_571'].iloc[0]] + splits_df['stream_571'].iloc[2:].to_list()
++    S401_filtrate_split = [splits_df['stream_535'].iloc[0]] + splits_df['stream_535'].iloc[2:].to_list()
+     S401 = bst.units.SolidsCentrifuge('S401', ins=(fermentation_broth,), outs=(cell_mass, 'S401_l'),
+                                 moisture_content=0.50,
+                                 split=find_split(S401_index,
+diff --git a/biorefineries/oxalic/systems/sugarcane/system_sc_broth.py b/biorefineries/oxalic/systems/sugarcane/system_sc_broth.py
+index f7f507e8..2a17b4f2 100644
+--- a/biorefineries/oxalic/systems/sugarcane/system_sc_broth.py
++++ b/biorefineries/oxalic/systems/sugarcane/system_sc_broth.py
+@@ -351,7 +351,18 @@ def create_oxalic_sys(ins, outs):
+         # skip_AeF=True,
+         )
+     bst.settings.thermo.chemicals.set_synonym('BoilerChems', 'DAP')
+-    
++
++    # When F301 evaporates nothing (titer reached by dilution), the wastewater is
++    # only the small AceticAcid placeholder added in M501; with biosteam >= 2.53 the
++    # polishing filter's growth/decay reactions then yield slightly negative water
++    # flows (complex-valued RO costs). Clip negative outlet flows to zero.
++    U503_clip = wastewater_treatment_sys.flowsheet.unit.U503
++    @U503_clip.add_specification(run=False)
++    def U503_clip_negative_flows_spec():
++        U503_clip._run()
++        for i in U503_clip.outs:
++            if (i.mol < 0.).any(): i.mol[i.mol < 0.] = 0.
++
+     # U503 = u.U503
+     # @U503.add_specification(run=True)
+     # def U503_spec():
+@@ -777,63 +788,68 @@ for i in unit_groups:
+             j.units = r"$\mathrm{MM\$}$" + '\u00b7y\u207b\u00b9'
+ ######
+ 
+-df_TEA_breakdown = bst.UnitGroup.df_from_groups(
+-    unit_groups, fraction=True,
+-    scale_fractions_to_positive_values=True,
+-)
+-
+-# totals=[sum([ui.metrics[i]() for ui in unit_groups])
+-#         for i in range(len(unit_groups[0].metrics))]
+-
+-totals=[]
+-metrics = unit_groups[0].metrics
+-for i in range(len(metrics)):
+-    curr_total = 0.
+-    for ui in unit_groups:
+-        curr_total += ui.metrics[i]()
+-    if metrics[i].name=='Operating cost':
+-        # change total operating cost from $/h to MM$/y
+-        curr_total *= system.TEA.operating_hours/1e6
+-    totals.append(curr_total)
+-
+-
+-
+-
+-
+-contourplots.stacked_bar_plot(dataframe=df_TEA_breakdown, 
+-                 y_ticks = [-40, -20, 0, 20, 40, 60, 80, 100],
+-                 y_label=r"$\bfCost$" + " " + r"$\bfand$" + " " +  r"$\bfUtility$" + " " +  r"$\bfBreakdown$", 
+-                 y_units = "%", 
+-                 colors=['#7BBD84', 
+-                         '#E58835', 
+-                         '#F7C652', 
+-                         '#63C6CE', 
+-                         '#F8858A', 
+-                         '#94948C', 
+-                         '#734A8C', 
+-                         '#D1C0E1', 
+-                         '#648496', 
+-                         # '#B97A57', 
+-                         '#D1C0E1', 
+-                         # '#F8858A', 
+-                           '#b00000', 
+-                         # '#63C6CE', 
+-                         '#94948C', 
+-                         # '#7BBD84', 
+-                         '#b6fcd5', 
+-                         '#E58835', 
+-                         # '#648496',
+-                         '#b6fcd5',
+-                         ],
+-                 hatch_patterns=('\\', '//', '|', 'x',),
+-                 filename='AA_system_methanol_evap_neutralization' + '_TEA_breakdown_stacked_bar_plot',
+-                 n_minor_ticks=4,
+-                 fig_height=5.5*1.1777*0.94*1.0975,
+-                 fig_width=10,
+-                 show_totals=True,
+-                 totals=totals,
+-                 sig_figs_for_totals=3,
+-                 units_list=[i.units for i in unit_groups[0].metrics],
+-                 totals_label_text=r"$\bfsum:$",
+-                 rotate_xticks=45.,
+-                 )
++# Figure only; guarded since bst.UnitGroup.df_from_groups fails with pandas >= 3
++# (read-only arrays under copy-on-write) and the figure is not needed to use the system.
++try:
++    df_TEA_breakdown = bst.UnitGroup.df_from_groups(
++        unit_groups, fraction=True,
++        scale_fractions_to_positive_values=True,
++    )
++
++    # totals=[sum([ui.metrics[i]() for ui in unit_groups])
++    #         for i in range(len(unit_groups[0].metrics))]
++
++    totals=[]
++    metrics = unit_groups[0].metrics
++    for i in range(len(metrics)):
++        curr_total = 0.
++        for ui in unit_groups:
++            curr_total += ui.metrics[i]()
++        if metrics[i].name=='Operating cost':
++            # change total operating cost from $/h to MM$/y
++            curr_total *= system.TEA.operating_hours/1e6
++        totals.append(curr_total)
++
++
++
++
++
++    contourplots.stacked_bar_plot(dataframe=df_TEA_breakdown, 
++                     y_ticks = [-40, -20, 0, 20, 40, 60, 80, 100],
++                     y_label=r"$\bfCost$" + " " + r"$\bfand$" + " " +  r"$\bfUtility$" + " " +  r"$\bfBreakdown$", 
++                     y_units = "%", 
++                     colors=['#7BBD84', 
++                             '#E58835', 
++                             '#F7C652', 
++                             '#63C6CE', 
++                             '#F8858A', 
++                             '#94948C', 
++                             '#734A8C', 
++                             '#D1C0E1', 
++                             '#648496', 
++                             # '#B97A57', 
++                             '#D1C0E1', 
++                             # '#F8858A', 
++                               '#b00000', 
++                             # '#63C6CE', 
++                             '#94948C', 
++                             # '#7BBD84', 
++                             '#b6fcd5', 
++                             '#E58835', 
++                             # '#648496',
++                             '#b6fcd5',
++                             ],
++                     hatch_patterns=('\\', '//', '|', 'x',),
++                     filename='AA_system_methanol_evap_neutralization' + '_TEA_breakdown_stacked_bar_plot',
++                     n_minor_ticks=4,
++                     fig_height=5.5*1.1777*0.94*1.0975,
++                     fig_width=10,
++                     show_totals=True,
++                     totals=totals,
++                     sig_figs_for_totals=3,
++                     units_list=[i.units for i in unit_groups[0].metrics],
++                     totals_label_text=r"$\bfsum:$",
++                     rotate_xticks=45.,
++                     )
++except Exception as e:
++    print(f'TEA breakdown figure skipped ({type(e).__name__}: {e})')
+diff --git a/biorefineries/oxalic/units.py b/biorefineries/oxalic/units.py
+index e12cd045..ea46822f 100644
+--- a/biorefineries/oxalic/units.py
++++ b/biorefineries/oxalic/units.py
+@@ -34,7 +34,11 @@ from warnings import warn
+ from flexsolve import aitken_secant
+ from biosteam import Unit
+ from biosteam.units import Flash, HXutility, Mixer, MixTank, Pump, \
+-    SolidsSeparator, StorageTank, LiquidsSplitSettler, StirredTankReactor, BatchBioreactor, Compressor
++    SolidsSeparator, StorageTank, LiquidsSplitSettler, BatchBioreactor, Compressor
++try:
++    from biosteam.units import StirredTankReactor
++except ImportError: # biosteam >= 2.52: alias only in abstract_stirred_tank_reactor
++    from biosteam.units.abstract_stirred_tank_reactor import StirredTankReactor
+ from biosteam.units.decorators import cost
+ from thermosteam import Stream, MultiStream
+ from biorefineries.oxalic.process_settings import price
+@@ -900,7 +904,10 @@ class BatchCoFermentation(BatchBioreactor):
+                  aeration_rate_basis='DO saturation basis', # 'fixed rate basis' or 'DO saturation basis'
+                  ferm_ratio = 1.
+                  ):
+-        BatchBioreactor._init(self,  T=T, P=P, tau=tau, V=V)
++        try: # biosteam >= 2.53.5 renamed V (maximum vessel volume) to V_max
++            BatchBioreactor._init(self,  T=T, P=P, tau=tau, V_max=V)
++        except TypeError:
++            BatchBioreactor._init(self,  T=T, P=P, tau=tau, V=V)
+         
+         self.ferm_ratio = ferm_ratio
+         self.aeration_rate_basis = aeration_rate_basis
+-- 
+2.43.0
+

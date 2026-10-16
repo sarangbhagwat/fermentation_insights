@@ -1,0 +1,406 @@
+From 7b766fc6a2cced6436238b8fabee8dd001f8face Mon Sep 17 00:00:00 2001
+From: fi-TAL agent <sarangbhagwat.developer@gmail.com>
+Date: Fri, 16 Oct 2026 10:03:23 +0000
+Subject: [PATCH 1/3] TAL: port to biosteam 2.54 / thermosteam 0.54 (import &
+ simulate)
+
+- units.py: import StirredTankReactor from abstract_stirred_tank_reactor when
+  no longer exported by biosteam.units; pass V as V_max to BatchBioreactor
+  (renamed; identical vessel sizing).
+- process_areas.py: positional Series access via .iloc (pandas >= 3).
+- solubility model: OS-independent data file path.
+- chemicals_data.py: give CaSO4 a liquid molar volume (= solid) since sparse
+  flow vectors can hold explicit zero entries.
+- new _bst_compat.py (imported by TAL/__init__): restore 1-inlet,
+  feed-scaled FireWaterTank used by cellulosic.create_facilities; restore
+  the old flow+phase linking of Pump inlet/outlet (needed for CSL/DAP
+  fresh-feed flows, i.e., their costs, to follow fermenter demand).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/TAL/__init__.py                 |  1 +
+ biorefineries/TAL/_bst_compat.py              | 62 +++++++++++++++++++
+ biorefineries/TAL/chemicals_data.py           |  4 ++
+ ...n_water_one_parameter_van_laar_activity.py |  5 +-
+ biorefineries/TAL/process_areas.py            |  8 +--
+ biorefineries/TAL/units.py                    | 11 +++-
+ 6 files changed, 83 insertions(+), 8 deletions(-)
+ create mode 100644 biorefineries/TAL/_bst_compat.py
+
+diff --git a/biorefineries/TAL/__init__.py b/biorefineries/TAL/__init__.py
+index 154af55c..e5e98267 100644
+--- a/biorefineries/TAL/__init__.py
++++ b/biorefineries/TAL/__init__.py
+@@ -35,6 +35,7 @@ Processes:
+ """
+ 
+ #%%
++from . import _bst_compat # shims for newer BioSTEAM versions (no-op on older ones)
+ from .models import load
+ 
+ def load_TAL_model(mode='A'):
+diff --git a/biorefineries/TAL/_bst_compat.py b/biorefineries/TAL/_bst_compat.py
+new file mode 100644
+index 00000000..ac902323
+--- /dev/null
++++ b/biorefineries/TAL/_bst_compat.py
+@@ -0,0 +1,62 @@
++# -*- coding: utf-8 -*-
++# Bioindustrial-Park: BioSTEAM's Premier Biorefinery Models and Results
++# Copyright (C) 2021-, Sarang Bhagwat <sarangb2@illinois.edu>
++#
++# This module is under the UIUC open-source license. See
++# github.com/BioSTEAMDevelopmentGroup/biosteam/blob/master/LICENSE.txt
++# for license details.
++"""
++Compatibility shims that let the TAL biorefineries (written for
++biosteam ~2.42 / thermosteam 0.42) run on newer BioSTEAM releases
++(tested with biosteam 2.54 / thermosteam 0.54) without changing any process
++assumptions. Each shim is a no-op on the BioSTEAM versions the TAL module was
++originally written for.
++"""
++import biosteam as bst
++
++__all__ = ()
++
++# %% FireWaterTank
++# Newer biosteam's FireWaterTank dropped its stream inlet (_N_ins = 0) and sizes
++# from a fixed `fire_water_flow_rate` attribute. biorefineries.cellulosic's
++# create_facilities (used by every TAL system) still constructs it as
++# `FireWaterTank('FT', fire_water)` and attaches a specification that scales
++# that inlet with the feedstock flow (0.08 kg/kg). Restore the original
++# 1-inlet, inlet-sized behavior (as done for biorefineries.isobutanol).
++
++if getattr(bst.FireWaterTank, '_N_ins', 1) == 0 \
++        and not getattr(bst.FireWaterTank, '_TAL_compat', False):
++    class _FireWaterTank_compat(bst.FireWaterTank):
++        _TAL_compat = True
++        ticket_name = 'FWT'
++        _N_ins = 1
++        _N_outs = 0
++        def _run(self): pass # stored fire water; no stream transformation
++        def _design(self):
++            self.design_results['Flow rate'] = self.ins[0].F_mass
++    _FireWaterTank_compat.__name__ = 'FireWaterTank'
++    bst.FireWaterTank = bst.facilities.FireWaterTank = _FireWaterTank_compat
++
++# %% Pump inlet/outlet flow linking
++# In the BioSTEAM versions TAL was written for, `Pump` was decorated with
++# `static_flow_and_phase`, which linked the material flow rates (and phase) of
++# its inlet and outlet (but not T and P). TAL relies on this to propagate flow
++# rates set by downstream units back to the priced fresh-feed streams (e.g., the
++# CSL and DAP loadings set by the fermenter R302 through CSL_fresh -> T601 ->
++# T601_P -> R302); without it, these feeds remain empty and their costs and
++# impacts are silently dropped. Newer biosteam no longer links pump streams, so
++# restore the old (flow and phase only) link.
++
++def _load_pump_flow_and_phase_links(self):
++    s_in = self._ins[0]
++    s_out = self._outs[0]
++    try:
++        if isinstance(s_in._imol, s_out._imol.__class__):
++            s_out._imol = s_in._imol # shares flow rates and phase; T and P remain independent
++    except Exception:
++        pass
++
++if (not getattr(bst.Pump, '_stream_link_options', None) # attribute of older biosteam versions
++    and not bst.Pump._link_streams
++    and bst.Pump._load_stream_links is bst.Unit._load_stream_links):
++    bst.Pump._load_stream_links = _load_pump_flow_and_phase_links
+diff --git a/biorefineries/TAL/chemicals_data.py b/biorefineries/TAL/chemicals_data.py
+index 1fda89bf..3ef6d016 100644
+--- a/biorefineries/TAL/chemicals_data.py
++++ b/biorefineries/TAL/chemicals_data.py
+@@ -562,6 +562,10 @@ P4O10 = chemical_database('P4O10', phase='s', Hf=-713.2*_cal2joule)
+ # Ash = chemical_database('Ash', search_ID='CaO', phase='s', Hf=-151688*_cal2joule,
+ #                         HHV=0, LHV=0)
+ CaSO4 = chemical_database('CaSO4')
++# CaSO4 has no liquid molar volume model. Newer thermosteam versions may keep
++# explicit zero-flow entries in (sparse) stream flow vectors, so mixture volumes
++# can evaluate it even when no CaSO4 is present; use its solid molar volume.
++if not CaSO4.V.l: CaSO4.V.l.add_method(CaSO4.V.s(298.15, 101325.))
+ # This is to copy the solid state of Xylose,
+ # cannot directly use Xylose as Xylose is locked at liquid state now
+ Tar = chemical_copied('Tar', Xylose, phase_ref='s')
+diff --git a/biorefineries/TAL/models/solubility/fit_TAL_solubility_in_water_one_parameter_van_laar_activity.py b/biorefineries/TAL/models/solubility/fit_TAL_solubility_in_water_one_parameter_van_laar_activity.py
+index 71f4e636..78b2d869 100644
+--- a/biorefineries/TAL/models/solubility/fit_TAL_solubility_in_water_one_parameter_van_laar_activity.py
++++ b/biorefineries/TAL/models/solubility/fit_TAL_solubility_in_water_one_parameter_van_laar_activity.py
+@@ -17,10 +17,11 @@ import pandas as pd
+ 
+ #%% Load experimental 
+ 
+-TAL_filepath = TAL.__file__.replace('\\__init__.py', '')
++import os
++TAL_filepath = os.path.dirname(TAL.__file__) # OS-independent (was Windows-only path handling)
+ 
+ 
+-experimental_data_df = pd.read_excel(TAL_filepath+'\\models\\solubility\\'+'experimental_data_TAL_solubility_in_water.xlsx')
++experimental_data_df = pd.read_excel(os.path.join(TAL_filepath, 'models', 'solubility', 'experimental_data_TAL_solubility_in_water.xlsx'))
+ 
+ experimental_Ts = 273.15 + np.array(list(experimental_data_df['Temperature (degrees C)']))
+ experimental_solubilities = np.array(list(experimental_data_df['TAL solubility in water (g-TAL/L-water)']))
+diff --git a/biorefineries/TAL/process_areas.py b/biorefineries/TAL/process_areas.py
+index 550dc505..f0616301 100644
+--- a/biorefineries/TAL/process_areas.py
++++ b/biorefineries/TAL/process_areas.py
+@@ -500,8 +500,8 @@ def create_TAL_separation_solubility_exploit_process(ins, outs,):
+     
+     # # Remove solids from fermentation broth, modified from the pressure filter in Humbird et al.
+     S401_index = [splits_df.index[0]] + splits_df.index[2:].to_list()
+-    S401_cell_mass_split = [splits_df['stream_571'][0]] + splits_df['stream_571'][2:].to_list()
+-    S401_filtrate_split = [splits_df['stream_535'][0]] + splits_df['stream_535'][2:].to_list()
++    S401_cell_mass_split = [splits_df['stream_571'].iloc[0]] + splits_df['stream_571'].iloc[2:].to_list()
++    S401_filtrate_split = [splits_df['stream_535'].iloc[0]] + splits_df['stream_535'].iloc[2:].to_list()
+     S401 = bst.units.SolidsCentrifuge('S401', ins=U402-0, outs=(S401_solid, 'S401_liquid_fraction'),
+                                 # moisture_content=0.50,
+                                 split=find_split(S401_index,
+@@ -708,8 +708,8 @@ def create_TAL_separation_adsorption_process(ins, outs,):
+     
+     # # Remove solids from fermentation broth, modified from the pressure filter in Humbird et al.
+     S401_index = [splits_df.index[0]] + splits_df.index[2:].to_list()
+-    S401_cell_mass_split = [splits_df['stream_571'][0]] + splits_df['stream_571'][2:].to_list()
+-    S401_filtrate_split = [splits_df['stream_535'][0]] + splits_df['stream_535'][2:].to_list()
++    S401_cell_mass_split = [splits_df['stream_571'].iloc[0]] + splits_df['stream_571'].iloc[2:].to_list()
++    S401_filtrate_split = [splits_df['stream_535'].iloc[0]] + splits_df['stream_535'].iloc[2:].to_list()
+     S401 = bst.units.SolidsCentrifuge('S401', ins=fermentation_broth, outs=(S401_solid, 'S401_liquid_fraction'),
+                                 # moisture_content=0.50,
+                                 split=find_split(S401_index,
+diff --git a/biorefineries/TAL/units.py b/biorefineries/TAL/units.py
+index 52fbd440..4199c546 100644
+--- a/biorefineries/TAL/units.py
++++ b/biorefineries/TAL/units.py
+@@ -24,7 +24,11 @@ from flexsolve import aitken_secant
+ from biosteam import Unit, BatchCrystallizer
+ from biosteam.units import Flash, HXutility, Mixer, MixTank, Pump, \
+     SolidsSeparator, StorageTank, LiquidsSplitSettler, \
+-    BatchBioreactor, StirredTankReactor, LiquidsMixingTank
++    BatchBioreactor, LiquidsMixingTank
++try:
++    from biosteam.units import StirredTankReactor
++except ImportError: # newer biosteam: alias only kept in abstract_stirred_tank_reactor
++    from biosteam.units.abstract_stirred_tank_reactor import StirredTankReactor
+ from biosteam.units.decorators import cost
+ from biosteam.units.design_tools import CEPCI_by_year as CEPCI
+ from thermosteam import Stream, MultiStream
+@@ -346,7 +350,10 @@ class BatchCoFermentation(BatchBioreactor):
+                  aeration_rate_basis='fixed rate basis', # 'fixed rate basis' or 'DO saturation basis'
+                  pH_to_load=6.5, # 'unmodified' or float value
+                  ):
+-        BatchBioreactor._init(self,  T=T, P=P, tau=tau, V=V)
++        try:
++            BatchBioreactor._init(self,  T=T, P=P, tau=tau, V=V)
++        except TypeError: # newer biosteam renamed V (target vessel volume) to V_max; sizing is identical
++            BatchBioreactor._init(self,  T=T, P=P, tau=tau, V_max=V)
+         
+         self.pH_to_load = pH_to_load
+         
+-- 
+2.43.0
+
+
+From 15b732fe6bada83f4904986d06b304bfc7791497 Mon Sep 17 00:00:00 2001
+From: fi-TAL agent <sarangbhagwat.developer@gmail.com>
+Date: Fri, 16 Oct 2026 10:16:22 +0000
+Subject: [PATCH 2/3] TAL: further biosteam 2.54 compatibility (corn, KSA
+ upgrading)
+
+- corn systems: restore 2 inlets of corn's SSF before corn.create_system
+  (BatchBioreactor now fixes _N_ins = 1), via _bst_compat.patch_corn_units.
+- StirredTankReactor subclasses (hydrogenation, dehydration, ring-opening
+  hydrolysis): number of reactors from design results (N_reactors removed);
+  size on liquid+solid inlets as before (tau_phases='ls').
+- chemicals_data: lock CaSO4 (no Psat/liquid volume models) in the solid
+  state; explicit zero-flow entries otherwise break mixture volume and VLE
+  calculations (replaces previous liquid-volume workaround).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/TAL/_bst_compat.py                  | 12 ++++++++++++
+ biorefineries/TAL/chemicals_data.py               | 11 ++++++-----
+ .../system_SA_solubility_exploit_ethanol_corn.py  |  2 ++
+ .../system_TAL_solubility_exploit_ethanol_corn.py |  2 ++
+ biorefineries/TAL/units.py                        | 15 +++++++++++++--
+ 5 files changed, 35 insertions(+), 7 deletions(-)
+
+diff --git a/biorefineries/TAL/_bst_compat.py b/biorefineries/TAL/_bst_compat.py
+index ac902323..3c1d245d 100644
+--- a/biorefineries/TAL/_bst_compat.py
++++ b/biorefineries/TAL/_bst_compat.py
+@@ -60,3 +60,15 @@ if (not getattr(bst.Pump, '_stream_link_options', None) # attribute of older bio
+     and not bst.Pump._link_streams
+     and bst.Pump._load_stream_links is bst.Unit._load_stream_links):
+     bst.Pump._load_stream_links = _load_pump_flow_and_phase_links
++
++# %% Corn SSF inlets
++def patch_corn_units():
++    """
++    Newer biosteam's BatchBioreactor fixes `_N_ins = 1`, but corn's
++    SimultaneousSaccharificationFermentation takes 2 inlets (its _run mixes
++    all inlets); restore its inlet count before corn.create_system is called
++    (as done for biorefineries.isobutanol). No-op on older biosteam versions.
++    """
++    from biorefineries import corn
++    SSF = corn.units.SimultaneousSaccharificationFermentation
++    if SSF._N_ins == 1: SSF._N_ins = 2
+diff --git a/biorefineries/TAL/chemicals_data.py b/biorefineries/TAL/chemicals_data.py
+index 3ef6d016..80fdb87e 100644
+--- a/biorefineries/TAL/chemicals_data.py
++++ b/biorefineries/TAL/chemicals_data.py
+@@ -561,11 +561,12 @@ SodiumPhosphate = chemical_database('SodiumPhosphate', phase='l')
+ P4O10 = chemical_database('P4O10', phase='s', Hf=-713.2*_cal2joule)
+ # Ash = chemical_database('Ash', search_ID='CaO', phase='s', Hf=-151688*_cal2joule,
+ #                         HHV=0, LHV=0)
+-CaSO4 = chemical_database('CaSO4')
+-# CaSO4 has no liquid molar volume model. Newer thermosteam versions may keep
+-# explicit zero-flow entries in (sparse) stream flow vectors, so mixture volumes
+-# can evaluate it even when no CaSO4 is present; use its solid molar volume.
+-if not CaSO4.V.l: CaSO4.V.l.add_method(CaSO4.V.s(298.15, 101325.))
++# CaSO4 has no vapor pressure or liquid molar volume models, so it can only be
++# handled as a solid. With newer BioSTEAM versions, explicit zero-flow CaSO4
++# entries (e.g., from boiler flue gas desulfurization) propagate into process
++# streams, making mixture volume and VLE calculations fail for the unlocked
++# chemical even when no CaSO4 is present; lock it in the solid state.
++CaSO4 = chemical_database('CaSO4', phase='s')
+ # This is to copy the solid state of Xylose,
+ # cannot directly use Xylose as Xylose is locked at liquid state now
+ Tar = chemical_copied('Tar', Xylose, phase_ref='s')
+diff --git a/biorefineries/TAL/systems/system_SA_solubility_exploit_ethanol_corn.py b/biorefineries/TAL/systems/system_SA_solubility_exploit_ethanol_corn.py
+index b1ea2ee9..2aa78960 100644
+--- a/biorefineries/TAL/systems/system_SA_solubility_exploit_ethanol_corn.py
++++ b/biorefineries/TAL/systems/system_SA_solubility_exploit_ethanol_corn.py
+@@ -77,6 +77,8 @@ from biorefineries.TAL._general_utils import call_all_specifications_or_run,\
+ from biorefineries.TAL.lca import TALLCA
+ 
+ from biorefineries import corn
++from biorefineries.TAL._bst_compat import patch_corn_units
++patch_corn_units() # newer biosteam compatibility (no-op otherwise)
+ 
+ filterwarnings('ignore')
+ IQ_interpolation = flx.IQ_interpolation
+diff --git a/biorefineries/TAL/systems/system_TAL_solubility_exploit_ethanol_corn.py b/biorefineries/TAL/systems/system_TAL_solubility_exploit_ethanol_corn.py
+index f037658f..2d0898af 100644
+--- a/biorefineries/TAL/systems/system_TAL_solubility_exploit_ethanol_corn.py
++++ b/biorefineries/TAL/systems/system_TAL_solubility_exploit_ethanol_corn.py
+@@ -78,6 +78,8 @@ from biorefineries.TAL._general_utils import call_all_specifications_or_run,\
+ from biorefineries.TAL.lca import TALLCA
+ 
+ from biorefineries import corn
++from biorefineries.TAL._bst_compat import patch_corn_units
++patch_corn_units() # newer biosteam compatibility (no-op otherwise)
+ 
+ filterwarnings('ignore')
+ IQ_interpolation = flx.IQ_interpolation
+diff --git a/biorefineries/TAL/units.py b/biorefineries/TAL/units.py
+index 4199c546..bdeab90f 100644
+--- a/biorefineries/TAL/units.py
++++ b/biorefineries/TAL/units.py
+@@ -29,6 +29,14 @@ try:
+     from biosteam.units import StirredTankReactor
+ except ImportError: # newer biosteam: alias only kept in abstract_stirred_tank_reactor
+     from biosteam.units.abstract_stirred_tank_reactor import StirredTankReactor
++
++def _get_N_reactors(unit): # older biosteam: unit.N_reactors; newer: design result
++    N = getattr(unit, 'N_reactors', None)
++    return N if N is not None else unit.design_results['Number of reactors']
++
++# Older biosteam sized StirredTankReactors on the volume of all non-gas inlets;
++# newer versions use only inlets whose phase is in `tau_phases` (default 'l').
++_STR_tau_phases = 'ls'
+ from biosteam.units.decorators import cost
+ from biosteam.units.design_tools import CEPCI_by_year as CEPCI
+ from thermosteam import Stream, MultiStream
+@@ -986,6 +994,7 @@ class HydrogenationReactor(StirredTankReactor):
+     """
+     A hydrogenation reactor.
+     """
++    tau_phases_default = _STR_tau_phases
+     _N_ins = 5
+     _N_outs = 3
+     
+@@ -1100,7 +1109,7 @@ class HydrogenationReactor(StirredTankReactor):
+         
+         # divide catalyst cost by number of reactors as bst.StirredTankReactor currently multiplies
+         # all purchase_cost values by number of reactors
+-        self.purchase_costs['Ni-SiO2 catalyst'] = self.catalyst_weight * self.NiSiO2_catalyst_price / self.N_reactors
++        self.purchase_costs['Ni-SiO2 catalyst'] = self.catalyst_weight * self.NiSiO2_catalyst_price / _get_N_reactors(self)
+         
+         # hx = self.heat_exchanger
+         # self.baseline_purchase_costs['Heat exchangers'] = hx.purchase_cost
+@@ -1110,6 +1119,7 @@ class DehydrationReactor(StirredTankReactor):
+     """
+     A dehydration reactor.
+     """
++    tau_phases_default = _STR_tau_phases
+     _N_ins = 4
+     _N_outs = 3
+     
+@@ -1203,7 +1213,7 @@ class DehydrationReactor(StirredTankReactor):
+         super()._cost()
+         # divide catalyst cost by number of reactors as bst.StirredTankReactor currently multiplies
+         # all purchase_cost values by number of reactors
+-        self.purchase_costs['Amberlyst-70 catalyst'] = self.catalyst_weight * self.Amberlyst70_catalyst_price / self.N_reactors
++        self.purchase_costs['Amberlyst-70 catalyst'] = self.catalyst_weight * self.Amberlyst70_catalyst_price / _get_N_reactors(self)
+ 
+         # hx = self.heat_exchanger
+         # self.baseline_purchase_costs['Heat exchangers'] = hx.purchase_cost
+@@ -1215,6 +1225,7 @@ class RingOpeningHydrolysisReactor(StirredTankReactor):
+     """
+     A ring-opening and hydrolysis reactor.
+     """
++    tau_phases_default = _STR_tau_phases
+     _N_ins = 3
+     _N_outs = 2
+     # auxiliary_unit_names = ('heat_exchanger')
+-- 
+2.43.0
+
+
+From 3c44f216b69968271371b985acc25b84efa0a7bd Mon Sep 17 00:00:00 2001
+From: fi-TAL agent <sarangbhagwat.developer@gmail.com>
+Date: Fri, 16 Oct 2026 10:30:35 +0000
+Subject: [PATCH 3/3] TAL: restore SystemFactory autorename=None default
+ (biosteam 2.54)
+
+Newer biosteam renames units with conflicting IDs by default (e.g., corn's
+and TAL's V301 become V301_1/V301_2), which breaks the corn and cornstover
+KSA systems that refer to units by ID. Restore the previous default
+(newest unit replaces the old one in the registry) in _bst_compat.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/TAL/_bst_compat.py | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/biorefineries/TAL/_bst_compat.py b/biorefineries/TAL/_bst_compat.py
+index 3c1d245d..88706dc2 100644
+--- a/biorefineries/TAL/_bst_compat.py
++++ b/biorefineries/TAL/_bst_compat.py
+@@ -72,3 +72,21 @@ def patch_corn_units():
+     from biorefineries import corn
+     SSF = corn.units.SimultaneousSaccharificationFermentation
+     if SSF._N_ins == 1: SSF._N_ins = 2
++
++# %% SystemFactory autorename
++# Newer biosteam's SystemFactory.__call__ defaults to `autorename=True`, which
++# renames units with conflicting IDs (e.g., corn's V301 and TAL's V301 become
++# V301_1 and V301_2), breaking TAL code and parameter load statements that refer
++# to units by ID. TAL was written for the previous default (`autorename=None`:
++# the newest unit replaces the old one in the flowsheet registry); restore it.
++import inspect as _inspect
++try:
++    _autorename_default = _inspect.signature(bst.SystemFactory.__call__).parameters['autorename'].default
++except Exception:
++    _autorename_default = None
++if _autorename_default is True and not getattr(bst.SystemFactory.__call__, '_TAL_compat', False):
++    _SystemFactory_call = bst.SystemFactory.__call__
++    def _SystemFactory_call_compat(self, *args, autorename=None, **kwargs):
++        return _SystemFactory_call(self, *args, autorename=autorename, **kwargs)
++    _SystemFactory_call_compat._TAL_compat = True
++    bst.SystemFactory.__call__ = _SystemFactory_call_compat
+-- 
+2.43.0
+

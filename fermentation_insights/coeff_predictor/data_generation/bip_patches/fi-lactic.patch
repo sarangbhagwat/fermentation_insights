@@ -1,0 +1,407 @@
+From 177297b709cc2f29093c91be4c3e81c8a8861f37 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 10:24:07 +0000
+Subject: [PATCH 1/7] lactic: port to biosteam 2.54 / pandas 3
+
+- utils.get_splits: use positional .iloc (pandas 3 removed integer
+  fallback indexing on string-indexed Series)
+- FireWaterTank has no ins/outs in newer biosteam; size it through
+  fire_water_flow_rate (fire water is unpriced, TEA unchanged)
+- drop removed System kwarg facility_recycle (only used with BDM)
+- tighten F402 purity-spec solver tolerance (1e-3 -> 1e-6): the noise
+  in F402.V caused a period-2 oscillation of the F402 vapor recycle
+  to R403 that prevented SHF convergence (and let the sink-less ethyl
+  acetate in the D402 ethanol recycle be extrapolated to ~1e6 kg/hr)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/lactic/_processes.py | 13 ++++++++++---
+ biorefineries/lactic/systems.py    |  3 ++-
+ biorefineries/lactic/utils.py      |  4 ++--
+ 3 files changed, 14 insertions(+), 6 deletions(-)
+
+diff --git a/biorefineries/lactic/_processes.py b/biorefineries/lactic/_processes.py
+index d67ae8b4..7abc8dc6 100644
+--- a/biorefineries/lactic/_processes.py
++++ b/biorefineries/lactic/_processes.py
+@@ -528,8 +528,11 @@ def create_separation_process(feed, cell_mass_split, gypsum_split,
+     def adjust_F402_V():
+         H2O_molfrac = D404_P.outs[0].get_molar_composition('H2O')
+         V0 = H2O_molfrac
++        # Tight tolerance: with xtol=ytol=1e-3 the noise in F402.V (~1 kmol/hr
++        # of lactic acid in the vapor recycled to R403) exceeds the recycle
++        # tolerance and causes a period-2 oscillation (SHF does not converge)
+         F402.V = aitken_secant(f=purity_at_V, x0=V0, x1=V0+0.001,
+-                               xtol=0.001, ytol=0.001, maxiter=50,
++                               xtol=1e-6, ytol=1e-6, maxiter=50,
+                                args=())
+         # F402.V = IQ_interpolation(f=purity_at_V, x0=0.001, x1=0.999,
+         #                           xtol=0.001, ytol=0.001, maxiter=50,
+@@ -746,10 +749,14 @@ def create_facilities(solids_to_boiler, gas_to_boiler='',
+     T606.line = 'Ethanol storage'
+     bst.units.Pump('T606_P', ins=T606-0, outs=s.ethanol_R402)
+ 
+-    FT = bst.facilities.FireWaterTank('FT', ins=firewater_in, outs='firewater_out')
++    # BioSTEAM >= 2.38: FireWaterTank has no inlets/outlets and is sized
++    # by `fire_water_flow_rate` [kg/hr] (fire water is not priced)
++    FT = bst.facilities.FireWaterTank('FT')
+     FT.fire_water_over_feedstock = 0.08
+     @FT.add_specification(run=True)
+-    def adjust_fire_water(): firewater_in.imass['Water'] = feedstock.F_mass * FT.fire_water_over_feedstock
++    def adjust_fire_water():
++        firewater_in.imass['Water'] = FT.fire_water_flow_rate = \
++            feedstock.F_mass * FT.fire_water_over_feedstock
+ 
+     # Mix solid wastes to the boiler
+     M601 = bst.units.Mixer('M601', ins=solids_to_boiler, outs='solids_to_boiler')
+diff --git a/biorefineries/lactic/systems.py b/biorefineries/lactic/systems.py
+index 05bd6675..750775e8 100644
+--- a/biorefineries/lactic/systems.py
++++ b/biorefineries/lactic/systems.py
+@@ -115,7 +115,8 @@ def create_system(ID='lactic_sys', kind='SSCF', feedstock='feedstock',
+                                   u.T601, u.T601_P, u.T602, u.T603, u.T604, u.T605,
+                                   u.T606, u.T606_P, u.M601),
+                             facilities=facilities,
+-                            facility_recycle=u.BDM-0 if hasattr(u, 'BDM') else None
++                            # `facility_recycle` was removed from `bst.System`
++                            # in newer BioSTEAM (only used with the non-default BDM)
+                             )
+     # lactic_sys.set_tolerance(mol=1e-3, rmol=1e-3, subsystems=True)
+ 
+diff --git a/biorefineries/lactic/utils.py b/biorefineries/lactic/utils.py
+index c77b30cc..5b060624 100644
+--- a/biorefineries/lactic/utils.py
++++ b/biorefineries/lactic/utils.py
+@@ -244,8 +244,8 @@ def get_splits(chemicals=None):
+ 
+     # 1 is water, changed by moisture content rather than using data from ref [1]
+     cell_mass_index = [splits_df.index[0]] + splits_df.index[2:].to_list()
+-    cell_mass_solid = [splits_df['stream_571'][0]] + splits_df['stream_571'][2:].to_list()
+-    cell_mass_filtrate = [splits_df['stream_535'][0]] + splits_df['stream_535'][2:].to_list()
++    cell_mass_solid = [splits_df['stream_571'].iloc[0]] + splits_df['stream_571'].iloc[2:].to_list()
++    cell_mass_filtrate = [splits_df['stream_535'].iloc[0]] + splits_df['stream_535'].iloc[2:].to_list()
+     cell_mass_split = find_split(cell_mass_index,
+                                  cell_mass_solid,
+                                  cell_mass_filtrate,
+-- 
+2.43.0
+
+
+From ee6eaf793ce76079489a8e6bc98e369d577d7866 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 10:29:06 +0000
+Subject: [PATCH 2/7] lactic: keep intended fixed-point convergence; make
+ acetic acid yield parameter effective
+
+- load_process_settings sets System.default_converge_method, which newer
+  BioSTEAM ignores (the default method is now taken from
+  System.default_methods); set it there too so the module's intended
+  fixed-point convergence ('aitken isn't stable') is used
+- models.set_acetic_yield: also update R301._X, from which the
+  fermentation specifications (adjust_R301_water / adjust_ferm_loop)
+  reset the acetic acid conversion through set_yield; previously the
+  sampled acetic acid yield was overwritten during simulation
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/lactic/_process_settings.py | 3 +++
+ biorefineries/lactic/models.py            | 3 +++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/biorefineries/lactic/_process_settings.py b/biorefineries/lactic/_process_settings.py
+index a3264e57..0a70be91 100644
+--- a/biorefineries/lactic/_process_settings.py
++++ b/biorefineries/lactic/_process_settings.py
+@@ -218,6 +218,9 @@ def load_process_settings(CE=541.7): # year 2016
+     # These settings are sufficient to get baseline lactic acid price within $0.002/kg
+     # of the final stabilized results
+     bst.System.default_converge_method = 'fixed-point' # aitken isn't stable
++    # Newer BioSTEAM selects the default method through `default_methods`
++    if hasattr(bst.System, 'default_methods'):
++        bst.System.default_methods['Sequential modular'] = 'fixed-point'
+     bst.System.default_maxiter = 1500
+     bst.System.default_molar_tolerance = 0.02
+ 
+diff --git a/biorefineries/lactic/models.py b/biorefineries/lactic/models.py
+index dcdbf092..9b9991ba 100644
+--- a/biorefineries/lactic/models.py
++++ b/biorefineries/lactic/models.py
+@@ -394,6 +394,9 @@ def create_model(flowsheet=None, kind='SSCF'):
+     @param(name='Acetic acid yield', element=R301, kind='coupled', units='g/g',
+            baseline=0.07, distribution=D)
+     def set_acetic_yield(acetic_yield):
++        # The fermentation specifications call `set_yield`, which resets the
++        # acetic acid conversion from `R301._X`; update it so the value persists
++        R301._X[1] = R301._X[4] = acetic_yield
+         R301_X = R301.cofermentation_rxns.X
+         R302_X = R302.cofermentation_rxns.X
+         R301_X[1] = R301_X[4] = min(acetic_yield, 1-1e-6-R301_X[0]-R301_X[2])
+-- 
+2.43.0
+
+
+From 293edbb718dc0f9802bf83fb5cd93bc9caeda5ed Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 10:43:23 +0000
+Subject: [PATCH 3/7] lactic: run fermentation titer specifications in newer
+ BioSTEAM
+
+Newer BioSTEAM only runs System specifications on System.simulate, not
+when a nested system is converged as part of its parent, so
+adjust_R301_water (SSCF seed_recycle) and adjust_ferm_loop (SHF
+ferm_loop) were silently skipped: titer targets were never met by
+dilution/concentration (and the SHF evaporator kept V=0.76 on a
+near-empty stream). Run them as specifications of the unit right before
+each loop (H301 / S301), after that unit's own balance.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/lactic/_processes.py | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/biorefineries/lactic/_processes.py b/biorefineries/lactic/_processes.py
+index 7abc8dc6..f3238535 100644
+--- a/biorefineries/lactic/_processes.py
++++ b/biorefineries/lactic/_processes.py
+@@ -162,8 +162,12 @@ def create_SSCF_conversion_process(feed, flowsheet=None, **extras): # extras is
+         seed_recycle.run()
+         return R301.effluent_titer-R301.target_titer
+ 
+-    @seed_recycle.add_specification
++    # Newer BioSTEAM does not run the specifications of nested systems when the
++    # parent system converges, so run it as a specification of H301 (the unit
++    # right before the seed recycle loop), after H301's own mass/energy balance
++    @H301.add_specification(run=False)
+     def adjust_R301_water():
++        H301._run()
+         water_R301.empty()
+         set_yield(R301.target_yield, R301, R302)
+         seed_recycle.run()
+@@ -313,8 +317,12 @@ def create_SHF_conversion_process(feed, cell_mass_split,
+         # highest from collected papers)
+         return sugar_conc-220
+ 
+-    @ferm_loop.add_specification
++    # Newer BioSTEAM does not run the specifications of nested systems when the
++    # parent system converges, so run it as a specification of S301 (the unit
++    # right before the fermentation loop), after S301's own mass balance
++    @S301.add_specification(run=False)
+     def adjust_ferm_loop():
++        S301._run()
+         water_R301.empty()
+         S302.split = 1
+         E301.V = 0
+-- 
+2.43.0
+
+
+From 7481ac8d49efbe8b026d62ffccd953704b77f728 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 11:01:09 +0000
+Subject: [PATCH 4/7] lactic: fix SHF sugar-concentration path (now exercised)
+
+With adjust_ferm_loop running again, the SHF concentration branch failed:
+- create_SHF_conversion_process used sugars=None in get_max_V/sugar_at_V;
+  default to the module's sugars tuple
+- R301's update_split specification changes the S302 split but ran R301
+  with a stale evaporator-path inlet (S302-1 -> E301 -> E301_T -> E301_P),
+  so with allow_concentration R301 received no feed (zero broth volume);
+  re-run that path before R301
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/lactic/_processes.py | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/biorefineries/lactic/_processes.py b/biorefineries/lactic/_processes.py
+index f3238535..7232c935 100644
+--- a/biorefineries/lactic/_processes.py
++++ b/biorefineries/lactic/_processes.py
+@@ -192,6 +192,8 @@ def create_SSCF_conversion_process(feed, flowsheet=None, **extras): # extras is
+ def create_SHF_conversion_process(feed, cell_mass_split,
+                                   sugars=None, flowsheet=None):
+     flowsheet = flowsheet or bst.main_flowsheet
++    # `sugars` is used by the sugar-concentration functions of adjust_ferm_loop
++    if sugars is None: from ._chemicals import sugars
+ 
+     ##### Streams #####
+     # flow updated in EnzymeHydrolysateMixer
+@@ -263,6 +265,10 @@ def create_SHF_conversion_process(feed, cell_mass_split,
+             split = min(1-1e-6, 1/R301.feed_freq)
+             S302._isplit = S302.thermo.chemicals.isplit(split)
+         S302._run()
++        # Update the evaporator path to R301 (S302-1 -> E301 -> E301_T -> E301_P),
++        # otherwise R301 sees a stale add_feed after the split is changed here
++        # (with concentration, all feed would be missing -> zero broth volume)
++        for i in (E301, E301_T, E301_P): i.run()
+         R301._run()
+ 
+     R301_P1 = bst.units.Pump('R301_P1', ins=R301-0)
+-- 
+2.43.0
+
+
+From aa476e647404386be758c82f78598bd427bddec4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 11:14:16 +0000
+Subject: [PATCH 5/7] lactic: fix acid-resistant fermenter costing and dilution
+ accuracy
+
+- R301 cost adjustment for the acid-resistant strain (316 SS) referenced
+  the old 'Agitator' cost item, renamed to 'Fermenter agitator' earlier
+  (KeyError whenever neutralization=False)
+- titer_at_water (dilution to the target titer) evaluated the titer after
+  a single pass of the seed recycle, so the inoculum was stale (e.g., from
+  the 1e10 kg/hr bracket evaluation) and the solver under-diluted by up to
+  ~2% of the titer; converge the seed loop at each evaluation instead
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/lactic/_processes.py | 10 ++++++++--
+ biorefineries/lactic/_units.py     |  4 ++--
+ 2 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/biorefineries/lactic/_processes.py b/biorefineries/lactic/_processes.py
+index 7232c935..e2329b4b 100644
+--- a/biorefineries/lactic/_processes.py
++++ b/biorefineries/lactic/_processes.py
+@@ -153,7 +153,10 @@ def create_SSCF_conversion_process(feed, flowsheet=None, **extras): # extras is
+     # Add dilution water to achieve the lower titer
+     def titer_at_water(water):
+         water_R301.imass['Water'] = water
+-        seed_recycle.run()
++        # Converge (not a single pass of) the seed loop: with one pass the
++        # inoculum is stale (e.g., from the 1e10 kg/hr bracket evaluation) and
++        # the solver under-dilutes by up to ~2% of the titer
++        seed_recycle.converge()
+         return R301.effluent_titer-R301.target_titer
+ 
+     # Lower yield to achieve the lower titer
+@@ -287,7 +290,10 @@ def create_SHF_conversion_process(feed, cell_mass_split,
+     # Add dilution water to achieve the lower titer
+     def titer_at_water(water):
+         water_R301.imass['Water'] = water
+-        seed_recycle.run()
++        # Converge (not a single pass of) the seed loop: with one pass the
++        # inoculum is stale (e.g., from the 1e10 kg/hr bracket evaluation) and
++        # the solver under-dilutes by up to ~2% of the titer
++        seed_recycle.converge()
+         return R301.effluent_titer-R301.target_titer
+ 
+     # Lower yield to achieve the lower titer
+diff --git a/biorefineries/lactic/_units.py b/biorefineries/lactic/_units.py
+index 38664995..4b34331d 100644
+--- a/biorefineries/lactic/_units.py
++++ b/biorefineries/lactic/_units.py
+@@ -305,7 +305,7 @@ class SaccharificationAndCoFermentation(Unit):
+         # Adjust fermenter cost for acid-resistant scenario
+         if not self.neutralization:
+             self.baseline_purchase_costs['Fermenter'] *= _316_over_304
+-            self.baseline_purchase_costs['Agitator'] *= _316_over_304
++            self.baseline_purchase_costs['Fermenter agitator'] *= _316_over_304
+ 
+     @property
+     def lactic_yield(self):
+@@ -716,7 +716,7 @@ class CoFermentation(Reactor):
+             # Adjust fermenter cost for acid-resistant scenario
+             if not self.neutralization:
+                 purchase_costs['Fermenter'] *= _316_over_304
+-                purchase_costs['Agitator'] *= _316_over_304
++                purchase_costs['Fermenter agitator'] *= _316_over_304
+         else:
+             if not self.neutralization:
+                 self.vessel_material= 'Stainless steel 316'
+-- 
+2.43.0
+
+
+From 89329b6455d2d0984b96d1b6da26efa0c74cdbff Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 11:27:30 +0000
+Subject: [PATCH 6/7] lactic: converge the SHF fermentation loop in the
+ concentration solvers
+
+titer_at_V and sugar_at_V (sugar concentration by E301 to the target
+titer / 220 g/L sugar limit) evaluated a single pass of ferm_loop, so the
+solvers worked on a stale inoculum and failed to reach feasible targets
+(notably for the acid-resistant strain); converge the loop instead, as
+in titer_at_water.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/lactic/_processes.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/biorefineries/lactic/_processes.py b/biorefineries/lactic/_processes.py
+index e2329b4b..12aaf67b 100644
+--- a/biorefineries/lactic/_processes.py
++++ b/biorefineries/lactic/_processes.py
+@@ -312,12 +312,12 @@ def create_SHF_conversion_process(feed, cell_mass_split,
+     # Adjust V of the multi-effect evaporator to achieve the set sugar concentration
+     def titer_at_V(V):
+         E301.V = V
+-        ferm_loop.run()
++        ferm_loop.converge() # not a single pass (stale inoculum), see titer_at_water
+         return R301.effluent_titer-R301.target_titer
+ 
+     def sugar_at_V(V):
+         E301.V = V
+-        ferm_loop.run()
++        ferm_loop.converge() # not a single pass (stale inoculum), see titer_at_water
+         # In continuous mode, incoming sugar is immediately consumed, therefore
+         # sugar concentration is always held at the same level (as effluent sugar
+         # concentration in batch mode)
+-- 
+2.43.0
+
+
+From 0a463cc48222acaa0e1013eb71be467e28989a99 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 11:44:12 +0000
+Subject: [PATCH 7/7] lactic: evaluate CoFermentation titers at the
+ fermentation temperature
+
+CoFermentation (SHF) computed the influent/effluent titers and the batch
+maximum sugar concentration with the broth volume at the mixed-feed
+temperature (hot evaporator concentrate) and only then set T, so the
+reported titer was up to ~2% below lactic acid mass / broth volume at
+50 C. Set the broth temperature first, as SaccharificationAndCoFermentation
+does (module-default SHF MPSP unchanged: 1.5655 vs 1.5656 USD/kg).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/lactic/_units.py | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/biorefineries/lactic/_units.py b/biorefineries/lactic/_units.py
+index 4b34331d..8b1a586d 100644
+--- a/biorefineries/lactic/_units.py
++++ b/biorefineries/lactic/_units.py
+@@ -632,6 +632,9 @@ class CoFermentation(Reactor):
+ 
+         effluent.copy_like(mixed_feed)
+         effluent.mol = mixed_feed.mol - sidedraw.mol
++        # Titers/sugar concentrations at the fermentation temperature (as in
++        # SaccharificationAndCoFermentation), not at the mixed-feed temperature
++        effluent.T = self.T
+         self.influent_titer = titer0 = compute_lactic_titer(effluent)
+         sugars = self.sugars
+         if feed_freq == 1:
+@@ -675,6 +678,7 @@ class CoFermentation(Reactor):
+             self.vessel_material= 'Stainless steel 316'
+             lime.empty()
+ 
++        effluent.T = self.T
+         self.effluent_titer = titer1 = compute_lactic_titer(effluent)
+         self.tau_cofermentation = (titer1-titer0)/self.productivity
+ 
+-- 
+2.43.0
+

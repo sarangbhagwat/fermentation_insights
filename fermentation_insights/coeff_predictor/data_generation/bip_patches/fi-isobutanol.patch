@@ -1,0 +1,73 @@
+From a0b56c21192089a6513a41295f13525f90604cf0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 10:06:35 +0000
+Subject: [PATCH 1/2] fix(isobutanol): pin nskinetics to the commit matching
+ the module's kinetics
+
+The pinned d8591e5 (2026-08-19) predates the isobutanol-pathway rate k_17 that
+scenarios.load_scenario / enzyme_burden need (KeyError on opt_* scenarios).
+1ea4576 reproduces the opt_IRR pins (IBO MPSP 1.16353, IRR 0.27299).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/isobutanol/requirements.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/biorefineries/isobutanol/requirements.txt b/biorefineries/isobutanol/requirements.txt
+index 8063a5fe..34535a51 100644
+--- a/biorefineries/isobutanol/requirements.txt
++++ b/biorefineries/isobutanol/requirements.txt
+@@ -1,5 +1,5 @@
+ # python 3.14
+-# nskinetics commit d8591e50fb006ff570edfc3991bd434725041fc6
++# nskinetics commit 1ea45768cc94d0bc0d4f02c0f2966ab5a40ed08a (2026-09-21, last before the biorefinery moved into nskinetics; d8591e5 lacks k_17 used by scenarios/enzyme_burden)
+ biosteam>=2.53.11,<2.55.0
+ contourplots>=0.4.0
+ optuna>=4.9
+-- 
+2.43.0
+
+
+From 16a00558fccf63001f83d6c066982e4055e0b1d6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 10:12:23 +0000
+Subject: [PATCH 2/2] fix(isobutanol): D101 ethanol-water Rmin floor returns 0,
+ not 10, when the q-line meets equilibrium beyond x_D
+
+At dilute ethanol (isobutanol-rich broths, EtOH keys fraction ~1e-4) the q-line
+of the slightly subcooled beer-column feed runs nearly parallel to the dilute
+equilibrium line, so its intersection lies beyond the distillate composition
+(m >= 1). The feed point then does not pinch the rectifying line and the
+ethanol enrichment needs no reflux floor (Rmin 0, as in the adjacent m < 0
+branch), but the guard returned Rmin = 10, a spurious 4x beer-column duty
+step (+26 % isobutanol MPSP) between ~0.5 and ~0 g/L ethanol. Baseline pins
+are unaffected (the guard is not reached there).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/isobutanol/separations.py | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/biorefineries/isobutanol/separations.py b/biorefineries/isobutanol/separations.py
+index 3244e017..6d4c3ac1 100644
+--- a/biorefineries/isobutanol/separations.py
++++ b/biorefineries/isobutanol/separations.py
+@@ -399,7 +399,12 @@ def create_IBO_EtOH_separation_system(
+                         0.0, 1.0)
+         y_Rmin = q_line(x_Rmin)
+         m = (y_Rmin - x_D)/(x_Rmin - x_D)
+-        if m >= 1.0: return 10.0  # numerical-pinch guard; not reached for x_D <= ~0.55
++        # m >= 1 <=> the q-line meets the equilibrium curve at x_Rmin >= x_D
++        # (dilute ethanol, slightly subcooled feed: q-line slope ~ K_inf):
++        # the feed point does not pinch the rectifying line, so the ethanol
++        # enrichment sets no reflux floor -- the same 0 as the adjacent
++        # m < 0 branch below (continuous; the caller's 0.3 floor applies).
++        if m >= 1.0: return 0.0
+         return max(0.0, m/(1.0 - m))
+ 
+     @D101.add_specification(run=False)
+-- 
+2.43.0
+
