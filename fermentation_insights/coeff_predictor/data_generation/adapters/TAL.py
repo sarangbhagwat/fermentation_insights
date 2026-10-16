@@ -123,6 +123,16 @@ _MAX_TITER_LINE = {
 _loaded_module = None  # module-level systems: one configuration per process
 
 
+def _natural_gas_price_setter(setter):
+    """Wrap the model's natural gas price setter so the price also applies to
+    the boiler's natural gas stream utility (bst.stream_prices)."""
+    def set_price(value):
+        import biosteam as bst
+        setter(value)
+        bst.stream_prices['Natural gas'] = value
+    return set_price
+
+
 def _is_infeasible_error(e):
     msg = str(e).lower()
     name = type(e).__name__
@@ -313,6 +323,11 @@ class Adapter(BiorefineryAdapter):
                     continue
                 prm = Parameter.from_biosteam(p, name=_CANONICAL.get(p.name))
                 prm.description = f'{p.element}: {p.name} [{p.units}]'
+                if prm.name == 'p_natural_gas_price':
+                    # In biosteam >= 2.5x the boiler's natural gas is a stream
+                    # utility priced via bst.stream_prices['Natural gas'];
+                    # setting BT.natural_gas_price alone has no effect.
+                    prm.setter = _natural_gas_price_setter(prm.setter)
                 params.append(prm)
             self._parameters = params
         return self._parameters
