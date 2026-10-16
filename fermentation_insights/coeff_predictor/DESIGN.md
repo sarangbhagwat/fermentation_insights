@@ -42,17 +42,38 @@ where `E_c,i` are annual operating cost channels measured directly from the
 simulation, `FOC_i` the TEA fixed operating cost (measured), `I_i` the fixed
 capital investment (TEA `FCI`; installed equipment cost is used only if FCI
 is unavailable — FCI/installed varies by 1.69–1.82 across TY points), `F` the
-labor-type fixed costs (intercept of FOC regressed on `I`; constant within a
-sample), `FOC_i − F` the capital-related O&M (maintenance, insurance), and
-`φ_K` the capital charge per USD of FCI (annualized capital recovery at the
-IRR incl. taxes and working capital) from the no-intercept least squares of
-`R − ΣE − FOC` on `I` (financial parameters are constant within a sample).
-`φ = φ_K + dFOC/dI` is reported. `ε_i` is the closure residual (kept as its
-own channel so that channels sum exactly to MPSP); it absorbs DCF weights
-≠ 1 (e.g. startup fractions) instead of letting a free intercept turn them
-into a negative or productivity-dependent `F`. Without FOC the legacy free
-fit `R − ΣE = φ·I + F` is used. Samples with a negative `F` are flagged
-(`channels_ok = False`).
+labor-type fixed costs, `FOC_i − F` the capital-related O&M (maintenance,
+insurance, property tax, administration), and `φ_K` the capital charge per
+USD of FCI (annualized capital recovery at the IRR incl. taxes and working
+capital) from the no-intercept least squares of `R − ΣE − FOC` on `I`
+(financial parameters are constant within a sample). `φ = φ_K + d(FOC −
+F)/dI` is reported. `ε_i` is the closure residual (kept as its own channel
+so that channels sum exactly to MPSP); it absorbs DCF weights ≠ 1 (e.g.
+startup fractions) instead of letting a free intercept turn them into a
+negative or productivity-dependent `F`.
+
+The fixed channel `F` is measured (harness v2 records the TEA's
+`labor_cost` and `labor_burden`), following how the Bioindustrial-Park TEA
+classes build FOC:
+
+* `CellulosicEthanolTEA` (HP, TAL, lactic, succinic, oxalic, cellulosic
+  ethanol): `FOC = FCI·property_insurance + ISBL_DPI·maintenance +
+  labor_cost·(1 + labor_burden)` → `F = labor_cost·(1 + labor_burden)`
+  (`diag_fixed_source = 'labor'`);
+* `ConventionalEthanolTEA` (corn ethanol, isobutanol): `FOC =
+  FCI·(property_tax + property_insurance + maintenance + administration) +
+  labor_cost·(1 + fringe_benefits + supplies)`; it has no `labor_burden`, so
+  `F = m·labor_cost` with `m` from the least squares `FOC = s·I + m·labor`
+  (exact: FOC is affine in FCI; real data give m = 1.6) (`'labor_foc'`);
+* legacy (v1) data without labor: `F` = intercept of FOC regressed on `I`
+  (`'foc_intercept'`). This was biased for the cellulosic TEA, where
+  maintenance is charged on ISBL installed cost (not ∝ FCI): on TAL v2
+  data the intercept was −1.35 × labor (all samples had a negative `F`), on
+  oxalic 1.08 × labor instead of 1.9 ×.
+
+Without FOC the legacy free fit `R − ΣE = φ·I + F` is used. Samples with a
+negative `F` or with measured labor above FOC (`diag_fixed_exceeds_foc`) are
+flagged (`channels_ok = False`).
 
 Channels (contribution to MPSP = channel USD/yr ÷ (F_final·h)):
 
@@ -60,7 +81,7 @@ Channels (contribution to MPSP = channel USD/yr ÷ (F_final·h)):
 |---|---|---|
 | `feedstock` | wet feedstock purchase | yes: `p_fs × feedstock intensity` |
 | `electricity` | net purchased (+) / exported (−) electricity | yes: `p_el × net electricity intensity` |
-| `natural_gas` | purchased natural gas | yes: `p_ng × NG intensity` |
+| `natural_gas` | purchased (priced) natural gas, both cost pools | yes: `p_ng × priced NG intensity` |
 | `neutralization` | base for pH control + acid for acidulation | no |
 | `materials_other` | all other purchased materials (enzymes, nutrients, catalysts, solvents, boiler chemicals …) | no |
 | `utilities_other` | non-electric utility agents (net, after boiler offsets) | no |
@@ -69,25 +90,65 @@ Channels (contribution to MPSP = channel USD/yr ÷ (F_final·h)):
 | `capex_downstream` | capital charge × weight share of separation + upgrading | no |
 | `capex_wastewater` | capital charge × weight share of wastewater | no |
 | `capex_utilities` | capital charge × weight share of CHP + facilities (+ uncovered installed cost) | no |
-| `fixed` | F (labor-type fixed costs) | no |
+| `fixed` | F: labor-type fixed costs (recorded labor × (1 + burden)) | no |
 | `coproducts` | − coproduct sales | no |
 | `closure` | ε (should be small) | no |
 
-(Area weights are the areas' TDC contributions `I_isbl·(1 + f) + I_osbl`
-when the harness records each area's OSBL installed cost
-(`<area>__installed_cost_osbl`; `f` = warehouse + site development +
-additional piping, recorded or estimated from FCI), else installed costs.
-Natural gas: when the harness records the NG cost per pool
-(`ng_cost_utility`, `ng_cost_material`, at the prices BioSTEAM charges, e.g.
-boiler 'Fuel' vs. dryer 'Natural gas'), each part is subtracted from its own
-pool, `natural_gas_price` is the sample's cost-weighted price and `int__ng`
-the NG flow equivalent at that price (exact `p × q`). Legacy data (one
-recorded price) use a pool decided once per configuration (CHP-area
-material-cost evidence, else the sign of the remainders); samples whose
-chosen pool leaves a negative remainder — mispriced or split NG — get
-`channels_ok = False`. Known limitation of existing data: TAL/succinic/corn
-ethanol dryer NG is priced differently from the recorded price until the
-adapters record per-pool costs.)
+**Capital weights.** The capital charge is split over the capex channels by
+each area's contribution to FCI. In `CellulosicEthanolTEA`, DPI =
+installed + `f`·ISBL installed (`f` = warehouse + site development +
+additional piping, ISBL only) and every indirect cost (proratable, field,
+construction, contingency, other) is proportional to DPI, so `FCI_a ∝
+I_isbl,a·(1 + f) + I_osbl,a`. Harness v2 records each area's OSBL installed
+cost (`<area>__installed_cost_osbl`, from `tea.OSBL_units`); `f` is
+estimated per sample from `FCI_i = c·(I_i + f·ISBL_i)` (real data: 0.175).
+Without OSBL data (v1, or a TEA without `OSBL_units` such as
+`ConventionalEthanolTEA`, whose FCI/installed = 1) installed costs are used
+(`diag_capex_weights = 'tdc' | 'installed'`). The ISBL-proportional part of
+`FOC − F` (maintenance on ISBL DPI, from the least squares `FOC − F =
+s_K·FCI + s_S·ISBL`) is allocated by ISBL installed cost
+(`diag_foc_alloc = 'isbl'`, `diag_foc_isbl_rate` = 0.03 on real data); the
+rest goes by the FCI weights. Installed cost not covered by the areas goes to
+`capex_utilities`.
+
+**Natural gas (harness v2).** BioSTEAM charges an inlet stream registered
+as a 'natural gas' utility at `bst.stream_prices[name]` if the stream has
+no price (cost pool *utility* → TEA `utility_cost`). Otherwise the stream's
+own price applies (pool *material* → TEA `material_cost`), as for any other
+mostly-methane feed, which may be unpriced (e.g. TAL's dryer gas). The
+harness records `ng_flow_utility, ng_cost_utility, ng_flow_material,
+ng_cost_material` (kg/h, USD/h, at the charged prices). These replace the
+adapters' `natural_gas_flow/price`, which proved unreliable: TAL priced its
+unpriced dryer gas, and corn ethanol reported price 0 for utility gas
+charged at 0.218 USD/kg.
+
+* channel `natural_gas` = `ng_cost_utility + ng_cost_material`. Each part is
+  removed from its own remainder (`utilities_other`, `materials_other`), so
+  nothing is counted twice;
+* intensity = flow of the **priced** gas only. Per pool, priced flow =
+  `cost / p_pool`, where `p_pool` is the pool's highest unit price
+  (cost/flow) over the sample's points. A pool holding only priced (or only
+  unpriced) streams gives exactly its flow if its cost > 0, else 0.
+  *Approximation:* in a pool that mixes priced and unpriced streams, the
+  unit price varies with the mix, and its maximum is the priced streams'
+  price only if some point is nearly free of unpriced gas. Otherwise it is a
+  lower bound, and the intensity an upper bound (`diag_ng_mixed_pool`). The
+  plain pool flow would inflate succinic's intensity 4–40× (a 0.2527 USD/kg
+  CH4 feed beside ≤ 1e5 kg/h of unpriced CH4); with `p_pool` the price
+  matches the priced stream;
+* `natural_gas_price` = total NG cost / total priced flow of the sample (the
+  effective price). `int__ng` uses the cost-equivalent priced flow `cost /
+  price`, so `price × intensity` reproduces the NG cost exactly at every
+  point. This equals the priced flow when a single price applies; otherwise
+  see `diag_ng_q_equiv_rel_dev`. A sample with no priced NG has channel = 0
+  and intensity = 0, and the price falls back to the adapter's value
+  (`diag_ng_price_source = 'adapter'`).
+
+Legacy (v1) data, with one adapter-recorded price, use a pool decided once
+per configuration (CHP-area material-cost evidence, else the sign of the
+remainders). Samples whose chosen pool leaves a negative remainder
+(mispriced or split NG) get `channels_ok = False`. The vote is skipped for v2
+samples.
 
 Each channel's contribution `m_c(y, t)` is fitted with the same OLS design
 matrix `[1, 1/y, 1/t, 1/(y·t)]` as the total; by linearity of OLS the channel
@@ -223,24 +284,45 @@ in `coeff_predictor/data/processed/`):
   sample's own; config value in `inflection_yield_config`),
   `y_min, y_max, t_min, t_max`, `baseline_productivity`, `r` (g/L/h),
   `r_mult`;
-* descriptors: `fp_*` (fermentation product), `pp_*` (final product), `fs_*`
-  (feedstock) from the config record; `fs_*` in the `sample_start` record
-  (feedstock described after applying the sample's parameters) override;
+* descriptors: `fp_*` (fermentation product), `pp_*` (final product) from
+  the config record; `fs_*` (feedstock) = median over the sample's ok points
+  (harness v2 describes the feedstock stream at every point: sample-specific
+  composition and price), else the `sample_start` record (feedstock after
+  applying the sample's parameters), else the config record;
 * parameters: every `p_*` (canonical) and `bp_*` (biorefinery-specific) value;
-  prices actually used: `feedstock_price`, `electricity_price`,
-  `natural_gas_price` (median over points);
+  prices actually used: `feedstock_price`, `electricity_price` (median over
+  points), `natural_gas_price` (v2: effective price of the purchased gas =
+  NG cost / priced NG flow, §2; v1: adapter price);
 * targets (primed basis, i.e. ×g): `a, b, c, d`, `g`, `R2`, `n_points`,
   `fit_mape` (MAPE of the 4-coefficient fit itself = irreducible error),
   channel coefficients `ch__<channel>__<k>` for k in a,b,c,d and channels of
   §2, intensity coefficients `int__<fs|el|ng>__<k>` (price-explicit channels:
-  `ch__feedstock__k = feedstock_price · int__fs__k`, etc.), `phi`, `F_fixed`,
-  `closure_rel` (RMS closure / RMS MPSP), `channels_ok` (φ identified,
-  closure small, NG pool admissible, `F ≥ 0`).
+  `ch__feedstock__k = feedstock_price · int__fs__k`, etc.), `phi`, `F_fixed`
+  (median over points of the fixed channel, USD/yr), `closure_rel` (RMS
+  closure / RMS MPSP), `channels_ok` (φ identified, closure small, NG pools
+  admissible, `F ≥ 0`, measured labor ≤ FOC);
+* diagnostics `diag_*`, among them `diag_ng_pool` (`split` = v2 pools,
+  else the v1 pool), `diag_ng_price_source`, `diag_ng_mixed_pool`,
+  `diag_ng_unpriced_flow_share`, `diag_fixed_source`
+  (`labor|labor_foc|foc_intercept`), `diag_labor_cost`,
+  `diag_labor_multiplier`, `diag_capex_weights`, `diag_isbl_factor`,
+  `diag_foc_alloc`, `diag_F_foc_intercept` (cross-check).
 
 **`points`** — one row per feasible simulated TY point of retained samples:
 `sample_id, y, t, MPSP, recovery` (+ optional extra columns).
 
 **`configs`** — one row per configuration with specs and descriptors.
+
+`report.json` additionally holds `rejections_by_biorefinery` and
+`per_biorefinery` (`dataset.biorefinery_summary`: kept/rejected, median
+R², fit MAPE, closure, φ and its max CV over the productivity samples of a
+configuration, `F_fixed`/labor, `channels_ok` fraction, NG price / priced
+kg per kg / source, capex weighting).
+
+Harness compatibility: v1 files (no NG pools, labor, OSBL split or
+per-point `fs_*`) are processed with the legacy fallbacks above;
+`synthetic.generate(..., harness_version=1)` produces such files for the
+tests.
 
 Units: coefficient `a'` USD/kg, `b'` USD/kg·(g/g), `c'` USD/kg·(g/L),
 `d'` USD/kg·(g/g)(g/L); intensities analogously per unit price

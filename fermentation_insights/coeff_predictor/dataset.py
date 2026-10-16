@@ -32,9 +32,11 @@ Raw reading
   :func:`physics.opex_channels` for how missing cost columns are imputed
   (0 -> they fall into the remainder channels; recorded in
   ``diag_imputed``);
-* ``fs_*`` fields of a ``sample_start`` record (feedstock described after
-  applying the sample's parameters) override the config's baseline
-  description.
+* feedstock descriptors ``fs_*`` of a sample (:func:`feedstock_descriptors`):
+  median over the sample's ok points (harness v2 describes the feedstock
+  stream at every point), else the ``sample_start`` record (feedstock
+  described after applying the sample's parameters), else the config's
+  baseline description.
 
 Feasible points: ``status == 'ok'``, finite positive y, t, MPSP, recovery,
 and ``y <= inflection_yield`` (fitted domain of the publication) with the
@@ -44,8 +46,14 @@ over its points, else the config value; points flagged
 sample-level ``inflection_yield`` (config value in
 ``inflection_yield_config``). ``g`` is the median recovery over all ok
 points of the sample (before inflection clipping), as in the publication.
-The natural-gas pool (``physics.detect_ng_pool``) is decided once per
+Natural gas: harness v2 samples use the recorded per-pool NG flows/costs
+(``physics.natural_gas_pools``, ``diag_ng_pool = 'split'``); for legacy (v1)
+samples the pool (``physics.detect_ng_pool``) is decided once per
 configuration (majority of the per-sample votes, ``diag_ng_pool_vote``).
+Fixed channel: the TEA labor cost recorded by harness v2 (``diag_fixed_source``
+'labor' | 'labor_foc'), else the FOC intercept ('foc_intercept').
+``report['per_biorefinery']`` (:func:`biorefinery_summary`) and
+``report['rejections_by_biorefinery']`` summarize the build per biorefinery.
 
 Targets (per retained sample; see :mod:`physics`)
 -------------------------------------------------
@@ -55,8 +63,8 @@ Targets (per retained sample; see :mod:`physics`)
 ``phi`` [1/yr per USD of FCI, or of installed cost if FCI is unavailable --
 see ``diag_capital_basis``], ``F_fixed`` [USD/yr], ``closure_rel``, ``sum_check``,
 ``channels_ok`` (bool: phi identified without fallback, closure below the
-threshold, natural-gas pool admissible and fixed costs >= 0 -- use it to mask
-channel losses), ``diag_*`` diagnostics.
+threshold, natural-gas pool admissible, fixed costs >= 0 and measured labor
+not above FOC -- use it to mask channel losses), ``diag_*`` diagnostics.
 
 Quality filters (rejection reason in ``report['rejections']``), in order:
 ``smoke_superseded``, ``incomplete``, ``param_error``, ``too_few_points`` (< min_points ok
@@ -85,7 +93,8 @@ from . import physics
 
 __all__ = ('DEFAULT_RAW_DIR', 'DEFAULT_PROCESSED_DIR', 'QualityFilters',
            'ProcessedData', 'read_raw', 'build', 'load', 'TOTAL_TARGETS',
-           'CHANNEL_TARGETS', 'INTENSITY_TARGETS', 'SPEC_COLUMNS', 'main')
+           'CHANNEL_TARGETS', 'INTENSITY_TARGETS', 'SPEC_COLUMNS', 'feedstock_descriptors',
+           'summary', 'biorefinery_summary', 'main')
 
 DEFAULT_RAW_DIR = '/home/user/work/data/raw'
 DEFAULT_PROCESSED_DIR = os.path.join(os.path.dirname(__file__), 'data', 'processed')
@@ -360,6 +369,32 @@ def _sample_inflection(P, config_value):
     return config_value
 
 
+def _present(v):
+    return v is not None and not (isinstance(v, float) and not np.isfinite(v))
+
+
+def feedstock_descriptors(P_ok, srow, crow):
+    """``fs_*`` descriptors of one sample: the median over its ok points
+    (harness v2 records the feedstock stream at every point, i.e. the
+    sample-specific composition), else the ``sample_start`` record (feedstock
+    after applying the sample's parameters), else the config record.
+    Non-numeric fields take the most frequent value."""
+    out = {k: v for k, v in (crow or {}).items() if k.startswith('fs_')}
+    out.update({k: v for k, v in (srow or {}).items() if k.startswith('fs_') and _present(v)})
+    for c in P_ok.columns:
+        if not c.startswith('fs_'):
+            continue
+        v = _num(P_ok[c])
+        if v.notna().any():
+            out[c] = float(v.median())
+        else:
+            s = P_ok[c].dropna()
+            s = s[s.map(lambda x: isinstance(x, str) and x != '')]
+            if len(s):
+                out[c] = s.mode().iloc[0]
+    return out
+
+
 def _decompose(P, phi_prior, ng_pool, capital_basis='auto', g=None):
     return physics.decompose_sample(P, g=g, phi_prior=phi_prior, ng_pool=ng_pool,
                                     capital_basis=capital_basis)
@@ -372,6 +407,12 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
     f = filters or QualityFilters()
     cfg, starts, points, stats = read_raw(raw_dirs, f.require_complete)
     rejections = Counter()
+    rej_bio = defaultdict(Counter)
+
+    def _rej(reason, sid):
+        rejections[reason] += 1
+        rej_bio[str(_sid_key(sid)[0])][reason] += 1
+
     n_beyond_total = 0
     if not len(starts) or not len(points):
         empty = ProcessedData(pd.DataFrame(), pd.DataFrame(), cfg,
@@ -386,7 +427,7 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
         sid = srow['sample_id']
         P = groups.get(sid)
         if P is None or not len(P):
-            rejections['no_points'] += 1
+            _rej('no_points', sid)
             continue
         bio = P['biorefinery'].iloc[0] if 'biorefinery' in P.columns else str(sid).split('|')[0]
         cid = P['config_id'].iloc[0] if 'config_id' in P.columns else None
@@ -396,13 +437,13 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
             stats['samples_without_config'] = stats.get('samples_without_config', 0) + 1
             crow = {'biorefinery': bio, 'config_id': cid}
         if f.drop_superseded_smoke and srow.get('_smoke_superseded', False):
-            rejections['smoke_superseded'] += 1
+            _rej('smoke_superseded', sid)
             continue
         if f.require_complete and not srow.get('_complete', False):
-            rejections['incomplete'] += 1
+            _rej('incomplete', sid)
             continue
         if srow.get('param_error'):
-            rejections['param_error'] += 1
+            _rej('param_error', sid)
             continue
         infl = crow.get('inflection_yield')
         infl = float(infl) if infl is not None and pd.notna(infl) else None
@@ -414,19 +455,19 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
         g_all = physics.median_recovery(_num(P.loc[_feasible(P, None, False)[0], 'recovery']))
         Pf = P.loc[mask].copy()
         if len(Pf) < f.min_points:
-            rejections['too_few_points'] += 1
+            _rej('too_few_points', sid)
             continue
         if _n_distinct(_num(Pf['y'])) < f.min_yields:
-            rejections['too_few_yields'] += 1
+            _rej('too_few_yields', sid)
             continue
         if _n_distinct(_num(Pf['t'])) < f.min_titers:
-            rejections['too_few_titers'] += 1
+            _rej('too_few_titers', sid)
             continue
         need = [c for c in ('F_final_product', 'operating_hours')
                 if c not in Pf.columns or not np.isfinite(_num(Pf[c])).all()
                 or not (_num(Pf[c]) > 0).all()]
         if need:
-            rejections['missing_columns'] += 1
+            _rej('missing_columns', sid)
             continue
         candidates.append((sid, srow, Pf, crow, bio, cid, infl, g_all))
 
@@ -439,9 +480,11 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
             dec[sid] = _decompose(Pf, None, ng_pool, capital_basis, g_all)
         except Exception as e:  # pragma: no cover - defensive
             dec[sid] = e
-    # natural-gas pool: one decision per configuration (majority of the
-    # per-sample votes; ties -> 'utility'), so that the materials_other /
-    # utilities_other targets do not jump between samples of one config
+    # legacy (v1) data only: natural-gas pool decided once per configuration
+    # (majority of the per-sample votes; ties -> 'utility'), so that the
+    # materials_other / utilities_other targets do not jump between samples
+    # of one config. Harness v2 samples (pool 'split': NG cost recorded per
+    # pool) neither vote nor are re-decomposed.
     if ng_pool == 'auto':
         votes = defaultdict(Counter)
         for sid, srow, Pf, crow, bio, cid, infl, g_all in candidates:
@@ -483,23 +526,23 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
     for sid, srow, Pf, crow, bio, cid, infl, g_all in candidates:
         d = dec[sid]
         if not isinstance(d, physics.SampleDecomposition):
-            rejections['decomposition_error'] += 1
+            _rej('decomposition_error', sid)
             continue
         row = d.to_row()
         key_vals = [row[k] for k in ('a', 'b', 'c', 'd', 'g', 'R2')] + \
                    [row[c] for c in CHANNEL_TARGETS]
         if not np.all(np.isfinite(key_vals)):
-            rejections['nonfinite_targets'] += 1
+            _rej('nonfinite_targets', sid)
             continue
         stoich = _num(pd.Series([crow.get('final_product_stoich_mass_ratio')])).iloc[0]
         if d.g <= 0 or (np.isfinite(stoich) and stoich > 0 and d.g > f.max_g_over_stoich * stoich):
-            rejections['bad_g'] += 1
+            _rej('bad_g', sid)
             continue
         if d.fit.R2 < f.min_R2:
-            rejections['low_R2'] += 1
+            _rej('low_R2', sid)
             continue
         if not d.closure_rel <= f.max_closure_rel:
-            rejections['high_closure'] += 1
+            _rej('high_closure', sid)
             continue
         seed, idx = _parse_sid(sid)
         out = {'sample_id': sid, 'config_id': cid, 'biorefinery': bio,
@@ -514,12 +557,9 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
         for k, v in crow.items():
             if k.startswith(_DESC_PREFIXES):
                 out[k] = v
-        # feedstock described after applying the sample's parameters (when the
-        # harness records it in sample_start) overrides the baseline description
-        for k, v in srow.items():
-            if k.startswith('fs_') and v is not None and not (isinstance(v, float) and not np.isfinite(v)):
-                out[k] = v
+        # the sample's own feedstock description (points > sample_start > config)
         Pall = groups[sid]
+        out.update(feedstock_descriptors(Pall.loc[_feasible(Pall, None, False)[0]], srow, crow))
         stc = Counter(Pall['status'].fillna('ok')) if 'status' in Pall.columns else Counter()
         out.update(n_points_raw=len(Pall), n_ok_raw=stc.get('ok', 0),
                    n_infeasible=stc.get('infeasible', 0), n_failed=stc.get('failed', 0))
@@ -532,7 +572,8 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
         out['channels_ok'] = bool(d.diagnostics.get('phi_flag') == 'ok'
                                   and d.closure_rel <= f.max_closure_rel
                                   and d.diagnostics.get('ng_pool_admissible', True)
-                                  and not d.diagnostics.get('F_negative', False))
+                                  and not d.diagnostics.get('F_negative', False)
+                                  and not d.diagnostics.get('fixed_exceeds_foc', False))
         rows.append(out)
         keep = [c for c in _POINT_KEEP if c in Pf.columns]
         pp = Pf[keep].reset_index(drop=True)
@@ -584,12 +625,69 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
             per_config={f'{b}|{c}': int(n) for (b, c), n in
                         samples.groupby(['biorefinery', 'config_id']).size().items()},
         )
+    report['rejections_by_biorefinery'] = {k: dict(v) for k, v in rej_bio.items()}
+    report['per_biorefinery'] = biorefinery_summary(samples, pts, report['rejections_by_biorefinery'])
     data = ProcessedData(samples=samples, points=pts, configs=configs, report=report)
     if out_dir:
         data.save(out_dir)
     if verbose:
         print(summary(data))
     return data
+
+
+def _counts(v):
+    return {str(k): int(n) for k, n in Counter(v.fillna('')).items()}
+
+
+def biorefinery_summary(samples, points=None, rejections_by_biorefinery=None) -> dict:
+    """Per-biorefinery quality/physics diagnostics of the processed tables
+    (dict biorefinery -> dict; also stored in ``report['per_biorefinery']``):
+    retained/rejected counts, median R2 / fit MAPE / closure_rel, phi (median,
+    range, max coefficient of variation over the baseline+productivity
+    samples of a configuration = same parameters, different productivity),
+    fixed channel (median ``F_fixed``, median ``F_fixed / labor_cost``,
+    negative / above-FOC counts, source), fraction ``channels_ok``, natural
+    gas (median price, priced NG per kg final product over the points, price
+    source and mixed pools), capex weighting and the max channel-sum error."""
+    rej = rejections_by_biorefinery or {}
+    bios = sorted((set(samples['biorefinery'].astype(str)) if len(samples) else set()) | set(rej))
+    out = {}
+    for bio in bios:
+        s = samples[samples['biorefinery'].astype(str) == bio] if len(samples) else samples
+        r = {'n_kept': int(len(s)), 'rejected': dict(rej.get(bio, {}))}
+        if len(s):
+            med = lambda c: float(np.nanmedian(_num(s[c]))) if c in s and _num(s[c]).notna().any() else np.nan
+            cv = []
+            if 'sample_kind' in s:
+                for _, gq in s[s['sample_kind'].isin(['baseline', 'productivity'])].groupby('config_id'):
+                    if len(gq) > 1:
+                        cv.append(float(np.std(gq['phi']) / abs(np.mean(gq['phi']))))
+            with np.errstate(divide='ignore', invalid='ignore'):
+                fl = _num(s['F_fixed']) / _num(s['diag_labor_cost']) if 'diag_labor_cost' in s else pd.Series(np.nan)
+            r.update(
+                R2=med('R2'), fit_mape=med('fit_mape'), closure_rel=med('closure_rel'),
+                closure_rel_max=float(_num(s['closure_rel']).max()),
+                phi=med('phi'), phi_min=float(s['phi'].min()), phi_max=float(s['phi'].max()),
+                phi_cv_productivity=max(cv) if cv else np.nan,
+                F_fixed=med('F_fixed'),
+                fixed_over_labor=float(np.nanmedian(fl)) if fl.notna().any() else np.nan,
+                F_negative=int(s['diag_F_negative'].astype(bool).sum()),
+                fixed_exceeds_foc=int(s.get('diag_fixed_exceeds_foc', pd.Series(False)).astype(bool).sum()),
+                fixed_source=_counts(s.get('diag_fixed_source', pd.Series(dtype=object))),
+                channels_ok_frac=float(s['channels_ok'].astype(bool).mean()),
+                ng_pool=_counts(s['diag_ng_pool']),
+                ng_price=med('natural_gas_price'),
+                ng_price_source=_counts(s.get('diag_ng_price_source', pd.Series(dtype=object))),
+                ng_mixed_pool=_counts(s.get('diag_ng_mixed_pool', pd.Series(dtype=object))),
+                ng_unpriced_flow_share=med('diag_ng_unpriced_flow_share'),
+                capex_weights=_counts(s['diag_capex_weights']),
+                foc_alloc=_counts(s.get('diag_foc_alloc', pd.Series(dtype=object))),
+                sum_check_max=float(s['sum_check'].max()))
+            if points is not None and len(points) and 'q__ng' in points:
+                q = _num(points.loc[points['sample_id'].isin(s['sample_id']), 'q__ng'])
+                r['ng_kg_per_kg'] = float(q.median()) if q.notna().any() else np.nan
+        out[bio] = r
+    return out
 
 
 def summary(data: ProcessedData) -> str:
@@ -623,6 +721,18 @@ def summary(data: ProcessedData) -> str:
                  f"{rep['min_utilities_other_rel']:.3g}")
         if rep.get('imputed'):
             L.append(f"imputed (missing->0) columns: {rep['imputed']}")
+        pb = rep.get('per_biorefinery') or biorefinery_summary(s, data.points, rep.get('rejections_by_biorefinery'))
+        L.append('per biorefinery: kept rejected | R2 fit_mape closure | phi (cv prod.) | F_fixed F/labor | '
+                 'ok-frac | NG price, kg/kg, source | capex weights')
+        for b_, r in pb.items():
+            if not r['n_kept']:
+                L.append(f"  {b_:>10s} kept=0 rejected={r['rejected']}")
+                continue
+            L.append(f"  {b_:>10s} {r['n_kept']:3d} {r['rejected']} | {r['R2']:.4f} {r['fit_mape']:.4f} "
+                     f"{r['closure_rel']:.2e} | {r['phi']:.4f} ({r['phi_cv_productivity']:.1e}) | "
+                     f"{r['F_fixed']:.3g} {r['fixed_over_labor']:.3g} | {r['channels_ok_frac']:.2f} | "
+                     f"{r['ng_price']:.4g} {r.get('ng_kg_per_kg', np.nan):.3g} {r['ng_price_source']} "
+                     f"{r['ng_mixed_pool']} | {r['capex_weights']} {r['foc_alloc']}")
         L.append('median total coefficients (primed) by config:')
         med = s.groupby(['biorefinery', 'config_id'])[['a', 'b', 'c', 'd', 'g', 'R2']].median()
         for (b, c), r in med.iterrows():
@@ -640,7 +750,7 @@ def main(argv=None):
     ap.add_argument('--max-closure', type=float, default=0.05)
     ap.add_argument('--include-incomplete', action='store_true')
     ap.add_argument('--no-inflection-clip', action='store_true')
-    ap.add_argument('--ng-pool', default='auto', choices=('auto', 'utility', 'material'))
+    ap.add_argument('--ng-pool', default='auto', choices=('auto', 'split', 'utility', 'material'))
     ap.add_argument('--capital-basis', default='auto', choices=('auto', 'FCI', 'installed_cost'))
     a = ap.parse_args(argv)
     f = QualityFilters(min_points=a.min_points, min_R2=a.min_R2, max_closure_rel=a.max_closure,

@@ -27,22 +27,38 @@ def built(raw, tmp_path_factory):
     return data, out, synthetic.ground_truth(paths)
 
 
-def test_synthetic_round_trip(built):
-    data, out, gt = built
-    s = data.samples
+@pytest.fixture(scope='module')
+def built_v1(tmp_path_factory):
+    """Legacy (harness v1) files: no NG pools, labor, OSBL split, per-point fs_*."""
+    d = str(tmp_path_factory.mktemp('raw_v1'))
+    paths = synthetic.generate(d, n_random=3, n_productivity=1, fail_every=17, harness_version=1)
+    rec = [json.loads(l) for l in open(paths[0])]
+    assert not any('ng_cost_utility' in r or 'labor_cost' in r or 'harness_version' in r for r in rec)
+    return dataset.build([d]), synthetic.ground_truth(paths)
+
+
+def _check_round_trip(s, gt):
     assert len(s) == len(gt) > 0
     m = s.merge(gt, on='sample_id', suffixes=('', '_gt'))
     assert len(m) == len(gt)
     np.testing.assert_allclose(m['phi'], m['phi_true'], rtol=1e-7)
     np.testing.assert_allclose(m['F_fixed'], m['F_fixed_true'], rtol=1e-6)
-    # synthetic FOC = F + 0.03*FCI -> FOC/FCI intercept equals F
-    np.testing.assert_allclose(m['diag_F_foc_intercept'], m['F_fixed_true'], rtol=1e-6)
     np.testing.assert_allclose(m['g'], m['g_true'], rtol=1e-12)
     for col in dataset.CHANNEL_TARGETS + dataset.INTENSITY_TARGETS:
         scale = np.abs(m[['a', 'b', 'c', 'd']]).max(axis=1) if col.startswith('ch__') \
             else np.abs(m[col + '_gt']).max() + 1e-12
         err = np.abs(m[col] - m[col + '_gt']) / scale
         assert err.max() < 1e-7, (col, err.max())
+    assert (s['sum_check'] < 1e-10).all() and s['channels_ok'].all()
+    return m
+
+
+def test_synthetic_round_trip(built):
+    data, out, gt = built
+    s = data.samples
+    m = _check_round_trip(s, gt)
+    # synthetic FOC = F + 0.03*FCI -> FOC/FCI intercept equals F
+    np.testing.assert_allclose(m['diag_F_foc_intercept'], m['F_fixed_true'], rtol=1e-6)
     # contract columns present
     for c in ('sample_id', 'config_id', 'biorefinery', 'sample_kind', 'seed', 'feedstock',
               'feedstock_type', 'fermentation_product', 'final_product', 'neutralization',
@@ -54,6 +70,35 @@ def test_synthetic_round_trip(built):
     assert set(s['sample_kind']) == {'baseline', 'productivity', 'random'}
     assert (s['sum_check'] < 1e-10).all()
     assert s['channels_ok'].all()
+    # harness v2 accounting: NG per pool, measured labor, FCI-contribution weights
+    by = s.set_index('biorefinery')
+    assert (s['diag_ng_pool'] == 'split').all() and (s['diag_ng_price_source'] == 'pools').all()
+    np.testing.assert_allclose(s['natural_gas_price'], s['p_natural_gas_price'], rtol=1e-12)
+    assert (by.loc['SYNA', 'diag_ng_unpriced_flow_share'] > 0).all()
+    assert (by.loc[['SYNA', 'SYNB'], 'diag_fixed_source'] == 'labor').all()
+    assert (by.loc['SYNC', 'diag_fixed_source'] == 'labor_foc').all()
+    np.testing.assert_allclose(by.loc['SYNC', 'diag_labor_multiplier'], 1.6, rtol=1e-9)
+    assert (by.loc[['SYNA', 'SYNB'], 'diag_capex_weights'] == 'tdc').all()
+    assert (by.loc['SYNC', 'diag_capex_weights'] == 'installed').all()
+    # per-sample feedstock descriptors from the points (sampled feedstock price)
+    np.testing.assert_allclose(s['fs_price'], s['p_feedstock_price'], rtol=1e-12)
+    assert s['fs_price'].nunique() > len(s['config_id'].unique())
+    pb = data.report['per_biorefinery']
+    assert set(pb) == {'SYNA', 'SYNB', 'SYNC'} and all(r['channels_ok_frac'] == 1 for r in pb.values())
+    assert all(r['fixed_over_labor'] == pytest.approx(m) for r, m in
+               zip((pb['SYNA'], pb['SYNB'], pb['SYNC']), (1.9, 1.9, 1.6)))
+
+
+def test_legacy_v1_round_trip(built_v1):
+    data, gt = built_v1
+    s = data.samples
+    _check_round_trip(s, gt)
+    assert set(s['diag_ng_pool']) <= {'utility', 'material'}
+    assert (s['diag_fixed_source'] == 'foc_intercept').all()
+    assert (s['diag_capex_weights'] == 'installed').all()
+    # no per-point / sample_start fs_*: the config description is used
+    for b_, g_ in s.groupby('biorefinery'):
+        assert g_['fs_price'].nunique() == 1
 
 
 def test_saved_tables_reload(built):
@@ -106,7 +151,8 @@ def test_loader_robustness(raw, tmp_path):
         for line in L:
             rec = json.loads(line)
             if rec.get('record') == 'point':
-                for k in ('natural_gas_flow', 'base_cost', 'chp__material_cost', 'GWP'):
+                for k in ('natural_gas_flow', 'base_cost', 'chp__material_cost', 'GWP') \
+                        + physics.NG_POOL_COLUMNS:
                     rec.pop(k, None)
             out.append(json.dumps(rec) + '\n')
         return out
@@ -167,10 +213,18 @@ def test_sample_level_inflection_config_ranking_and_fs(raw, tmp_path):
     cfg0 = next(r for r in recs if r['record'] == 'config')
     sids = [r['sample_id'] for r in recs if r['record'] == 'sample_start'
             and r['sample_id'].split('|')[1] == cfg0['config_id']]
-    sid0, sid1 = sids[0], sids[1]
+    sid0, sid1, sid2 = sids[0], sids[1], sids[2]
+    fs0 = []
     for r in recs:
         if r.get('sample_id') == sid1 and r['record'] == 'point':
             r['x_inflection_yield'] = 0.7          # the sample's own (lower) inflection
+        # feedstock descriptors: points (median) > sample_start > config
+        if r.get('sample_id') == sid0 and r['record'] == 'point' and r.get('status') == 'ok':
+            r['fs_w_fermentable_sugar_eq'] = 0.6 + 0.01 * len(fs0)
+            fs0.append(r['fs_w_fermentable_sugar_eq'])
+        if r.get('sample_id') in (sid1, sid2) and r['record'] in ('point', 'sample_start'):
+            for k in [k for k in r if k.startswith('fs_')]:
+                del r[k]
         if r.get('sample_id') == sid1 and r['record'] == 'sample_start':
             r['fs_w_fermentable_sugar_eq'] = 0.5   # feedstock described after sampling
     with open(pa, 'w') as fh:
@@ -192,17 +246,22 @@ def test_sample_level_inflection_config_ranking_and_fs(raw, tmp_path):
     assert (data.points.loc[data.points['sample_id'] == sid1, 'y'] <= 0.7 + 1e-12).all()
     assert s.loc[sid0, 'inflection_yield'] == cfg0['inflection_yield']
     assert s.loc[sid1, 'fs_w_fermentable_sugar_eq'] == 0.5
-    assert s.loc[sid0, 'fs_w_fermentable_sugar_eq'] == cfg0['fs_w_fermentable_sugar_eq']
+    assert s.loc[sid0, 'fs_w_fermentable_sugar_eq'] == pytest.approx(float(np.median(fs0)))
+    assert s.loc[sid2, 'fs_w_fermentable_sugar_eq'] == cfg0['fs_w_fermentable_sugar_eq']
+    assert s.loc[sid2, 'fs_price'] == cfg0['fs_price']
     # g is the median over all ok points (before clipping), as published
     rec1 = [r['recovery'] for r in recs if r.get('sample_id') == sid1 and r['record'] == 'point'
             and r.get('status', 'ok') == 'ok' and r.get('recovery') is not None]
     assert s.loc[sid1, 'g'] == pytest.approx(float(np.median(rec1)), rel=1e-12)
 
 
-def test_ng_pool_consistent_per_config(built):
-    data, _, _ = built
-    s = data.samples
+def test_ng_pool_consistent_per_config(built, built_v1):
+    s = built_v1[0].samples     # legacy: one pool decision per configuration
     has = s[s['diag_ng_pool'] != 'none']
     assert (has.groupby(['biorefinery', 'config_id'])['diag_ng_pool'].nunique() == 1).all()
     assert s['diag_ng_pool_admissible'].all() and 'diag_ng_pool_vote' in s
     assert (s['diag_fixed_basis'] == 'FOC').all() and not s['diag_F_negative'].any()
+    s = built[0].samples        # v2: recorded pools, no vote
+    assert (s['diag_ng_pool'] == 'split').all() and s['diag_ng_pool_admissible'].all()
+    assert (s['diag_fixed_basis'] == 'FOC').all() and not s['diag_F_negative'].any()
+    assert not s['diag_fixed_exceeds_foc'].any()

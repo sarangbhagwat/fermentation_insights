@@ -30,6 +30,20 @@ fits them with :func:`physics.fit_ols_many` (primed basis), so a correct
 decomposition of the JSONL columns must recover them (exactly for
 ``kappa = 0``).
 
+Harness v2 objects: the fake TEA carries ``labor_cost`` (and
+``labor_burden``, as ``CellulosicEthanolTEA``; SYNC mimics
+``ConventionalEthanolTEA``: no burden attribute, multiplier 1.6, no OSBL
+units) and ``OSBL_units`` (wastewater, CHP, facilities); natural gas is an
+inlet stream registered as a 'Natural gas' utility of the boiler -- unpriced
+(stream utility, charged at the stand-in ``biosteam.stream_prices``; SYNA,
+SYNC) or priced (material pool; SYNB) -- and SYNA also feeds unpriced methane
+to its dryer (material pool, cost 0, like TAL); ``feedstock_stream`` gives the
+per-point ``fs_*`` descriptors (price = the sampled feedstock price).
+Generation runs with a minimal stand-in ``biosteam`` module
+(:func:`biosteam_stub`), so results do not depend on whether (or which)
+BioSTEAM is installed. ``generate(..., harness_version=1)`` strips the v2
+columns to emulate legacy files.
+
 CLI::
 
     python -m fermentation_insights.coeff_predictor.synthetic --out <dir> \
@@ -38,8 +52,10 @@ CLI::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
+import sys
 import types
 
 import numpy as np
@@ -50,7 +66,73 @@ from .data_generation.harness import (BiorefineryAdapter, InfeasibleSpecificatio
 from . import physics
 
 __all__ = ('SYNTHETIC_BIOREFINERIES', 'SyntheticAdapter', 'point_model',
-           'generate', 'ground_truth')
+           'generate', 'ground_truth', 'biosteam_stub', 'strip_v2', 'V2_POINT_KEYS')
+
+#: natural-gas utility name of the fake boiler inlet
+NG_NAME = 'Natural gas'
+#: per-point keys added by harness v2 (``strip_v2`` removes them, plus fs_*)
+V2_POINT_KEYS = physics.NG_POOL_COLUMNS + ('labor_cost', 'labor_burden')
+
+
+def _stub_module():
+    m = types.ModuleType('biosteam')
+    m.__version__ = 'synthetic-stub'
+    m.stream_prices = {}
+    m.utils = types.SimpleNamespace(
+        feeds_from_units=lambda units: [s for u in units for s in getattr(u, 'ins', ())],
+        filter_out_missing_streams=lambda streams: None,
+        feeds=lambda streams: [s for s in streams if getattr(s, 'source', None) is None])
+    return m
+
+
+_BST = _stub_module()
+
+
+@contextlib.contextmanager
+def biosteam_stub():
+    """Temporarily make ``import biosteam`` return a minimal stand-in that
+    provides what the harness collectors use (``stream_prices``,
+    ``utils.feeds_from_units/filter_out_missing_streams/feeds``)."""
+    old = sys.modules.get('biosteam')
+    sys.modules['biosteam'] = _BST
+    try:
+        yield _BST
+    finally:
+        if old is None:
+            sys.modules.pop('biosteam', None)
+        else:
+            sys.modules['biosteam'] = old
+
+
+class _Stream:
+    """Hashable fake stream (feed: ``source`` None)."""
+    source = None
+
+    def __init__(self, F_mass=0., price=0., cost=None, CH4=0., IDs=(), mass=()):
+        self.F_mass, self.price = float(F_mass), float(price)
+        self._cost = cost
+        self.imass = {'CH4': float(CH4)}
+        self.chemicals = _Chemicals(tuple(IDs) + (('CH4',) if CH4 else ()))
+        self.mass = np.asarray(mass, float)
+
+    @property
+    def cost(self):
+        return self.F_mass * self.price if self._cost is None else self._cost
+
+
+class _Chemicals(tuple):
+    @property
+    def IDs(self):
+        return tuple(self)
+
+
+class _Unit:
+    """Hashable fake unit."""
+    def __init__(self):
+        self.utility_cost = 0.
+        self.installed_cost = 0.
+        self.ins = []
+        self._inlet_utility_indices = {}
 
 # %% Definitions
 
@@ -63,6 +145,7 @@ SYNTHETIC_BIOREFINERIES = {
     'SYNA': dict(
         feedstock='glucose', feedstock_type='pure_sugar', w_sugar=0.95, eta=0.98,
         w_lignin=0.0, capacity=20000., fs_price=0.40, ng_pool='utility',
+        labor_burden=0.9, osbl=True, ng_unpriced=0.05,
         fp='SynAcid', pp='SynAcid', fp_MW=90.08, pp_MW=90.08, stoich=1.0,
         theoretical_yield=1.0, y_min=0.3, inflection_yield=0.9, t_min=20., t_max=150.,
         S_max=600., baseline_productivity=0.8, g0=0.85, t_g=0.0, steam_supply=0.0,
@@ -77,6 +160,7 @@ SYNTHETIC_BIOREFINERIES = {
     'SYNB': dict(
         feedstock='cornstover', feedstock_type='lignocellulose', w_sugar=0.60, eta=0.85,
         w_lignin=0.18, capacity=100000., fs_price=0.09, ng_pool='material',
+        labor_burden=0.9, osbl=True, ng_unpriced=0.,
         fp='SynAlcohol', pp='SynFuel', fp_MW=74.12, pp_MW=56.1, stoich=0.757,
         theoretical_yield=0.41, y_min=0.12, inflection_yield=0.38, t_min=10., t_max=120.,
         S_max=300., baseline_productivity=0.5, g0=0.70, t_g=1.0, steam_supply=1.2e-3,
@@ -90,6 +174,7 @@ SYNTHETIC_BIOREFINERIES = {
     'SYNC': dict(
         feedstock='sugarcane', feedstock_type='sugar_juice', w_sugar=0.14, eta=0.95,
         w_lignin=0.05, capacity=300000., fs_price=0.035, ng_pool='utility',
+        labor_burden=None, labor_multiplier=1.6, osbl=False, ng_unpriced=0.,
         fp='SynDiol', pp='SynDiol', fp_MW=90.12, pp_MW=90.12, stoich=1.0,
         theoretical_yield=0.5, y_min=0.15, inflection_yield=0.45, t_min=15., t_max=130.,
         S_max=450., baseline_productivity=1.2, g0=0.80, t_g=0.5, steam_supply=0.15e-3,
@@ -202,8 +287,22 @@ def point_model(bio, cfg, params, y, t, r, kappa=0.):
         utility_cost_h=el_cost + other_util + (0. if ng_in_mat else ng_cost),
         cop_sales_h=cop_sales, I_area=I_area, I=I, FCI=FCI, phi=phi, F=F, E=E, eps=eps,
         el_cost=el_cost, other_util=other_util, ng_cost=ng_cost, fs_cost=fs_cost,
-        other_mat=other_mat, ng_in_mat=ng_in_mat,
+        other_mat=other_mat, ng_in_mat=ng_in_mat, I_ISBL=I_ISBL,
+        # unpriced methane to a dryer (material pool, cost 0; not a cost channel)
+        ng_unpriced_flow=bio.get('ng_unpriced', 0.) * F_ferm,
     )
+
+
+#: OSBL areas of the synthetic TEAs (``bio['osbl']``)
+OSBL_AREAS = ('wastewater', 'chp', 'facilities')
+
+
+def area_fci_weights(res, osbl=True):
+    """True per-area capital weights: FCI contributions ``I_a + 0.175*ISBL_a``
+    (synthetic FCI = 1.6*(I + 0.175*ISBL)) when the OSBL split is recorded,
+    else installed costs (what the pipeline can know)."""
+    return {a: v * (1. if a in OSBL_AREAS else 1.175) if osbl else v
+            for a, v in res['I_area'].items()}
 
 
 # %% Fake biosteam-like objects
@@ -212,7 +311,16 @@ class _Group:
     def __init__(self, name):
         self.name = name
         self.I = self.mat = self.hd = self.cd = self.ec = self.ep = 0.
-        self.units = [types.SimpleNamespace(utility_cost=0.)]
+        self.unit = _Unit()
+        self.units = [self.unit]
+        self.feed = _Stream(cost=0.)     # lumped purchased feeds of the group
+        self.unit.ins = [self.feed]
+
+    def sync(self):
+        """Push I / mat into the fake unit (installed cost, feed cost net of
+        the separately modelled feeds such as natural gas)."""
+        self.unit.installed_cost = self.I
+        self.feed._cost = self.mat - sum(s.cost for s in self.unit.ins if s is not self.feed)
 
     def get_installed_cost(self): return self.I / 1e6   # MM$
     def get_material_cost(self): return self.mat        # USD/h
@@ -261,10 +369,35 @@ class SyntheticAdapter(BiorefineryAdapter):
         self.cfg = next(dict(c) for c in self.bio['configs'] if c['config_id'] == config['config_id'])
         self.cfg.setdefault('aerobic', False)
         self.unit_groups = [_Group(n) for n in list(_GROUPS) + [_UNMAPPED]]
+        G = {g.name: g for g in self.unit_groups}
         self.tea = types.SimpleNamespace()
+        if self.bio.get('osbl'):
+            self.tea.OSBL_units = [G[n].unit for n, a in list(_GROUPS.items()) + [(_UNMAPPED, 'facilities')]
+                                   if a in OSBL_AREAS]
         self.product_stream = types.SimpleNamespace(price=0., F_mass=0.)
-        self.system = None
+        # natural gas: inlet 1 of the boiler, registered as a utility
+        self.ng_stream = _Stream(CH4=1.)
+        boiler = G['boiler_turbogenerator'].unit
+        boiler.ins.append(self.ng_stream)
+        boiler._inlet_utility_indices = {NG_NAME: 1}
+        # unpriced methane to the dryer (separation), not registered: material pool
+        self.dryer_gas = _Stream(CH4=1.)
+        if self.bio.get('ng_unpriced'):
+            G['separation'].unit.ins.append(self.dryer_gas)
+        units = [g.unit for g in self.unit_groups]
+        self.system = types.SimpleNamespace(
+            cost_units=units, units=units, feeds=[s for u in units for s in u.ins])
         self.values = {p.name: p.baseline for p in self.parameters()}
+
+    @property
+    def feedstock_stream(self):
+        """Fake feedstock stream (composition of the synthetic biorefinery,
+        price = the sampled feedstock price)."""
+        b = self.bio
+        F = b['capacity']
+        w = (b['w_sugar'], b['w_lignin'], 1. - b['w_sugar'] - b['w_lignin'])
+        return _Stream(F_mass=F, price=self.values.get('p_feedstock_price', b['fs_price']),
+                       IDs=('Glucose', 'Lignin', 'Water'), mass=[F * x for x in w])
 
     def domain(self):
         b = self.bio
@@ -352,6 +485,23 @@ class SyntheticAdapter(BiorefineryAdapter):
         G['boiler_turbogenerator'].units[0].utility_cost = (
             -res['electricity_production'] * 1e3 * p_el + (0. if res['ng_in_mat'] else res['ng_cost']))
         G['cooling_tower'].units[0].utility_cost = res['other_util']
+        # harness v2 objects: labor (FOC = labor*(1 + burden) + 0.03*FCI)
+        b = self.bio
+        if b.get('labor_burden') is not None:
+            tea.labor_cost = res['F'] / (1. + b['labor_burden'])
+            tea.labor_burden = b['labor_burden']
+        else:   # ConventionalEthanolTEA-like: no labor_burden attribute
+            tea.labor_cost = res['F'] / b.get('labor_multiplier', 1.)
+        # natural gas: stream utility (unpriced stream charged at
+        # biosteam.stream_prices) or priced feed (material pool)
+        p_ng = self.values['p_natural_gas_price']
+        self.ng_stream.F_mass = res['natural_gas_flow']
+        self.ng_stream.imass['CH4'] = res['natural_gas_flow']
+        self.ng_stream.price = p_ng if res['ng_in_mat'] else 0.
+        _BST.stream_prices[NG_NAME] = p_ng
+        self.dryer_gas.F_mass = self.dryer_gas.imass['CH4'] = res['ng_unpriced_flow']
+        for g in self.unit_groups:
+            g.sync()
 
     def collect(self):
         keys = ('MPSP', 'recovery', 'F_final_product', 'F_ferm_product', 'F_sugar_fed',
@@ -380,17 +530,48 @@ class SyntheticAdapter(BiorefineryAdapter):
 # %% Generation and ground truth
 
 def generate(out_dir, names=None, n_random=6, n_productivity=2, n_y=5, n_t=5, seed=1,
-             kappa=0., fail_every=23, sample_limit=None, tag=''):
+             kappa=0., fail_every=23, sample_limit=None, tag='', harness_version=2):
     """Write ``{out_dir}/{name}/{name}{tag}.jsonl`` for each synthetic
-    biorefinery via the real harness. Returns the list of paths."""
+    biorefinery via the real harness (with the :func:`biosteam_stub`).
+    ``harness_version=1`` strips the v2 columns (:func:`strip_v2`). Returns
+    the list of paths."""
     paths = []
-    for name in names or SYNTHETIC_BIOREFINERIES:
-        ad = SyntheticAdapter(name, kappa=kappa, fail_every=fail_every)
-        d = os.path.join(out_dir, name)
-        paths.append(run_campaign(ad, d, n_random=n_random, n_productivity=n_productivity,
-                                  seed=seed, n_y=n_y, n_t=n_t, point_timeout=0,
-                                  sample_limit=sample_limit, tag=tag, verbose=False))
+    with biosteam_stub():
+        for name in names or SYNTHETIC_BIOREFINERIES:
+            ad = SyntheticAdapter(name, kappa=kappa, fail_every=fail_every)
+            d = os.path.join(out_dir, name)
+            paths.append(run_campaign(ad, d, n_random=n_random, n_productivity=n_productivity,
+                                      seed=seed, n_y=n_y, n_t=n_t, point_timeout=0,
+                                      sample_limit=sample_limit, tag=tag, verbose=False))
+    if harness_version == 1:
+        for p in paths:
+            strip_v2(p)
     return paths
+
+
+def _is_v2_key(k):
+    return k in V2_POINT_KEYS or k.endswith('__installed_cost_osbl') or k.startswith('fs_')
+
+
+def strip_v2(path):
+    """Rewrite a JSONL file as a legacy (v1) harness file: drop the v2 point
+    columns (natural gas per pool, labor, OSBL installed cost, per-point
+    ``fs_*``) and ``harness_version`` / ``fs_*`` of ``sample_start``."""
+    with open(path) as fh:
+        lines = fh.readlines()
+    out = []
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except Exception:
+            out.append(line)
+            continue
+        if rec.get('record') in ('point', 'sample_start'):
+            rec = {k: v for k, v in rec.items() if k != 'harness_version' and not _is_v2_key(k)}
+        out.append(json.dumps(rec) + '\n')
+    with open(path, 'w') as fh:
+        fh.writelines(out)
+    return path
 
 
 def ground_truth(paths, kappa=0.):
@@ -431,9 +612,12 @@ def ground_truth(paths, kappa=0.):
             for ch in physics.OPEX_CHANNELS:
                 m[ch] = np.array([r['E'][ch] for r in res]) / denom
             phi = res[0]['phi']
+            # capital by FCI contribution when the OSBL split is recorded (v2)
+            osbl = bool(bio.get('osbl')) and any(k.endswith('__installed_cost_osbl') for k in P[0])
             for ch, areas in physics.CAPEX_CHANNEL_AREAS.items():
-                m[ch] = np.array([phi * r['FCI'] / r['I'] * sum(r['I_area'][a] for a in areas)
-                                  for r in res]) / denom
+                ws = [area_fci_weights(r, osbl) for r in res]
+                m[ch] = np.array([phi * r['FCI'] / sum(w.values()) * sum(w[a] for a in areas)
+                                  for r, w in zip(res, ws)]) / denom
             m['fixed'] = np.array([r['F'] for r in res]) / denom
             m['closure'] = np.array([r['eps'] for r in res]) / denom
             q = {'fs': np.array([r['F_feedstock'] / r['F_final_product'] for r in res]),
@@ -464,8 +648,10 @@ def main(argv=None):
     ap.add_argument('--n-productivity', type=int, default=2)
     ap.add_argument('--seed', type=int, default=1)
     ap.add_argument('--kappa', type=float, default=0.)
+    ap.add_argument('--harness-version', type=int, default=2, choices=(1, 2))
     a = ap.parse_args(argv)
-    paths = generate(a.out, a.names, a.n_random, a.n_productivity, seed=a.seed, kappa=a.kappa)
+    paths = generate(a.out, a.names, a.n_random, a.n_productivity, seed=a.seed, kappa=a.kappa,
+                     harness_version=a.harness_version)
     gt = ground_truth(paths, a.kappa)
     gt.to_csv(os.path.join(a.out, 'ground_truth.csv.gz'), index=False)
     print(f'wrote {len(paths)} files, {len(gt)} complete samples -> {a.out}')
