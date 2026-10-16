@@ -19,12 +19,17 @@ interrupted run resumes where it stopped)
 1. ``data``    processed tables from the raw harness files (``dataset.build``),
                cached in ``data/processed/`` and rebuilt only when the raw files
                change (size/mtime fingerprint);
-2. ``split``   final test set, fixed before any modelling and never used for
-               selection: one whole configuration from every biorefinery with
-               >= ``min_configs`` configurations (seeded hash order, preferring
-               feedstocks not yet held out) = out-of-distribution test, plus
-               ~10 % of the samples of every remaining configuration
-               (in-distribution test). -> ``split.json``; the rest = development set;
+2. ``split``   final test set, FROZEN in ``results/split.json`` (committed) before
+               any modelling and never used for selection: one whole
+               configuration from every biorefinery with >= ``min_configs``
+               PLANNED configurations (``PLANNED_CONFIGS``; seeded hash order,
+               preferring feedstocks not yet held out) = out-of-distribution
+               test, plus every sample of the other configurations whose seeded
+               sample-id hash is < 10 % (in-distribution test). The choice depends
+               only on the planned list, the seed and the sample ids, never on
+               which data exist; the file is loaded, never regenerated, and the
+               final stage refuses to run while a test configuration has no
+               data. The rest = development set (``development_set``);
 3. ``hpo``     random search (candidate 0 = package defaults) of width, depth,
                dropout, weight decay, learning rate, w_mpsp, w_ch, w_phys,
                collocation ratio and early-stopping criterion by K-fold leave-configurations-out CV on the
@@ -271,71 +276,156 @@ def _bio_rank(b):
     return BIO_ORDER.index(b) if b in BIO_ORDER else len(BIO_ORDER)
 
 
-# %% Stage 2: final test split
+# %% Stage 2: final test split (frozen)
 
-def make_final_split(samples, seed, min_configs=4, id_frac=0.10, id_min_config_samples=5):
-    """Whole held-out configurations (one per biorefinery with >= min_configs
-    configurations; hash-ranked, preferring feedstocks not held out yet,
-    most-constrained biorefinery first) + ``id_frac`` of the samples of every
-    remaining configuration with >= ``id_min_config_samples`` samples."""
-    import numpy as np
-    cfg = samples.groupby('config_id').agg(biorefinery=('biorefinery', 'first'), feedstock=('feedstock', 'first'),
-                                            n=('sample_id', 'size'))
-    by_bio = {b: sorted(g.index) for b, g in cfg.groupby('biorefinery')}
-    eligible = {b: c for b, c in by_bio.items() if len(c) >= max(2, min_configs)}
+def _planned(*rows):
+    return tuple(dict(config_id=c, biorefinery=b, feedstock=f) for c, b, f in rows)
+
+
+_FS4 = ('glucose', 'corn', 'sugarcane', 'cornstover')
+#: every configuration the data-generation campaigns plan to produce (the
+#: adapters' ``configurations()``). The held-out test configurations are drawn
+#: from THIS list and the split seed only -- never from whichever data happen
+#: to exist when the split is made -- so the split cannot drift as campaigns
+#: finish.
+PLANNED_CONFIGS = _planned(
+    *[(f'{v}_{f}', 'HP', f) for v in ('HP', 'HP_neutral', 'HP_hexanol', 'HP_neutral_hexanol') for f in _FS4],
+    *[(f'{v}_{f}', 'TAL', f) for v in ('TAL', 'TAL_SA') for f in _FS4],
+    *[(f'{v}_{f}', 'succinic', f) for v in ('succinic', 'succinic_neutral') for f in _FS4],
+    *[(f'lactic_{r}_{k}_cornstover', 'lactic', 'cornstover') for r in ('neutral', 'lowpH') for k in ('SSCF', 'SHF')],
+    *[(f'ethanol_{f}', 'ethanol', f) for f in ('cornstover', 'sugarcane', 'corn')],
+    ('oxalic_neutral_sugarcane', 'oxalic', 'sugarcane'),
+    ('IBO_EtOH_corn', 'isobutanol', 'corn'))
+SPLIT_FILE = os.path.join(DEFAULT_RESULTS, 'split.json')
+SPLIT_RULE_VERSION = 2
+
+
+def _unit_hash(*parts):
+    """Deterministic uniform number in [0, 1) from ``parts``."""
+    return _h(*parts) / float(16 ** 12)
+
+
+def make_frozen_split(seed, planned=PLANNED_CONFIGS, min_configs=4, id_frac=0.10):
+    """The final test split as a pure function of the PLANNED configuration
+    list and the seed.
+
+    * out-of-distribution test: one whole configuration from every
+      biorefinery with >= ``min_configs`` planned configurations
+      (most-constrained biorefinery first; within it the configurations in
+      seeded hash order, preferring a feedstock not held out yet);
+    * in-distribution test: every sample of the remaining configurations whose
+      seeded hash of its ``sample_id`` falls below ``id_frac`` (whole
+      samples, i.e. grouped by sample). Membership depends on the sample id
+      only, so it is stable as more samples arrive (a sample never moves
+      between development and test).
+    """
+    cfg = {c['config_id']: c for c in planned}
+    if len(cfg) != len(planned):
+        raise ValueError('duplicate config_id in the planned configuration list')
+    by_bio = {}
+    for c in planned:
+        by_bio.setdefault(c['biorefinery'], []).append(c['config_id'])
+    eligible = {b: sorted(c) for b, c in by_bio.items() if len(c) >= max(2, min_configs)}
     used_fs, test_cfgs = set(), []
-    for b in sorted(eligible, key=lambda b: (len(set(cfg.loc[eligible[b], 'feedstock'])), len(eligible[b]), b)):
+    for b in sorted(eligible, key=lambda b: (len({cfg[c]['feedstock'] for c in eligible[b]}), len(eligible[b]), b)):
         cands = sorted(eligible[b], key=lambda c: _h(seed, 'test-config', c))
-        pick = next((c for c in cands if cfg.loc[c, 'feedstock'] not in used_fs), cands[0])
-        used_fs.add(cfg.loc[pick, 'feedstock'])
+        pick = next((c for c in cands if cfg[c]['feedstock'] not in used_fs), cands[0])
+        used_fs.add(cfg[pick]['feedstock'])
         test_cfgs.append(pick)
-    test_cfgs = sorted(test_cfgs, key=lambda c: (_bio_rank(cfg.loc[c, 'biorefinery']), c))
-    id_ids = []
-    rest = samples[~samples['config_id'].isin(test_cfgs)]
-    for c, grp in rest.groupby('config_id'):
-        n = len(grp)
-        k = int(np.floor(id_frac * n + 0.5)) if n >= id_min_config_samples else 0
-        if k:
-            ids = sorted(grp['sample_id'].astype(str), key=lambda s: _h(seed, 'id-test', s))
-            id_ids += ids[:k]
-    id_ids = sorted(id_ids)
-    is_ood = samples['config_id'].isin(test_cfgs).to_numpy()
-    is_id = samples['sample_id'].isin(set(id_ids)).to_numpy()
-    dev = samples[~is_ood & ~is_id]
+    test_cfgs = sorted(test_cfgs, key=lambda c: (_bio_rank(cfg[c]['biorefinery']), c))
     return dict(
-        seed=seed, rule=(f'one configuration from every biorefinery with >= {max(2, min_configs)} configurations '
-                         f'(hash rank, preferring feedstocks not yet held out) + round({id_frac:g} x n) samples of '
-                         f'every other configuration with >= {id_min_config_samples} samples'),
-        min_configs=min_configs, id_frac=id_frac,
-        test_configs=[dict(config_id=c, biorefinery=cfg.loc[c, 'biorefinery'], feedstock=cfg.loc[c, 'feedstock'],
-                           n_samples=int(cfg.loc[c, 'n'])) for c in test_cfgs],
-        id_test_sample_ids=id_ids, ood_test_sample_ids=sorted(samples.loc[is_ood, 'sample_id'].astype(str)),
-        n_samples=int(len(samples)), n_dev=int(len(dev)), n_test_ood=int(is_ood.sum()), n_test_id=int(is_id.sum()),
-        n_dev_configs=int(dev['config_id'].nunique()),
+        rule_version=SPLIT_RULE_VERSION, seed=int(seed), min_configs=int(min_configs), id_frac=float(id_frac),
+        rule=(f'OOD: one whole configuration from every biorefinery with >= {max(2, min_configs)} PLANNED '
+              f'configurations (most-constrained biorefinery first; sha1 rank of "seed|test-config|config_id", '
+              f'preferring a feedstock not held out yet). ID: every sample of the other configurations with '
+              f'sha1("seed|id-test|sample_id")[:12] / 16^12 < {id_frac:g}. Depends only on the planned list, the '
+              f'seed and the sample id; never on which data exist.'),
+        planned_configs=[dict(c) for c in planned],
+        test_configs=[dict(cfg[c]) for c in test_cfgs],
         biorefineries_without_held_out_config=sorted(set(by_bio) - set(eligible)))
 
 
+def is_id_test(sample_ids, seed, id_frac):
+    import numpy as np
+    return np.array([_unit_hash(seed, 'id-test', str(s)) < id_frac for s in sample_ids], bool)
+
+
+def split_hash(frozen):
+    keys = ('rule_version', 'seed', 'min_configs', 'id_frac', 'planned_configs', 'test_configs')
+    return _sha({k: frozen[k] for k in keys})
+
+
+def apply_split(samples, frozen, require_test_configs=False):
+    """(split info with the current test sample ids, development table).
+    ``require_test_configs``: raise if a held-out configuration has no data
+    (final evaluation)."""
+    test_cfgs = [c['config_id'] for c in frozen['test_configs']]
+    planned = {c['config_id'] for c in frozen['planned_configs']}
+    cid = samples['config_id'].astype(str)
+    present = set(cid)
+    missing = [c for c in test_cfgs if c not in present]
+    if missing and require_test_configs:
+        raise SystemExit(f'final evaluation: held-out test configuration(s) {missing} have no samples in the data; '
+                         f'the frozen split ({SPLIT_FILE}) must not be changed -- generate their data first')
+    unplanned = sorted(present - planned)
+    sid = samples['sample_id'].astype(str)
+    is_ood = cid.isin(test_cfgs).to_numpy()
+    is_id = ~is_ood & is_id_test(sid, frozen['seed'], frozen['id_frac'])
+    dev = samples[~is_ood & ~is_id].reset_index(drop=True)
+    sp = dict(frozen, id_test_sample_ids=sorted(sid[is_id]), ood_test_sample_ids=sorted(sid[is_ood]),
+              n_samples=int(len(samples)), n_dev=int(len(dev)), n_test_ood=int(is_ood.sum()),
+              n_test_id=int(is_id.sum()), n_dev_configs=int(dev['config_id'].nunique()),
+              test_configs_missing=missing, unplanned_configs=unplanned,
+              test_configs=[dict(c, n_samples=int((cid == c['config_id']).sum())) for c in frozen['test_configs']])
+    sp['hash'] = split_hash(frozen)
+    return sp, dev
+
+
+def load_frozen_split(path=SPLIT_FILE):
+    with open(path) as fh:
+        fr = json.load(fh)
+    if fr.get('rule_version') != SPLIT_RULE_VERSION:
+        raise SystemExit(f'{path}: split rule version {fr.get("rule_version")} != {SPLIT_RULE_VERSION}')
+    regen = make_frozen_split(fr['seed'], _planned(*[(c['config_id'], c['biorefinery'], c['feedstock'])
+                                                     for c in fr['planned_configs']]),
+                              fr['min_configs'], fr['id_frac'])
+    if regen['test_configs'] != fr['test_configs']:
+        raise SystemExit(f'{path}: test configurations do not follow from its own rule (edited by hand?)')
+    return fr
+
+
+def development_set(samples, path=SPLIT_FILE):
+    """Development table only (for diagnostics / model development)."""
+    return apply_split(samples, load_frozen_split(path))[1]
+
+
 def stage_split(a, D):
-    path = os.path.join(a.out, 'split.json')
-    sp = make_final_split(D['samples'], a.split_seed, a.min_test_configs, a.id_test_frac)
-    sp['data_hash'] = D['hash']
+    path = a.split_file
     if os.path.exists(path):
-        with open(path) as fh:
-            old = json.load(fh)
-        if old.get('data_hash') != D['hash']:
-            log('split: data changed since split.json was written; the split is regenerated by the same '
-                'deterministic rule (all downstream caches are keyed by data hash and split)')
-        elif {k: v for k, v in old.items() if k != 'created'} != json.loads(json.dumps(sp, default=_json_default)):
-            log('split: WARNING split.json differs from the regenerated split (rule changed?); overwriting')
-    sp['created'] = time.strftime('%Y-%m-%d %H:%M:%S')
-    _dump_json(sp, path)
-    s = D['samples']
-    test_ids = set(sp['id_test_sample_ids']) | set(sp['ood_test_sample_ids'])
-    dev = s[~s['sample_id'].isin(test_ids)].reset_index(drop=True)
+        frozen = load_frozen_split(path)
+        asked = (a.split_seed, a.min_test_configs, a.id_test_frac)
+        have = (frozen['seed'], frozen['min_configs'], frozen['id_frac'])
+        if a.split_seed_given and asked != have:
+            raise SystemExit(f'split: {path} is frozen with (seed, min_configs, id_frac) = {have}; '
+                             f'refusing to use {asked}')
+        if [dict(c) for c in PLANNED_CONFIGS] != frozen['planned_configs']:
+            log(f'split: NOTE the planned configuration list in the code differs from {path}; the frozen '
+                'split is used unchanged')
+    else:
+        frozen = make_frozen_split(a.split_seed, PLANNED_CONFIGS, a.min_test_configs, a.id_test_frac)
+        frozen['created'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        _dump_json(frozen, path)
+        log(f'split: froze a new split -> {path}')
+    sp, dev = apply_split(D['samples'], frozen)
+    if sp['test_configs_missing']:
+        log(f"split: WARNING held-out configuration(s) without data yet: {sp['test_configs_missing']} "
+            '(the final evaluation refuses to run until they have data)')
+    if sp['unplanned_configs']:
+        log(f"split: WARNING configurations not in the planned list (kept in development): {sp['unplanned_configs']}")
+    _dump_json({k: v for k, v in sp.items() if k not in ('planned_configs',)}, os.path.join(a.out, 'split_applied.json'))
     log(f"split: test configurations {[c['config_id'] for c in sp['test_configs']]} ({sp['n_test_ood']} samples) + "
         f"{sp['n_test_id']} in-distribution test samples; development set {len(dev)} samples / "
-        f"{dev['config_id'].nunique()} configurations -> {path}")
-    sp['hash'] = _sha({k: v for k, v in sp.items() if k != 'created'})
+        f"{dev['config_id'].nunique()} configurations (frozen split {path})")
     return sp, dev
 
 
@@ -921,6 +1011,12 @@ def stage_cv(a, plan, runner, dev, ctx, hp, D):
 
 
 def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir):
+    if sp['test_configs_missing']:
+        msg = (f"final: held-out test configuration(s) {sp['test_configs_missing']} have no samples; the frozen "
+               f"split ({a.split_file}) is never changed -- generate their data before the final evaluation")
+        if not a.quick:
+            raise SystemExit(msg)
+        log('WARNING (quick mode only) ' + msg)
     mk, lk, tk = hp_kwargs(hp, plan)
     s = D['samples']
     dev_ids = dev['sample_id'].astype(str).tolist()
@@ -1750,12 +1846,14 @@ def parse_args(argv=None):
     ap.add_argument('--hpo-candidates', type=int, default=0, help='override the budget-derived search size')
     ap.add_argument('--loco-folds', type=int, default=0, help='override: number of LOCO folds (0 = budget / all)')
     ap.add_argument('--members', type=int, default=3, help='full mode: ensemble members in CV (3-5)')
+    ap.add_argument('--split-file', default=SPLIT_FILE,
+                    help='frozen final test split (created from PLANNED_CONFIGS if missing, then never changed)')
     ap.add_argument('--min-test-configs', type=int, default=None,
-                    help='biorefineries with >= this many configurations get a held-out test configuration '
-                         '(default 4, quick 2)')
-    ap.add_argument('--id-test-frac', type=float, default=0.10)
+                    help='only when the split is created: biorefineries with >= this many planned configurations '
+                         'get a held-out test configuration (default 4)')
+    ap.add_argument('--id-test-frac', type=float, default=None, help='only when the split is created (default 0.10)')
     ap.add_argument('--seed', type=int, default=0)
-    ap.add_argument('--split-seed', type=int, default=2026)
+    ap.add_argument('--split-seed', type=int, default=None, help='only when the split is created (default 2026)')
     ap.add_argument('--replan', action='store_true', help='recompute plan.json from the pilot timings')
     ap.add_argument('--fresh', action='store_true', help='delete the fit cache first')
     ap.add_argument('--plan-only', action='store_true',
@@ -1768,8 +1866,10 @@ def parse_args(argv=None):
         a.out = os.path.join(DEFAULT_RESULTS, 'quick') if a.quick else DEFAULT_RESULTS
     if a.models is None:
         a.models = os.path.join(DEFAULT_MODELS, 'quick') if a.quick else DEFAULT_MODELS
-    if a.min_test_configs is None:
-        a.min_test_configs = 2 if a.quick else 4
+    a.split_seed_given = any(v is not None for v in (a.split_seed, a.min_test_configs, a.id_test_frac))
+    a.split_seed = 2026 if a.split_seed is None else a.split_seed
+    a.min_test_configs = 4 if a.min_test_configs is None else a.min_test_configs
+    a.id_test_frac = 0.10 if a.id_test_frac is None else a.id_test_frac
     return a
 
 

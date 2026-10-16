@@ -290,9 +290,18 @@ price, so prices outside the training range are reported separately.
   - leave-one-feedstock-out;
   - leave-one-product-out (hardest; generalization to new products);
   - productivity extrapolation (train on the central productivity range).
-* Hyperparameters chosen on inner validation only; a final test set of whole
-  configurations (untouched until the end; requires ≥ 2 configurations)
-  reported once.
+* Hyperparameters chosen on inner validation only; a final test set
+  (untouched until the end) reported once. It is **frozen** in
+  `results/split.json` (committed 2026-10-16, before any modelling) from the
+  41 *planned* configurations (`experiments.PLANNED_CONFIGS`, = the adapters'
+  `configurations()`) and the seed 2026 only, never from the data that
+  happen to exist: one whole configuration per biorefinery with ≥ 4 planned
+  configurations (HP_corn, TAL_sugarcane, succinic_glucose,
+  lactic_neutral_SSCF_cornstover; out-of-distribution) + every sample of the
+  other configurations whose seeded sample-id hash is < 0.10
+  (in-distribution; membership is a function of the sample id, so stable as
+  campaigns add samples). `experiments.py` loads the file and the final
+  stage fails if a test configuration has no data.
 * Baselines: nearest-configuration lookup, ridge, gradient boosting, plain MLP
   (coefficients only); ablations removing each physics component. Baselines
   are fit on exactly the samples the networks train on (same calibration and
