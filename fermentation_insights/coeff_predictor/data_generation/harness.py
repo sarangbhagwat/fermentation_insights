@@ -189,7 +189,7 @@ class BiorefineryAdapter:
         implementation describes the fermentation and final product chemicals
         and the feedstock stream (``self.feedstock_stream``)."""
         out = {}
-        chems = self.system.thermo.chemicals if self.system is not None else None
+        chems = _get_chemicals(self)
         for key, prefix in (('ferm_product_chemical', 'fp_'),
                             ('final_product_chemical', 'pp_')):
             ID = config.get(key)
@@ -245,17 +245,59 @@ def _utility_cost(units):
     return cost
 
 
+def _group_material_cost(group, counted):
+    """Material cost [USD/h] of the system feeds entering ``group``'s units.
+
+    Unlike ``UnitGroup.get_material_cost`` (which, with the default
+    ``extend_feed_ends=True``, traces feeds back through upstream storage/
+    handling units and can count the same feed in several groups), each feed
+    is attributed once, to the group whose units it enters first.
+    """
+    import biosteam as bst
+    inlets = set(bst.utils.feeds_from_units(group.units))
+    bst.utils.filter_out_missing_streams(inlets)
+    cost = 0.
+    for s in bst.utils.feeds(inlets):
+        if id(s) in counted:
+            continue
+        counted.add(id(s))
+        try:
+            cost += s.cost
+        except Exception:
+            pass
+    return cost
+
+
+def _get_chemicals(adapter):
+    for getter in (lambda: adapter.system.thermo.chemicals,
+                   lambda: adapter.feedstock_stream.chemicals,
+                   lambda: adapter.product_stream.chemicals):
+        try:
+            c = getter()
+            if c is not None:
+                return c
+        except Exception:
+            pass
+    try:
+        import thermosteam as tmo
+        return tmo.settings.chemicals
+    except Exception:
+        return None
+
+
 def collect_area_metrics(unit_groups: Iterable, area_map: dict) -> dict:
     """Sum UnitGroup metrics into canonical areas. Unmapped groups go to
-    'facilities'."""
+    'facilities'. Material costs attribute each system feed to exactly one
+    group (see :func:`_group_material_cost`)."""
     acc = {a: {q: 0. for q in AREA_QUANTITIES} for a in CANONICAL_AREAS}
+    counted = set()
     for g in unit_groups:
         area = area_map.get(g.name, 'facilities')
         if area is None:  # explicitly ignored group
             continue
         a = acc[area]
         a['installed_cost'] += _safe(g.get_installed_cost, 0.) * 1e6  # MM$ -> $
-        a['material_cost'] += _safe(g.get_material_cost, 0.)  # USD/h
+        a['material_cost'] += _safe(lambda: _group_material_cost(g, counted), 0.)  # USD/h
         a['heating_duty'] += _safe(g.get_heating_duty, 0.)  # GJ/h
         a['cooling_duty'] += _safe(g.get_cooling_duty, 0.)  # GJ/h
         a['electricity_consumption'] += _safe(g.get_electricity_consumption, 0.)  # MW
@@ -494,6 +536,8 @@ def run_campaign(adapter: BiorefineryAdapter, out_dir: str, *,
     n_run = 0
     with open(path, 'a') as fh:
         for config in configs:
+            if sample_limit is not None and n_run >= sample_limit:
+                return path
             cid = config['config_id']
             if verbose:
                 print(f'\n=== {adapter.name}: loading {cid}', flush=True)
