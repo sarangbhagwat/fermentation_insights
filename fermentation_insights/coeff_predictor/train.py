@@ -137,6 +137,11 @@ class TrainConfig:
     threads: int = 1
     dtype: str = 'float32'
     verbose: bool = False
+    #: early-stopping criterion on the validation split: 'data' (weighted sum
+    #: of all data terms, incl. the auxiliary channel loss) or a single data
+    #: term, e.g. 'mpsp' (relative MPSP error) -- on held-out configurations
+    #: the channel term can grow while the MPSP error still falls
+    early_stop: str = 'data'
 
     def to_dict(self):
         return asdict(self)
@@ -571,13 +576,14 @@ def train_model(spec, samples, points, mcfg=None, lcfg=None, tcfg=None, val=None
             for k, v in parts.items():
                 agg[k] = agg.get(k, 0.) + float(v.detach()) * len(idx) / n
         rec = {'epoch': epoch, **{f'train_{k}': v for k, v in agg.items()}}
-        crit = agg['data']
+        es = tcfg.early_stop if tcfg.early_stop in agg else 'data'
+        crit = agg[es]
         if vb is not None:
             model.eval()
             with torch.no_grad():
                 _, vp = compute_loss(model, vb, torch.arange(len(vb['X'])), lcfg, train=False)
             rec.update({f'val_{k}': float(v) for k, v in vp.items()})
-            crit = float(vp['data'])
+            crit = float(vp[es] if es in vp else vp['data'])
         hist.append(rec)
         if not np.isfinite(crit):
             break

@@ -81,6 +81,12 @@ class _limit_threads:
     def __enter__(self):
         try:
             from threadpoolctl import threadpool_limits
+            # threadpool_limits only acts on runtimes that are already loaded:
+            # import sklearn's OpenMP-backed estimators first, otherwise the
+            # first fit (whose imports happen inside the block) runs unlimited
+            # (HGB: 156 s instead of 3 s on the oversubscribed machine)
+            import sklearn.ensemble  # noqa: F401
+            import sklearn.neighbors  # noqa: F401
             self.ctx = threadpool_limits(self.n)
         except Exception:  # pragma: no cover
             self.ctx = None

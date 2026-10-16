@@ -77,7 +77,9 @@ from ..harness import (BiorefineryAdapter, InfeasibleSpecification, Parameter,
 
 THEORETICAL_YIELD = 1.0         # g lactic acid / g glucose (or xylose)
 Y_MIN = 0.30                    # g/g, TRY scripts (np.arange(0.3, 1.01, ...))
-T_MIN, T_MAX = 20., 200.        # g/L
+T_MIN, T_MAX = 40., 200.        # g/L; module design range starts at ~40-50 g/L.
+# Below ~40 g/L the evaporator losses make recovery collapse (0.23 at 20 g/L),
+# MPSP leaves the unifying-equation form (fit MAPE 16% vs 1.5% for t >= 40).
 BASELINE_YIELD = 0.76           # g/g (R301.target_yield default)
 BASELINE_PRODUCTIVITY = 0.89    # g/L/h
 TITER_TOL_ABS = 1.0             # g/L (TRY script: effluent_titer + 2 < target)
