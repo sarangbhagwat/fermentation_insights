@@ -8,8 +8,8 @@
 # $LOG_DIR/campaign_succinic_<k>.log. Each worker runs its configurations
 # sequentially, EACH IN ITS OWN PYTHON PROCESS (the succinic systems are
 # module-level and only one feedstock can be loaded per process), writing
-# $OUT/succinic_<config_id>.jsonl. Re-running resumes (completed samples are
-# skipped).
+# $OUT/<config_id>.jsonl (e.g. succinic_neutral_cornstover.jsonl). Re-running
+# resumes (completed samples are skipped).
 #
 # Usage:  bash run_succinic.sh              # defaults below
 #         N_WORKERS=2 N_RANDOM=48 SEED=2 bash run_succinic.sh
@@ -47,8 +47,9 @@ for ((k = 0; k < N_WORKERS; k++)); do
             echo "=== $(date -Is) worker config $cid"
             "$ENV/bin/python" -m $MOD --adapter succinic --out "$OUT" \
                 --configs "$cid" --n-random "$N_RANDOM" --n-productivity "$N_PROD" \
-                --seed "$SEED" --tag "_$cid" $EXTRA_ARGS
-            echo "=== $(date -Is) finished $cid (exit $?)"
+                --seed "$SEED" --tag "_${cid#succinic_}" $EXTRA_ARGS
+            rc=$?
+            echo "=== $(date -Is) finished $cid (exit $rc)"
         done
     ' _ "$MOD" "$ENV" "$OUT" "$N_RANDOM" "$N_PROD" "$SEED" "$EXTRA_ARGS" "${mine[@]}" \
         > "$LOG" 2>&1 &

@@ -64,28 +64,53 @@ module's values.
   reactions), so competing reactions never limit the ethanol conversion and
   the inflection yield equals the theoretical yield.
 
+Domain: y_min = max(0.05 x theoretical, lowest yield at which 1.15 t_min is
+attainable); y_max = 0.995 x inflection (cornstover; the inflection shifts
+slightly with the parameter-dependent glucose/xylose ratio) or 0.99 x
+inflection (sugarcane, corn: X = 1 means zero cell growth, a degenerate state in
+which the sugarcane WWT sludge solver fails); t_min = 10 g/L; t_max =
+min(150 g/L, max_titer(y_max)); ``max_titer(y)`` = 0.98 x the analytical titer
+at the sugar-concentration limit below.
+
 Titer: by the sugar concentration entering fermentation, adjusting water the
 way each module does.
 
 * cornstover: the saccharification dilution water (M301) is solved (Newton
   iterations on the whole system) for the target titer instead of the
   module's 20 % solids-loading spec. Infeasible if the water would have to be
-  negative (the pretreated slurry is already ~22 % solids, so the maximum
-  sugar concentration is only ~7 % above the module's; see ``max_titer``).
+  negative: the pretreated slurry is already ~22 % solids, so the maximum
+  sugar concentration (~127 g/L broth) is only ~7 % above the module's and
+  t_max ~ 58 g/L (module baseline 53 g/L).
 * sugarcane: the module's own titer specification (juice multi-effect
-  evaporation or dilution water); infeasible when the module cannot evaporate
-  enough (its limit, V = 0.5).
-* corn: the recycled process water to the slurry tank (V307) is solved for the
-  target titer instead of the module's fixed slurry solids content (0.311).
-  Infeasible if the slurry total solids would exceed 35 wt% (very-high-gravity
-  limit) or the water would have to be negative.
+  evaporation or dilution water), with an outer loop correcting its target
+  (it is solved before the yeast recycle converges; error up to ~3 %).
+  Infeasible when the fermentor feed would need > 350 g/L fermentable sugar
+  (very-high-gravity limit; module baseline ~300 g/L; the module's own
+  evaporation limit corresponds to > 1000 g/L) or the module cannot evaporate
+  enough.
+* corn: the total water entering the slurry tank (V307) is solved for the
+  target titer (the recycled process water is set as its complement to the
+  backwater recycle and other water inputs) instead of the module's fixed
+  slurry solids content (0.311). Infeasible if the slurry total solids would
+  exceed 35 wt% (very-high-gravity limit; module baseline 26 wt%) or no
+  process water would remain.
+
+Other choices: corn uses its TEA's design IRR (15 %, ``corn.tea``) instead of
+the break-even IRR the module solves at load. Parameters: sugarcane -- the
+cane model's parameters that apply to S1; cornstover -- as in
+``cornstover/model.py`` (BioSTEAM default +-10 % prices, utility prices,
+feedstock flow rate, income tax; saccharification conversion and time) plus
+the boiler natural-gas price; corn -- BioSTEAM defaults (the module has no
+model). Cost-item parameters (base cost, exponent, kW of every cost item) of
+the BioSTEAM defaults are excluded. Area groups: one UnitGroup per canonical
+area (TEA units plus zero-cost units, so every feed is attributed); corn uses
+Lang-factor installed costs as its TEA does.
 """
 from __future__ import annotations
 
 import math
 import warnings
 
-import numpy as np
 
 from ..harness import BiorefineryAdapter, InfeasibleSpecification, Parameter
 from ..schema import CANONICAL_AREAS
@@ -308,6 +333,10 @@ class _Impl:
         self.restore_recycles()
         self.system.reset_cache()
 
+    def max_titer(self, y):
+        """Approximate maximum titer [g/L] at yield y (sugar-concentration limit)."""
+        return y * self.S_max
+
     def check_infeasible(self):
         if self.infeasible_message:
             msg = self.infeasible_message
@@ -335,13 +364,11 @@ class _Cornstover(_Impl):
     name = 'cornstover'
 
     def load(self):
-        import biosteam as bst
         from biorefineries.cellulosic import Biorefinery
         br = Biorefinery('corn stover ethanol')
         self.br = br
-        self.system = sys = br.system
+        self.system = br.system
         self.tea = br.tea
-        self._converge_method = sys.converge_method
         self.ethanol = br.ethanol
         self.feedstock = br.cornstover
         self.R302, self.R303, self.M301 = br.R302, br.R303, br.M301
@@ -499,7 +526,6 @@ class _Cornstover(_Impl):
         b = self.broth
         R303, R302 = self.R303, self.R302
         D = R303.design_results
-        chems = b.chemicals
         produced_cells = sum(s.imass['Z_mobilis'] for s in (R303.outs[1],)) - R303.ins[0].imass['Z_mobilis']
         return dict(
             F_sugar_fed=sum(S.values()),
@@ -577,6 +603,12 @@ class _Cornstover(_Impl):
             return 'facilities'
         if ID == 'M701':  # ethanol-denaturant mixer
             return 'separation'
+        if ID in ('slurry_mixer', 'gas_mixer'):  # WWT sludge/biogas to boiler
+            return 'chp'
+        if ID == 'treated_water_mixer':
+            return 'wastewater'
+        if ID == 'process_water_mixer':
+            return 'facilities'
         n = _numeric_area(ID)
         return {1: 'feedstock', 2: 'conversion', 3: 'fermentation', 4: 'separation',
                 5: 'wastewater', 6: 'wastewater', 7: 'facilities', 8: 'facilities'}.get(n)
@@ -601,7 +633,6 @@ class _Sugarcane(_Impl):
         self.br = br
         self.system = sys = br.system
         self.tea = br.tea
-        self._converge_method = sys.converge_method
         s, u = br.flowsheet.stream, br.flowsheet.unit
         self.ethanol = s.advanced_ethanol
         self.feedstock = s.sugarcane
@@ -626,8 +657,27 @@ class _Sugarcane(_Impl):
         # maximum sugar concentration [g/L broth] at the feed limit S_feed_max
         mb = self.module_baseline
         self.S_max = self.S_feed_max * (mb['S'] / mb['V_broth']) / mb['S_feed']
-        self.unit_groups, self.unassigned = _make_unit_groups(self.tea, self.system, self._assign)
+        # Volume additivity: 1/S_feed = y/t - y*v_EtOH - (1 - X)*k + c0, with
+        # v_EtOH the ethanol specific volume [L/g], X = y/theoretical, and
+        # k, c0 calibrated at the baseline and at X = 0.1, t = 12 g/L.
+        chems = self.R302.chemicals
+        self.v_ethanol = 1. / chems.Ethanol.rho('l', 305.15, 101325.)  # m3/kg = L/g
+        self.k_volume = 0.
+        self.c_volume = self._volume_lhs(mb['y'], mb['t'], mb['S_feed'])
         self._needs_reset = False
+        try:
+            y1, t1 = 0.1 * self.theoretical_yield, 12.
+            self.set_try(y1, t1, self.baseline['r'])
+            self.simulate()
+            lhs1 = self._volume_lhs(y1, t1, self._feed_sugar_concentration())
+            Xb = mb['y'] / self.theoretical_yield
+            self.k_volume = (self.c_volume - lhs1) / (Xb - 0.1)
+            self.c_volume += (1 - Xb) * self.k_volume
+        except Exception:
+            pass
+        finally:
+            self.reset()
+        self.unit_groups, self.unassigned = _make_unit_groups(self.tea, self.system, self._assign)
 
     def _sugar_fed(self):
         return sum(i.imass['Glucose'] + self.sucrose_glc_eq * i.imass['Sucrose'] for i in self.R302.ins)
@@ -645,11 +695,19 @@ class _Sugarcane(_Impl):
                     MESP_gal=price * KG_PER_GAL_ETHANOL, titer_module=self.R302.titer,
                     S_feed=self._feed_sugar_concentration(), V_broth=self.broth.F_vol)
 
+    def _volume_lhs(self, y, t, S_feed):
+        return 1. / S_feed - y / t + y * self.v_ethanol
+
+    def max_titer(self, y):
+        X = y / self.theoretical_yield
+        den = 1. / self.S_feed_max + y * self.v_ethanol + (1 - X) * self.k_volume - self.c_volume
+        return y / den if den > 0 else float('inf')
+
     def set_try(self, y, t, r):
         if y > self.theoretical_yield * (1 + 1e-9):
             raise InfeasibleSpecification('yield above theoretical')
-        if t > 1.1 * y * self.S_max:
-            raise InfeasibleSpecification(f'titer {t:.1f} g/L above max attainable ~{y*self.S_max:.1f} g/L')
+        if t > 1.05 * self.max_titer(y):
+            raise InfeasibleSpecification(f'titer {t:.1f} g/L above max attainable ~{self.max_titer(y):.1f} g/L')
         R = self.R302
         R.efficiency = min(y / self.theoretical_yield, 1.)
         R.titer = t
@@ -769,14 +827,12 @@ class _Corn(_Impl):
     max_slurry_solids = 0.35  # wt, very-high-gravity limit
 
     def load(self):
-        import biosteam as bst
         from biorefineries.corn import Biorefinery
         from biorefineries.corn.tea import default_tea_parameters
         br = Biorefinery()
         self.br = br
-        self.system = sys = br.system
+        self.system = br.system
         self.tea = tea = br.TEA
-        self._converge_method = sys.converge_method
         self.module_IRR_breakeven = tea.IRR
         tea.IRR = default_tea_parameters['IRR']  # module's design IRR (0.15)
         self.ethanol = br.ethanol
@@ -935,6 +991,10 @@ class _Corn(_Impl):
             return 'separation'  # vent scrubber, beer pump, beer column heat exchange
         if ID == 'HX101':
             return 'conversion'  # mash heater before liquefaction
+        if ID == 'MX4':
+            return 'separation'  # ethanol-denaturant mixer
+        if ID == 'S1':
+            return 'wastewater'  # thin stillage splitter (backwater)
         if ID in ('other_facilities', 'PWC', 'CT', 'CWP'):
             return 'facilities'
         n = _numeric_area(ID)
@@ -996,8 +1056,18 @@ class Adapter(BiorefineryAdapter):
         # inflection is the theoretical yield (zero cell growth), a degenerate
         # state where the WWT sludge solver fails; use 99 %.
         y_max = 0.995 * infl if isinstance(impl, _Cornstover) else 0.99 * infl
-        y_min = max(0.05 * th, 1.15 * impl.t_min / impl.S_max)
-        t_max = min(impl.t_max_cap, math.floor(0.98 * y_max * impl.S_max))
+        # lowest yield at which titers >= 1.15 t_min are attainable
+        lo, hi = 0.05 * th, y_max
+        if 0.98 * impl.max_titer(lo) < 1.15 * impl.t_min:
+            for _ in range(60):
+                mid = 0.5 * (lo + hi)
+                if 0.98 * impl.max_titer(mid) < 1.15 * impl.t_min:
+                    lo = mid
+                else:
+                    hi = mid
+            lo = hi
+        y_min = lo
+        t_max = min(impl.t_max_cap, math.floor(0.98 * impl.max_titer(y_max)))
         bl = impl.baseline
         return dict(theoretical_yield=th, inflection_yield=infl,
                     y_min=y_min, y_max=y_max, t_min=impl.t_min, t_max=float(t_max),
@@ -1008,7 +1078,7 @@ class Adapter(BiorefineryAdapter):
                     x_module_baseline_MESP_USD_per_gal_denatured=impl.module_baseline['MESP_gal'])
 
     def max_titer(self, y):
-        return 0.98 * y * self.impl.S_max
+        return 0.98 * self.impl.max_titer(y)
 
     def parameters(self):
         return self.impl.parameters()

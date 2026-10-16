@@ -22,9 +22,9 @@ scripts in ``HP/analyses/fermentation``:
   (the publication's "fixed gross input" mode: feedstock capacity is an
   uncertain parameter and is held constant across TRY; no
   ``set_production_capacity``). These files are current on Bioindustrial-Park
-  master and are identical to the non-FGI '300L' files except that yield,
-  titer, productivity and desired annual production are replaced by feedstock
-  capacity;
+  master and (checked for cornstover) identical to the non-FGI '300L' files
+  except that yield, titer, productivity and desired annual production are
+  replaced by feedstock capacity;
 * TRY: ``spec.load_specifications(spec_1=y/theoretical_yield, spec_2=t,
   spec_3=r)`` then ``system.simulate()``, with the scripts' bugfix barrage;
 * MPSP = ``tea.solve_price(AcrylicAcid) / purity`` [USD/kg pure AA];
@@ -253,8 +253,10 @@ class Adapter(BiorefineryAdapter):
 
     def _simulate_baseline(self):
         spec = self.spec
+        b = self.baseline_spec
+        self._requested = (b['spec_1'] * self.theoretical_yield, b['spec_2'], b['spec_3'])
         self.system.converge_method = self._default_converge_method
-        spec.load_specifications(**self.baseline_spec)
+        spec.load_specifications(**b)
         try:
             self.system.simulate()
         except Exception as e:
@@ -409,7 +411,12 @@ class Adapter(BiorefineryAdapter):
 
     def _reset_and_reload(self):
         system, spec = self.system, self.spec
-        spec_1, spec_2, spec_3 = spec.spec_1, spec.spec_2, spec.spec_3
+        requested = getattr(self, '_requested', None)
+        if requested is None:
+            spec_1, spec_2, spec_3 = spec.spec_1, spec.spec_2, spec.spec_3
+        else:  # spec attributes may be stale if load_specifications failed midway
+            y, spec_2, spec_3 = requested
+            spec_1 = y / self.theoretical_yield
         system.reset_cache()
         system.empty_recycles()
         if self.hexanol:

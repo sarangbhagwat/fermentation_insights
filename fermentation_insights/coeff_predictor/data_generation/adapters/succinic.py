@@ -35,13 +35,16 @@ from __future__ import annotations
 import importlib
 import os
 import re
-import sys
 
 import numpy as np
 
 from ..harness import BiorefineryAdapter, InfeasibleSpecification, Parameter
 
 __all__ = ('Adapter',)
+
+
+class _TiterBracketError(RuntimeError):
+    """The biorefinery's load_titer could not bracket the titer specification."""
 
 FEEDSTOCKS = ('glucose', 'corn', 'sugarcane', 'cornstover')
 FEEDSTOCK_TYPES = {'glucose': 'pure_sugar', 'corn': 'starch',
@@ -260,31 +263,29 @@ class Adapter(BiorefineryAdapter):
             raise InfeasibleSpecification(f'yield {y:.4g} g/g outside (0, theoretical)')
         self._target = (yf, float(t), float(r))
 
-    def _raise_if_infeasible(self, e):
-        """Translate the biorefinery's infeasibility signals into InfeasibleSpecification:
-        InfeasibleRegion('sugar concentration') and failure to bracket the titer
-        specification (titer unattainable by evaporation/dilution within the bounds
-        of the biorefinery's load_titer function)."""
-        msg = str(e).lower()
-        t = self._target[1]
-        if 'sugar concentration' in msg:
-            raise InfeasibleSpecification(f'sugar concentration infeasible: {e}')
-        if 'opposite signs' in msg:
-            titer = float(self.R302.effluent_titer)
-            if abs(titer - t) > 0.02 * t:
-                raise InfeasibleSpecification(
-                    f'titer {t:.3g} g/L not attainable (bracketing failed; '
-                    f'closest attainable {titer:.3g} g/L)')
+    def _load_specs(self, yf, t, r):
+        """spec.load_specifications, translating the biorefinery's infeasibility signals:
+        InfeasibleRegion('sugar concentration') -> InfeasibleSpecification (as in the TRY
+        scripts, no retry); failure to bracket the titer specification in the biorefinery's
+        load_titer function (titer unattainable by evaporation/dilution within its bounds)
+        -> _TiterBracketError (confirmed after a reset in the bugfix barrage)."""
+        try:
+            self.spec.load_specifications(spec_1=yf, spec_2=t, spec_3=r)
+        except Exception as e:
+            msg = str(e).lower()
+            if 'sugar concentration' in msg:
+                raise InfeasibleSpecification(f'sugar concentration infeasible: {e}')
+            if 'opposite signs' in msg:
+                raise _TiterBracketError(
+                    f'titer {t:.3g} g/L not attainable (titer bracketing failed; closest '
+                    f'attainable {float(self.R302.effluent_titer):.3g} g/L)') from e
+            raise
 
     def _load_and_simulate(self):
         yf, t, r = self._target
-        try:
-            for i in self._pre_fermenter_units:
-                i.simulate()
-            self.spec.load_specifications(spec_1=yf, spec_2=t, spec_3=r)
-        except Exception as e:
-            self._raise_if_infeasible(e)
-            raise
+        for i in self._pre_fermenter_units:
+            i.simulate()
+        self._load_specs(yf, t, r)
         self.system.simulate()
 
     def simulate(self):
@@ -300,26 +301,30 @@ class Adapter(BiorefineryAdapter):
         self._check_point()
 
     def _bugfix_barrage(self):
-        """As in biorefineries.succinic._process_specification.evaluate_across_specs."""
+        """As in biorefineries.succinic._process_specification.evaluate_across_specs:
+        reset & reload from baseline, then fixedpoint, then aitken."""
         system, spec = self.system, self.spec
         yf, t, r = self._target
         try:
             try:
                 system.reset_cache()
                 system.empty_recycles()
-                spec.load_specifications(spec_1=spec.baseline_yield, spec_2=spec.baseline_titer,
-                                         spec_3=spec.baseline_productivity)
+                self._load_specs(spec.baseline_yield, spec.baseline_titer, spec.baseline_productivity)
                 system.simulate()
-                spec.load_specifications(spec_1=yf, spec_2=t, spec_3=r)
+                self._load_specs(yf, t, r)
                 system.simulate()
+            except _TiterBracketError as e:
+                # unattainable titer confirmed from a fresh baseline state
+                raise InfeasibleSpecification(str(e))
+            except InfeasibleSpecification:
+                raise
             except Exception:
                 try:
                     self._reset_and_switch_solver('fixedpoint')
                 except Exception:
                     self._reset_and_switch_solver('aitken')
-        except Exception as e:
-            self._raise_if_infeasible(e)
-            raise
+        except _TiterBracketError as e:
+            raise InfeasibleSpecification(str(e))
         finally:
             system.converge_method = self._converge_method
 
@@ -329,7 +334,7 @@ class Adapter(BiorefineryAdapter):
         system.reset_cache()
         system.empty_recycles()
         system.converge_method = solver_ID
-        spec.load_specifications(spec_1=yf, spec_2=t, spec_3=r)
+        self._load_specs(yf, t, r)
         system.simulate()
 
     def _check_point(self):

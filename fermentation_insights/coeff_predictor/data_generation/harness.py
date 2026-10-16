@@ -83,10 +83,16 @@ class Parameter:
         """Create from a biosteam.evaluation.Parameter with a chaospy
         distribution."""
         dist = parameter.distribution
+        hook = getattr(parameter, 'hook', None)
+        if hook:  # biosteam applies hooks to sampled values (Model._sample_hook)
+            inverse_cdf = lambda u, d=dist, h=hook: float(h(float(d.inv(u))))
+        else:
+            inverse_cdf = lambda u, d=dist: float(d.inv(u))
+        element = getattr(parameter, 'element_name', '') or ''
         return cls(
-            name=name or 'bp_' + _slug(parameter.name),
+            name=name or 'bp_' + _slug(f'{element} {parameter.name}'),
             baseline=float(parameter.baseline),
-            inverse_cdf=lambda u, d=dist: float(d.inv(u)),
+            inverse_cdf=inverse_cdf,
             setter=parameter.setter,
             description=f'{parameter.element_name}: {parameter.name} [{parameter.units}]'
                         if hasattr(parameter, 'element_name') else str(parameter.name),
@@ -194,7 +200,7 @@ class BiorefineryAdapter:
                             ('final_product_chemical', 'pp_')):
             ID = config.get(key)
             if ID and chems is not None and ID in chems:
-                out.update({prefix + k: v for k, v in describe_chemical(chems[ID]).items()})
+                out.update({prefix + k: v for k, v in describe_chemical(chems[ID], float(config.get('T_fermentation') or 310.15)).items()})
         fs = getattr(self, 'feedstock_stream', None)
         if fs is not None:
             out.update(describe_feedstock(fs))
@@ -424,10 +430,17 @@ def try_design(dom, n_y, n_t, rng, jitter, max_titer):
     design = []
     for y in ys:
         t_hi = dom['t_max']
-        mt = max_titer(y)
+        try:
+            mt = max_titer(y)
+        except Exception:
+            mt = None
         if mt is not None and np.isfinite(mt):
             t_hi = min(t_hi, mt)
-        t_hi = max(t_hi, dom['t_min'] * 1.05)
+        if t_hi < dom['t_min'] * 1.05:
+            # no usable titer range at this yield: record a single (known
+            # infeasible) probe instead of n_t wasted simulations
+            design.append((float(y), [float(dom['t_min'])]))
+            continue
         ts = np.linspace(dom['t_min'], t_hi, n_t)
         if jitter and n_t > 2:
             step = (t_hi - dom['t_min']) / (n_t - 1)
@@ -592,10 +605,16 @@ def _run_sample(adapter, fh, sid, config, dom, params, plan_item,
     design = try_design(dom, n_y, n_t, rng, plan_item['kind'] != 'baseline',
                         adapter.max_titer) if not param_error else []
     point_id = 0
+    reset_failed = ''
     for y, ts in design:
         for t in ts:
             row = dict(base, point_id=point_id, y=y, t=t, r=r)
             point_id += 1
+            if reset_failed:
+                row.update(status='failed', sim_seconds=0.,
+                           error=f'skipped after failed reset ({reset_failed})')
+                _write_row(fh, row)
+                continue
             t0 = time.time()
             try:
                 with _Alarm(point_timeout):
@@ -624,12 +643,20 @@ def _run_sample(adapter, fh, sid, config, dom, params, plan_item,
                         adapter.reset()
                         for prm in params:
                             prm.setter(values[prm.name])
-                except Exception:
-                    pass
+                except Exception as e2:
+                    # unknown system state: do not simulate further points of
+                    # this sample (their results could be path-contaminated)
+                    reset_failed = f'{type(e2).__name__}: {e2}'[:200]
             row['sim_seconds'] = time.time() - t0
             _write_row(fh, row)
+    if reset_failed:  # try to recover a converged state for the next sample
+        try:
+            with _Alarm(point_timeout):
+                adapter.reset()
+        except Exception:
+            pass
     _write_row(fh, {'record': 'sample_end', 'sample_id': sid, 'n_ok': n_ok,
-                    'param_error': param_error,
+                    'param_error': param_error, 'reset_failed': reset_failed,
                     'seconds': time.time() - t_sample})
     if verbose:
         print(f'{sid}: {n_ok} ok points in {time.time() - t_sample:.0f} s', flush=True)
