@@ -1,0 +1,41 @@
+{
+ "mode": "full",
+ "hpo_k": 5,
+ "hpo_candidates": 16,
+ "hpo_members": 2,
+ "cv_members": 5,
+ "final_members": 5,
+ "release_members": 5,
+ "random_k": 5,
+ "loco_folds": null,
+ "epochs": 300,
+ "patience": 40,
+ "min_epochs": 20,
+ "batch_size": 128,
+ "estimate": {
+  "seconds_per_member_sample": 0.015715144772924912,
+  "hpo_hours": 0.1824353695416883,
+  "cv_hours": 1.6228593956439208,
+  "final_hours": 0.02379890018920607,
+  "total_hours": 1.8290936653748153,
+  "budget_hours": 3.0,
+  "threads": 4,
+  "fits_budget": true
+ },
+ "data_hash": "51d0efe2b4f517a4",
+ "split_hash": "09aba3fdc9882b2d",
+ "threads": 4,
+ "selected": {
+  "width": 64,
+  "depth": 4,
+  "dropout": 0.1,
+  "weight_decay": 0.00089,
+  "lr": 0.0012,
+  "w_mpsp": 1.0,
+  "w_ch": 1.0,
+  "w_phys": 0.03,
+  "colloc_ratio": 0.5,
+  "early_stop": "data",
+  "clip_inputs": -1.0
+ }
+}
