@@ -427,7 +427,25 @@ price, so prices outside the training range are reported separately.
   price-dependent residuals were validated on the data).
 * Metrics: per-coefficient MAE/R² (natural units), MPSP-surface MAPE on held
   out simulated TY points (vs. the irreducible error of the per-sample OLS
-  fit), physics-constraint violation rates, interval coverage.
+  fit), physics-constraint violation rates, interval coverage. Additions
+  (2026-10-17):
+  - MAPE split by sample kind (`*_spec`, `*_random`, also configuration-
+    balanced): *spec-determined* samples (`sample_kind` baseline /
+    productivity: every biorefinery-specific `bp_*` parameter at baseline,
+    so the inputs determine the target) vs *random* samples (unobserved
+    `bp_*` draws: irreducible noise for any model);
+  - `evaluate.noise_floor`: within each configuration (≥ 10 random
+    samples), a 5-fold ridge on the observable inputs (`p_*`, prices, log r,
+    1/r) predicts a held-out random sample's coefficient vector; its surface
+    MAPE estimates the error the unobserved `bp_*` cause for a model that
+    knows the configuration exactly (also reported: + `bp_*` inputs, and the
+    configuration mean);
+  - `coef_gram_rel`: conditioning-aware coefficient error, the numerator
+    error vector e in the norm of the sample's own design, √(eᵀGe) with
+    G = ΦᵀΦ/n over its points (= RMS error of the numerator surface),
+    relative to the RMS target numerator; per coefficient √G_kk·|e_k|.
+    Errors along the ill-determined b′–d′ direction, which leave the surface
+    unchanged, are not penalized (unlike MAE/R²).
 
 ### Development-set diagnostics (2026-10-16; never on test data)
 
@@ -477,6 +495,64 @@ The per-sample fit floor is 1.5 % (`fit_mape`). Findings:
   HP (63 % vs 28 %) and ethanol (155 % vs 114 %). No variant is clearly better
   given the seed variance, so the defaults are unchanged. Clipping is an HPO
   dimension.
+
+### Development-set diagnostics, round 2 (2026-10-17; never on test data)
+
+Same development tables (911 samples / 25 configurations; the patched tables
+add only the S1 fields, and `downstream=False` reproduces the previous
+round's fold results exactly), same folds and protocol (5-fold
+leave-configurations-out stratified by biorefinery, one network per fit,
+default hyperparameters), now 3 seeds (0, 1, 2) per fit for every method.
+"fold" = fold-mean point MAPE; cfg = configuration-balanced; spec / random =
+configuration geo-means over spec-determined / random samples; mean ± sd over
+seeds:
+
+| method | features | fold | cfg mean | cfg geo-mean | spec | random | oxalic | IBO |
+|---|---|---|---|---|---|---|---|---|
+| PI-NN | without | 54 ± 8 | 30.8 ± 4.3 | 20.7 ± 4.6 | 19.2 | 22.2 | 131 ± 74 | 110 ± 29 |
+| PI-NN | downstream | 51 ± 10 | 30.8 ± 7.6 | 21.3 ± 6.1 | 19.7 | 23.6 | 89 ± 56 | 101 ± 35 |
+| PI-NN | downstream + gate | 43 ± 5 | 26.9 ± 2.3 | 18.9 ± 2.5 | 17.6 | 21.1 | 53 ± 37 | 74 ± 17 |
+| plain MLP | without | 79 ± 21 | 37.5 ± 8.9 | 19.7 ± 3.9 | 17.7 | 21.8 | 138 ± 25 | 195 ± 97 |
+| plain MLP | downstream | 47 ± 11 | 26.4 ± 5.0 | 18.0 ± 3.0 | 16.2 | 19.4 | 95 ± 18 | 60 ± 23 |
+| ridge | without | 109 ± 35 | 44.1 ± 8.5 | 16.8 ± 1.0 | 13.1 | 19.2 | 460 ± 361 | 113 ± 32 |
+| ridge | downstream | 79 ± 9 | 35.9 ± 3.2 | 17.6 ± 2.2 | 14.8 | 21.7 | 134 ± 79 | 135 ± 55 |
+| HGB | without | 87 ± 39 | 37.2 ± 10.4 | 17.6 ± 0.6 | 13.5 | 19.3 | 367 ± 280 | 133 ± 19 |
+| HGB | downstream | 86 ± 42 | 37.1 ± 11.1 | 18.1 ± 1.0 | 14.3 | 20.3 | 347 ± 264 | 126 ± 15 |
+| kNN | without | 58 ± 24 | 35.4 ± 8.7 | 23.4 ± 2.6 | 23.2 | 24.2 | 49 | 34 |
+| kNN | downstream | 40 ± 17 | 24.7 ± 6.3 | 18.7 ± 1.7 | 18.5 | 19.4 | 49 | 34 |
+
+Spread of the seed-averaged fold MAPEs across folds (sd): PI-NN 34 → 24 → 19
+(gate), plain 52 → 24, ridge 131 → 23, HGB 107 → 100, kNN 49 → 15. Gram-norm
+coefficient error (configuration geo-mean): PI-NN 17.0 / 19.0 / 15.4 % (gate),
+plain 14.6 → 13.6, ridge 13.2 → 14.7, HGB 16.7 → 16.0, kNN 18.3 → 15.4 --
+while the per-coefficient out-of-fold R² of d′ is −1 to −15, i.e. most of the
+coefficient error lies along the ill-determined b′–d′ direction.
+
+Leave-one-product-out (families with ≥ 3 configurations; mean over seeds,
+mean of the 4 families ± seed sd): PI-NN 62 ± 5 → 50 ± 14 → 49 ± 12 % (gate;
+ethanol 113 → 88 → 80, HP 34 → 26 → 25, succinic 30 → 23 → 28, TAL 70 → 63 →
+61), plain 70 ± 17 → 62 ± 12, ridge 222 ± 168 → 109 ± 52, HGB 60 ± 15 → 66 ±
+15 (TAL 37 → 67), kNN 77 ± 12 → 71 ± 12.
+
+Noise floor (16 configurations): random samples 6.1 % (geo-mean; mean 7.2 %),
+configuration mean 10.7 %, 4-coefficient fit 1.4 %. Spec-determined samples
+are only ~3 points easier than random ones for every method, so the
+remaining cross-configuration error (≈ 3× the floor) is configuration-level
+bias, not noise.
+
+Findings: the structured fields help the models that generalize through
+feature similarity (plain MLP, kNN, ridge; oxalic 460 → 134 % for ridge, IBO
+195 → 60 % for the MLP); trees cannot use a route never seen in training
+(HGB unchanged). For the PI-NN they help only together with the
+water-removal gate, which enforces the vanishing broth-water costs of the
+broth product (oxalic 131 → 53 %) and halves the seed spread. A compact set
+without the per-operation multi-hot columns was worse for every method (PI-NN
+fold 65 %, plain 77 %, gate 55 %). The experiment pipeline therefore uses the
+downstream features and the gate by default (`--no-downstream`,
+`--no-water-gate`); the library defaults (`FeatureSpec(downstream=False)`,
+`ModelConfig(water_gate=False)`) are unchanged. Seed 0 of the previous round
+was favourable: its single-seed PI-NN geo-mean 16.3 % compares with 20.7 ±
+4.6 % over three seeds.
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 
