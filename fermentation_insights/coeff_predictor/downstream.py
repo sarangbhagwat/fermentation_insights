@@ -156,8 +156,11 @@ def validate(spec):
     vocabulary / range; returns the normalized dict of the fields present."""
     out = {}
     for k, vocab in MULTI_FIELDS.items():
-        if k in spec and spec[k] is not None:
-            out[k] = join_ops(parse_ops(spec[k], vocab))
+        v = spec.get(k)
+        # None / NaN = not given (filled later); '' or 'none' = explicitly empty
+        if v is None or (isinstance(v, float) and not math.isfinite(v)):
+            continue
+        out[k] = join_ops(parse_ops(v, vocab))
     for k, vocab in (('final_product_phase', PHASES), ('water_removal_route', ROUTES),
                      ('acid_regeneration', ACIDS)):
         v = spec.get(k)

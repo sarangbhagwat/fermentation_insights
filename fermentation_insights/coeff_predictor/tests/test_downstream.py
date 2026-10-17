@@ -229,6 +229,8 @@ def test_water_gate(broth_tables, tmp_path):
     reg['varying'] = ['separation_principle', 'neutralization', 'separation_ops']
     for c in reg['varying']:
         reg['fields'].pop(c, None)
+    # (a feedstock-product combination not in training: the pair's regime applies)
+    P.spec.spec_registry.get('pair_feedstock', {}).pop('HP|AcrylicAcid|glucose', None)
     q = dict(feedstock='glucose', fermentation_product='HP', final_product='AcrylicAcid', r=0.4, feedstock_price=0.3)
     _, det = P._frame(q, details=True)
     assert det[0]['ambiguous'] == ['neutralization', 'separation_ops']

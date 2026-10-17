@@ -363,6 +363,8 @@ def test_unused_regime_fields_not_reported_as_ambiguous(ensemble):
     reg['varying'] = ['separation_principle', 'neutralization', 'separation_ops', 'water_removal_route']
     for c in reg['varying']:
         reg['fields'].pop(c, None)
+    # (a feedstock-product combination not in training: the pair's regime applies)
+    P.spec.spec_registry.get('pair_feedstock', {}).pop('HP|AcrylicAcid|corn', None)
     q = dict(feedstock='corn', fermentation_product='HP', final_product='AcrylicAcid', r=0.5, feedstock_price=0.2)
     _, det = P._frame(q, details=True)
     assert det[0]['ambiguous'] == ['separation_principle', 'neutralization']

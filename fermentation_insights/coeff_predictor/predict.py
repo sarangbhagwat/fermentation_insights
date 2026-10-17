@@ -140,7 +140,9 @@ to the training configurations get conservative intervals.
 information only, the quantiles calibrated on the random-CV scores.
 """
 import difflib
+import json
 import math
+import os
 import warnings
 
 import numpy as np
@@ -148,12 +150,14 @@ import pandas as pd
 
 from . import downstream
 from .features import (MissingSpecError, ApplicabilityWarning, REQUIRED_FIELDS, FIELD_UNITS,
-                       PRICE_ALIASES, W_SUGAR, W_SUGAR_MAX, G_MAX, DOWNSTREAM_FIELDS,
-                       FREE_TEXT_CATEGORICAL, apply_spec_registry, warn_if_outside, _as_frame)
+                       PRICE_ALIASES, PRICE_COLUMNS, W_SUGAR, W_SUGAR_MAX, G_MAX, DOWNSTREAM_FIELDS,
+                       FREE_TEXT_CATEGORICAL, LIGNOCELLULOSE_ONLY, SPEC_REGISTRY_VERSION,
+                       FeatureSpec, apply_spec_registry, build_spec_registry, is_not_applicable, warn_if_outside,
+                       _as_frame, _feedstock_type, _jsonable)
 from .model import COEFF_KEYS, mpsp_equation_np
 from .train import Ensemble, setup_torch
 
-__all__ = ('CoefficientPredictor', 'MissingSpecError', 'ApplicabilityWarning')
+__all__ = ('CoefficientPredictor', 'MissingSpecError', 'ApplicabilityWarning', 'refresh_spec_registry')
 
 
 class CoefficientPredictor:
@@ -163,10 +167,20 @@ class CoefficientPredictor:
         self.ensemble = ensemble
 
     @classmethod
-    def load(cls, path):
-        """Load a checkpoint directory written by ``Ensemble.save``."""
-        setup_torch()
-        return cls(Ensemble.load(path))
+    def load(cls, path, threads=None):
+        """Load a checkpoint directory written by ``Ensemble.save``.
+        ``threads``: if given, ``torch.set_num_threads(threads)`` (a
+        process-wide setting; by default the session's setting is kept)."""
+        if threads is not None:
+            setup_torch(threads)
+        self = cls(Ensemble.load(path))
+        reg = self.spec.spec_registry or {}
+        if reg and reg.get('version', 1) < SPEC_REGISTRY_VERSION:
+            warnings.warn(f'{path}: the spec registry of this checkpoint predates the per-configuration '
+                          'defaults (version < 2): by-name queries of training configurations use product-pair '
+                          'contextual baselines; refresh it with predict.refresh_spec_registry(path, training_samples)',
+                          UserWarning, stacklevel=2)
+        return self
 
     def save(self, path):
         return self.ensemble.save(path)
@@ -201,35 +215,63 @@ class CoefficientPredictor:
     def _frame(self, spec, details=False):
         """Rows after the registry fill (+ contextual defaults). With
         ``details``: also per-row dicts ``filled``, ``unknown``, ``ambiguous``,
-        ``contextual``, ``imputed_extra``."""
+        ``contextual``, ``context_source``, ``not_applicable``,
+        ``cross_feedstock``, ``conflict``, ``imputed_extra``."""
         df = _as_frame(spec).reset_index(drop=True)
+        if not len(df):
+            raise ValueError('no specification rows: pass a dict, a list of dicts or a DataFrame with at least '
+                             'one row (required fields: ' + ', '.join(REQUIRED_FIELDS) + ')')
         reg = self.spec.spec_registry or {}
         params = [d for d in self.spec.numeric if d['kind'] == 'param' and d['name'].startswith('p_')]
         # regime fields this checkpoint does not use are never reported as ambiguous
         unused = set(FREE_TEXT_CATEGORICAL) if self.spec.downstream else set(DOWNSTREAM_FIELDS)
+        prices = set(PRICE_COLUMNS) | {a for v in PRICE_ALIASES.values() for a in v}
         rows, det = [], []
-        for rec in df.to_dict('records'):
+        for rec in _records(df):
             info = {}
             rec.update(downstream.validate(rec))     # vocabulary / range check (ValueError)
             rec, f = apply_spec_registry(rec, reg, info)
+            src = dict(info.get('source', {}))
+            na = set(info.get('not_applicable', []))
             ctx, extra = [c for c in f if c.startswith('p_') and c != 'p_feedstock_capacity'], []
             pair = f"{rec.get('fermentation_product')}|{rec.get('final_product')}"
             if pair not in reg.get('pair', {}):
                 # unknown product pair: global training baseline, as an
-                # applicable parameter (missing indicator 0)
+                # applicable parameter (missing indicator 0), except where
+                # kept NaN (not applicable) and the lignocellulose-only
+                # parameters of other feedstocks
+                ligno = _feedstock_type(rec.get('feedstock_type')) == 'lignocellulose'
                 for d in params:
-                    if _bad(rec.get(d['name'])):
-                        rec[d['name']] = 10 ** d['fill'] if d['log'] else d['fill']
-                        ctx.append(d['name'])
+                    c = d['name']
+                    if c in na or is_not_applicable(rec.get(c)) or (c in LIGNOCELLULOSE_ONLY and not ligno):
+                        continue
+                    if _bad(rec.get(c)):
+                        rec[c] = 10 ** d['fill'] if d['log'] else d['fill']
+                        ctx.append(c)
+                        src[c] = 'global training baseline (unknown product pair)'
+            # explicit 'not applicable' (features.NOT_APPLICABLE): NaN as in training
+            for c in list(rec):
+                if c.startswith('p_') and c not in prices and is_not_applicable(rec[c]):
+                    rec[c] = float('nan')
+                    na.add(c)
             if any(c in f for c in ('p_feedstock_capacity', 'fs_F_mass')):
                 ctx.append('feedstock_capacity')
+                src['feedstock_capacity'] = src.get('p_feedstock_capacity', src.get('fs_F_mass'))
             elif _bad(rec.get('p_feedstock_capacity')) and _bad(rec.get('fs_F_mass')):
                 ctx.append('feedstock_capacity')
                 extra.append('feedstock_capacity')
+                src['feedstock_capacity'] = 'training median (imputed)'
+            ctx = sorted(set(ctx))
+            fs_known = not _bad_name(rec.get('feedstock')) and str(rec['feedstock']) in reg.get('feedstock', {})
+            fp_known = str(rec.get('fermentation_product')) in reg.get('fermentation_product', {})
             rows.append(rec)
             det.append(dict(filled=list(f), unknown=info.get('unknown', []),
                             ambiguous=[c for c in info.get('ambiguous', []) if c not in unused],
-                            contextual=sorted(set(ctx)), imputed_extra=extra))
+                            contextual=ctx, context_source=sorted({src[c] for c in ctx if src.get(c)}),
+                            not_applicable=sorted(c for c in na if c.startswith('p_')),
+                            cross_feedstock=list(info.get('cross_feedstock', [])),
+                            conflict=list(info.get('conflict', [])), imputed_extra=extra,
+                            calibrated=bool(fs_known and fp_known and pair in reg.get('pair', {})) if reg else True))
         out = pd.DataFrame(rows)
         return (out, det) if details else (out, [d['filled'] for d in det])
 
@@ -237,7 +279,7 @@ class CoefficientPredictor:
         """Required fields still missing (or physically invalid) after the
         name-registry fill (per row)."""
         df, _ = self._frame(spec)
-        return [self._missing_row(rec) for rec in df.to_dict('records')]
+        return [self._missing_row(rec) for rec in _records(df)]
 
     @staticmethod
     def _missing_row(rec):
@@ -254,14 +296,18 @@ class CoefficientPredictor:
         return miss
 
     def _suggest(self, kind, name):
-        keys = list((self.spec.spec_registry or {}).get(kind, {}))
+        reg = self.spec.spec_registry or {}
+        if kind == 'config_id':
+            keys = sorted(set(reg.get('config', {})) | set(downstream.TABLE))
+        else:
+            keys = list(reg.get(kind, {}))
         close = difflib.get_close_matches(str(name), keys, n=3, cutoff=0.5)
         return f"{kind} {name!r} is not in the registry" + (f" (did you mean {', '.join(map(repr, close))}?)"
                                                              if close else f" (known: {', '.join(keys[:12])})")
 
     def _batch(self, spec, descriptors, warn=True):
         df, det = self._frame(spec, details=True)
-        miss = [self._missing_row(rec) for rec in df.to_dict('records')]
+        miss = [self._missing_row(rec) for rec in _records(df)]
         bad = [(i, m) for i, m in enumerate(miss) if m]
         unknown = [(i, k, nm) for i, d in enumerate(det) for k, nm in d['unknown']]
         if bad:
@@ -279,11 +325,25 @@ class CoefficientPredictor:
             warnings.warn('; '.join(f'row {i}: ' + self._suggest(k, nm) for i, k, nm in unknown[:6])
                           + ' -- descriptors/composition not filled from the registry were imputed',
                           UserWarning, stacklevel=3)
+        conf = [(i, c) for i, d in enumerate(det) for c in d['conflict']]
+        if warn and conf:
+            warnings.warn('; '.join(f'row {i}: config_id {cid!r} is ' + ', '.join(f'{k}={v!r}' for k, _, v in ks)
+                                    + ' in training, the spec says ' + ', '.join(f'{k}={u!r}' for k, u, _ in ks)
+                                    for i, (cid, ks) in conf[:6])
+                          + ' -- the configuration\'s baseline values were not used (only its downstream '
+                          'specification); fix config_id or the names', UserWarning, stacklevel=3)
         amb = [(i, d['ambiguous']) for i, d in enumerate(det) if d['ambiguous']]
         if warn and amb:
-            warnings.warn('fermentation regime not unique for the product pair in training; please '
-                          'specify: ' + '; '.join(f'row {i}: {", ".join(a)}' for i, a in amb[:6])
+            warnings.warn('fermentation regime not unique in training for the product pair (and feedstock); '
+                          'please specify (or give config_id): '
+                          + '; '.join(f'row {i}: {", ".join(a)}' for i, a in amb[:6])
                           + " (treated as unknown)", UserWarning, stacklevel=3)
+        cross = [(i, d['cross_feedstock']) for i, d in enumerate(det) if d['cross_feedstock']]
+        if warn and cross:
+            warnings.warn('feedstock-dependent contextual parameter(s) taken from the training baseline of OTHER '
+                          'feedstocks of the product pair (e.g. sugarcane mills were simulated with 180 operating '
+                          'days, the others with 330): ' + '; '.join(f'row {i}: {", ".join(c)}' for i, c in cross[:6])
+                          + ' -- specify them for this feedstock', UserWarning, stacklevel=3)
         batch = self.spec.transform(df, descriptors=descriptors, strict=True, missing_categorical='other')
         rows = batch.imputed_rows or [[] for _ in range(len(batch))]
         batch.imputed_rows = [sorted(set(r) | set(d['imputed_extra'])) for r, d in zip(rows, det)]
@@ -307,8 +367,19 @@ class CoefficientPredictor:
             warnings.warn('not specified, assumed training baseline/median values: ' + ', '.join(names),
                           UserWarning, stacklevel=stacklevel)
         if ctx:
-            warnings.warn('contextual parameters not specified, assumed baseline values: ' + ', '.join(ctx),
-                          UserWarning, stacklevel=stacklevel)
+            srcs = sorted({s for d in det for s in d['context_source']})
+            warnings.warn('contextual parameters not specified, assumed baseline values: ' + ', '.join(ctx)
+                          + (' (from: ' + '; '.join(srcs[:6]) + (' ...' if len(srcs) > 6 else '') + ')'
+                             if srcs else ''), UserWarning, stacklevel=stacklevel)
+
+    def _warn_uncalibrated(self, det, stacklevel=4):
+        bad = [i for i, d in enumerate(det) if not d['calibrated']]
+        if bad and (self.ensemble.conformal or {}):
+            warnings.warn(f'rows {bad[:10]}: feedstock, fermentation product or product pair not in training -- the '
+                          'intervals are calibrated for new configurations of KNOWN feedstocks and products; for an '
+                          'unseen feedstock or product family their coverage is far below nominal (development '
+                          'CV: about 0.75 for a new feedstock, 0.56 for a new product; REPORT.md section 6)',
+                          ApplicabilityWarning, stacklevel=stacklevel)
 
     @staticmethod
     def _user_recovery(df, batch, recovery=None):
@@ -423,8 +494,13 @@ class CoefficientPredictor:
                 warn_if_outside(ratio, oor)
         if self.spec.price_explicit:
             out['price_outside_range'] = [', '.join(o) for o in self.spec.price_outside_range(batch)]
+        out['intervals_calibrated'] = [d['calibrated'] for d in det]
+        if warn:
+            self._warn_uncalibrated(det)
         out['imputed'] = [', '.join(r) for r in batch.imputed_rows]
         out['contextual_defaults'] = [', '.join(d['contextual']) for d in det]
+        out['contextual_source'] = ['; '.join(d['context_source']) for d in det]
+        out['not_applicable'] = [', '.join(d['not_applicable']) for d in det]
         out['filled_from_registry'] = [', '.join(d['filled']) for d in det]
         if warn:
             self._warn_imputed(batch, det)
@@ -493,6 +569,9 @@ class CoefficientPredictor:
             hw = q * (sd + ens.conformal.get('mpsp_eps_rel', 0.01) * np.abs(mu))
             rows['MPSP_lo'], rows['MPSP_hi'] = (mu - hw).ravel(), (mu + hw).ravel()
         rows['g_source'] = np.repeat(self._g_source(g_user), len(y))
+        rows['intervals_calibrated'] = np.repeat([d['calibrated'] for d in det], len(y))
+        if warn:
+            self._warn_uncalibrated(det, stacklevel=3)
         return pd.DataFrame(rows)
 
     def unprimed(self, spec, **kw):
@@ -500,6 +579,41 @@ class CoefficientPredictor:
         the user-supplied ``recovery`` where given, see :meth:`predict`)."""
         p = self.predict(spec, **kw)
         return pd.DataFrame({k.upper(): p[k] / p['g'] for k in COEFF_KEYS})
+
+
+def refresh_spec_registry(path, samples, strict=True):
+    """Rebuild the spec registry (the by-name defaults used by
+    :class:`CoefficientPredictor`, ``features.build_spec_registry``) of the
+    checkpoint ``path`` in the current layout from its training samples
+    ``samples`` and rewrite ``feature_spec.json``; the networks, feature
+    encoding, scaling, intervals and applicability domain are unchanged.
+    The registry parts the checkpoint already has must be reproduced exactly
+    by ``samples`` (i.e. they are its training samples): else ValueError
+    (``strict``) or nothing is written. Returns True if the file changed."""
+    fpath = os.path.join(path, 'feature_spec.json')
+    spec = FeatureSpec.from_json(fpath)
+    old = spec.spec_registry or {}
+    new = json.loads(json.dumps(_jsonable(build_spec_registry(samples))))
+    bad = [k for k in old if k != 'version' and old.get(k) != new.get(k)]
+    if bad:
+        if strict:
+            raise ValueError(f'{path}: the samples do not reproduce the stored spec registry ({", ".join(bad)}); '
+                             'pass the training samples of this checkpoint')
+        return False
+    if old == new:
+        return False
+    spec.spec_registry = new
+    spec.to_json(fpath)
+    return True
+
+
+def _bad_name(v):
+    return v is None or (isinstance(v, float) and not math.isfinite(v)) or str(v).strip() == ''
+
+
+def _records(df):
+    """Row dicts (also for a frame without columns, e.g. from ``{}``)."""
+    return df.to_dict('records') if df.shape[1] else [{} for _ in range(len(df))]
 
 
 def _bad(v):

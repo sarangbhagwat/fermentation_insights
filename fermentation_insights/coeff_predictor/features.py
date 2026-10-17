@@ -645,6 +645,23 @@ def neutralization_factor(df):
 
 # %% Spec-level registry (fill omitted fields by name)
 
+#: spec-registry layout version: 2 adds the per-configuration ('config') and
+#: per-(product pair, feedstock) ('pair_feedstock') entries and the
+#: feedstock-level contextual defaults ('feedstock_context')
+SPEC_REGISTRY_VERSION = 2
+#: contextual parameters that depend on the feedstock (seasonal mills run
+#: fewer operating days; saccharification only exists for lignocellulose):
+#: never taken from another feedstock without a warning
+FEEDSTOCK_DEPENDENT = ('p_operating_days', 'p_saccharification_yield', 'p_enzyme_loading')
+#: contextual parameters that only apply to lignocellulosic feedstocks (their
+#: presence also makes :func:`sugar_availability` treat the feedstock as
+#: lignocellulose)
+LIGNOCELLULOSE_ONLY = ('p_saccharification_yield', 'p_enzyme_loading')
+#: explicit 'not applicable' value of a contextual ``p_*`` parameter in a user
+#: spec (encoded as in training: NaN, missing indicator 1); None / NaN mean
+#: 'not given' and are filled from the registry
+NOT_APPLICABLE = 'n/a'
+
 _FS_REG_COLS = ('feedstock_type', 'p_feedstock_capacity', 'fs_F_mass')
 _FP_REG_COLS = ('ferm_product_chemical', 'theoretical_yield', 'inflection_yield',
                 'n_acid_groups', 'pKa1', 'product_water_solubility')
@@ -683,6 +700,63 @@ def _mode_or_median(s):
     return str(s.astype(str).mode().iloc[0])
 
 
+def is_not_applicable(v):
+    """True for the explicit 'not applicable' marker :data:`NOT_APPLICABLE`."""
+    return isinstance(v, str) and v.strip().lower() in (NOT_APPLICABLE, 'na', 'not_applicable', 'not applicable')
+
+
+_NAME_COLS = ('feedstock', 'fermentation_product', 'final_product')
+
+
+def _descriptor_columns(samples):
+    """Chemical-descriptor columns of the training rows (``fp_*``/``pp_*``):
+    where the chemical registry lacks a value, the training transform used
+    the row's own one (:func:`resolve_chemical_descriptors`)."""
+    return [f'{p}_{k}' for p in ('fp', 'pp') for k in CHEM_DESCRIPTORS if f'{p}_{k}' in samples]
+
+
+def _context_columns(samples, params):
+    """Spec inputs stored per configuration / per (pair, feedstock): the
+    names, the feedstock composition, type and baseline capacity, the
+    product properties, the regime fields and the contextual ``p_*``."""
+    cols = list(_NAME_COLS) + [c for c in samples if c.startswith('fs_w_')] + list(_FS_REG_COLS) \
+        + list(_FP_REG_COLS) + list(_PAIR_REG_COLS) + list(SPEC_NUMERIC) + list(SPEC_BOOLEAN) \
+        + list(SPEC_CATEGORICAL) + list(REGIME_FIELDS) + list(params) + ['t_min', 't_max'] \
+        + _descriptor_columns(samples)
+    seen = set()
+    return [c for c in cols if c in samples and not (c in seen or seen.add(c))]
+
+
+def _entry_value(rows, c):
+    """Baseline value of a column, normalized as :meth:`FeatureSpec.transform`
+    reads it (categoricals: NaN -> 'none'); None = NaN in training."""
+    if c in SPEC_CATEGORICAL or c in _ds.STRING_FIELDS or c in DS_CATEGORICAL \
+            or c in SPEC_BOOLEAN or c in DS_FLAGS:
+        v = _regime_values(rows, c)
+        if not len(v):
+            return None
+        u = v.mode().iloc[0]
+        return u.item() if hasattr(u, 'item') else u
+    if c in _NAME_COLS or c.endswith('_chemical'):
+        return _mode_or_median(rows[c])
+    return _mode_or_median(_to_float(rows[c]))
+
+
+def _context_entry(grp, cols):
+    """{'values': {col: baseline value (None = NaN in training: kept NaN)},
+    'varying': [regime fields with several values in the group]}."""
+    base = _baseline_rows(grp)
+    vals, varying = {}, []
+    for c in cols:
+        if c in REGIME_FIELDS:
+            u = pd.unique(_regime_values(grp, c))
+            if len(u) > 1:
+                varying.append(c)
+                continue
+        vals[c] = _entry_value(base, c)
+    return {'values': vals, 'varying': varying}
+
+
 def build_spec_registry(samples):
     """Per-name defaults learned from training samples so that users can
     specify known feedstocks/products by name: {'feedstock': {name: {...}}
@@ -690,8 +764,18 @@ def build_spec_registry(samples):
     'pair': {'fp|pp': {...}} (incl. the baseline median of every contextual
     ``p_*`` parameter; None = never applicable for that pair in training),
     'regime': {'fp|pp': {'fields': {unique regime values}, 'varying': [...],
-    'n_regimes': k}}, 'domain': {'fp|pp' | '__all__': {'t_min', 't_max'}}}."""
-    reg = {'feedstock': {}, 'fermentation_product': {}, 'pair': {}, 'regime': {}, 'domain': {}}
+    'n_regimes': k}}, 'domain': {'fp|pp' | '__all__': {'t_min', 't_max'}},
+    'config': {config_id: entry}, 'pair_feedstock': {'fp|pp|feedstock':
+    entry + 'configs'}, 'feedstock_context': {name: {FEEDSTOCK_DEPENDENT
+    baseline medians}}, 'pair_descriptors': {'fp|pp': {fp_*/pp_* of the
+    training rows}}, 'version': SPEC_REGISTRY_VERSION}. An entry is
+    ``{'values': {...}, 'varying': [...]}`` (:func:`_context_entry`): the
+    baseline-sample values of the spec inputs, normalized as the training
+    transform reads them, with None where the field was NaN (not applicable)
+    in training -- :func:`apply_spec_registry` keeps such fields NaN, so a
+    by-name query of a training configuration encodes as its training rows."""
+    reg = {'feedstock': {}, 'fermentation_product': {}, 'pair': {}, 'regime': {}, 'domain': {},
+           'config': {}, 'pair_feedstock': {}, 'feedstock_context': {}, 'version': SPEC_REGISTRY_VERSION}
     if 'feedstock' in samples:
         cols = [c for c in samples if c.startswith('fs_w_')] + list(_FS_REG_COLS)
         for name, grp in samples.groupby('feedstock'):
@@ -730,6 +814,24 @@ def build_spec_registry(samples):
         tmn, tmx = _to_float(samples['t_min']), _to_float(samples['t_max'])
         if tmn.notna().any() and tmx.notna().any():
             reg['domain']['__all__'] = {'t_min': float(tmn.min()), 't_max': float(tmx.max())}
+    ccols = _context_columns(samples, params)
+    if 'config_id' in samples:
+        for cid, grp in samples.groupby('config_id'):
+            reg['config'][str(cid)] = _context_entry(grp, ccols)
+    if all(c in samples for c in _NAME_COLS):
+        for (a, b, f), grp in samples.groupby(list(_NAME_COLS[1:]) + ['feedstock']):
+            e = _context_entry(grp, ccols)
+            e['configs'] = sorted(map(str, grp['config_id'].unique())) if 'config_id' in grp else []
+            reg['pair_feedstock'][f'{a}|{b}|{f}'] = e
+    dcols = _descriptor_columns(samples)
+    if dcols and 'fermentation_product' in samples and 'final_product' in samples:
+        reg['pair_descriptors'] = {f'{a}|{b}': {c: _mode_or_median(_to_float(_baseline_rows(grp)[c])) for c in dcols}
+                                   for (a, b), grp in samples.groupby(['fermentation_product', 'final_product'])}
+    if 'feedstock' in samples:
+        for name, grp in samples.groupby('feedstock'):
+            base = _baseline_rows(grp)
+            reg['feedstock_context'][str(name)] = {c: _mode_or_median(_to_float(base[c]))
+                                                   for c in FEEDSTOCK_DEPENDENT if c in base}
     return reg
 
 
@@ -745,14 +847,53 @@ def _omitted(v):
 def apply_spec_registry(spec, reg, info=None):
     """Return a copy of the dict ``spec`` with omitted fields filled from the
     spec registry (user values always take precedence) and the list of
-    filled fields. Regime fields are filled only where unique for the
-    product pair in training. If a dict ``info`` is given, it receives
-    ``unknown`` ([(kind, name)] not in the registry) and ``ambiguous``
-    (omitted regime fields that vary for the pair in training)."""
+    filled fields.
+
+    Precedence (most specific first; a field filled or kept NaN by one level
+    is not touched by the later ones):
+
+    1. ``config_id`` of a training configuration (``reg['config']``): its
+       baseline values of every spec input (names, composition, capacity,
+       product properties, regime and contextual ``p_*``); fields that were
+       NaN in its training rows (not applicable) are kept NaN, so the query
+       encodes as the training rows. Ignored (``info['conflict']``) when the
+       spec names another feedstock / product. Then the downstream fields of
+       ``downstream.TABLE`` for a known ``config_id``.
+    2. the (product pair, feedstock) combination (``reg['pair_feedstock']``):
+       the same, with regime fields filled only where unique for the
+       combination in training;
+    3. the product pair's regime fields where unique for the pair;
+    4. feedstock-dependent contextual parameters (:data:`FEEDSTOCK_DEPENDENT`)
+       of a combination not in training: kept NaN when never applicable for
+       the pair, lignocellulose-only ones (:data:`LIGNOCELLULOSE_ONLY`) kept
+       NaN unless the feedstock is lignocellulosic, else the feedstock's own
+       baseline (other products), else the pair's baseline from OTHER
+       feedstocks (``info['cross_feedstock']``: the caller warns);
+    5. the feedstock, fermentation-product and pair entries.
+
+    If a dict ``info`` is given, it receives ``unknown`` ([(kind, name)] not
+    in the registry, incl. an unrecognized ``config_id``), ``ambiguous``
+    (omitted regime fields that vary in training for the matched
+    combination or pair), ``not_applicable`` (fields kept NaN), ``source``
+    ({field: where its value came from}), ``cross_feedstock`` and
+    ``conflict``."""
     spec = dict(spec)
-    filled = []
-    entries = []
-    unknown, ambiguous = [], []
+    filled, blocked, source = [], set(), {}
+    unknown, ambiguous, cross, conflict = [], [], [], []
+
+    def given(k):
+        v = spec.get(k)
+        return not (_omitted(v) if k in REGIME_FIELDS else _missing(v))
+
+    def put(k, v, src):
+        if k in blocked or given(k):
+            return
+        if v is None or _missing(v):
+            blocked.add(k)          # NaN in training: keep NaN
+            return
+        spec[k] = v
+        filled.append(k)
+        source[k] = src
 
     def lookup(kind, name):
         e = reg.get(kind, {}).get(str(name))
@@ -760,37 +901,88 @@ def apply_spec_registry(spec, reg, info=None):
             unknown.append((kind, str(name)))
         return e
 
-    # a known configuration: its downstream specification (downstream.TABLE)
-    if not _missing(spec.get('config_id')):
-        e = _ds.spec_for(spec['config_id'])
-        if e is not None:
+    # 1. a known configuration
+    cid = None if _missing(spec.get('config_id')) else str(spec['config_id'])
+    if cid is not None:
+        ce = reg.get('config', {}).get(cid)
+        ds_e = _ds.spec_for(cid)
+        if ce is None and ds_e is None:
+            unknown.append(('config_id', cid))
+        if ce is not None:
+            names = ce.get('values', {})
+            bad = [k for k in _NAME_COLS if given(k) and names.get(k) is not None
+                   and str(spec[k]) != str(names[k])]
+            if bad:
+                conflict.append((cid, [(k, str(spec[k]), str(names[k])) for k in bad]))
+            else:
+                for k, v in names.items():
+                    put(k, v, f'configuration {cid}')
+        if ds_e is not None:
             for k in DOWNSTREAM_FIELDS:
-                if _omitted(spec.get(k)) and not _omitted(e.get(k)):
-                    spec[k] = e[k]
-                    filled.append(k)
+                if not _omitted(ds_e.get(k)):
+                    put(k, ds_e[k], f'downstream.TABLE[{cid}]')
 
-    if not _missing(spec.get('feedstock')):
-        entries.append(lookup('feedstock', spec['feedstock']) or {})
-    if not _missing(spec.get('fermentation_product')):
-        entries.append(lookup('fermentation_product', spec['fermentation_product']) or {})
-        if not _missing(spec.get('final_product')):
-            key = f"{spec['fermentation_product']}|{spec['final_product']}"
-            entries.append(lookup('pair', key) or {})
-            r = reg.get('regime', {}).get(key)
-            if r:
-                for k, v in r.get('fields', {}).items():
-                    if _omitted(spec.get(k)) and not _omitted(v):
-                        spec[k] = v
-                        filled.append(k)
-                ambiguous = [c for c in r.get('varying', []) if _omitted(spec.get(c))]
-    for e in entries:
+    fs = None if _missing(spec.get('feedstock')) else str(spec['feedstock'])
+    fp = None if _missing(spec.get('fermentation_product')) else str(spec['fermentation_product'])
+    pp = None if _missing(spec.get('final_product')) else str(spec['final_product'])
+    key = f'{fp}|{pp}' if fp is not None and pp is not None else None
+    # 2. the (pair, feedstock) combination
+    varying = None
+    if key is not None and fs is not None:
+        pfe = reg.get('pair_feedstock', {}).get(f'{key}|{fs}')
+        if pfe is not None:
+            for k, v in pfe.get('values', {}).items():
+                put(k, v, f'{fp} -> {pp} on {fs} (training baseline)')
+            varying = list(pfe.get('varying', []))
+    # 3. the pair's unique regime fields
+    pair_e = None
+    if key is not None:
+        pair_e = reg.get('pair', {}).get(key)
+        r = reg.get('regime', {}).get(key)
+        if r:
+            for k, v in r.get('fields', {}).items():
+                if not _omitted(v):
+                    put(k, v, f'{fp} -> {pp} (unique regime in training)')
+            if varying is None:
+                varying = list(r.get('varying', []))
+    # 4. feedstock-dependent contextual parameters of a new combination
+    fs_e = reg.get('feedstock', {}).get(fs) if fs is not None else None
+    ftype = _feedstock_type(spec.get('feedstock_type') if given('feedstock_type')
+                            else (fs_e or {}).get('feedstock_type'))
+    fs_ctx = reg.get('feedstock_context', {}).get(fs) if fs is not None else None
+    for k in FEEDSTOCK_DEPENDENT:
+        if k in blocked or given(k):
+            continue
+        if pair_e is not None and k in pair_e and pair_e[k] is None:
+            blocked.add(k)          # never applicable for the pair
+        elif k in LIGNOCELLULOSE_ONLY and ftype != 'lignocellulose':
+            blocked.add(k)          # only for lignocellulosic feedstocks
+        elif fs_ctx is not None and fs_ctx.get(k) is not None:
+            put(k, fs_ctx[k], f'feedstock {fs} (baseline of its other products)')
+        elif pair_e is not None and pair_e.get(k) is not None:
+            put(k, pair_e[k], f'{fp} -> {pp} (baseline of OTHER feedstocks)')
+            cross.append(k)
+    # 5. feedstock / fermentation product / pair entries
+    entries = []
+    if fs is not None:
+        entries.append(('feedstock', lookup('feedstock', fs) or {}))
+    if fp is not None:
+        entries.append(('fermentation product', lookup('fermentation_product', fp) or {}))
+        if pp is not None:
+            entries.append(('product pair', lookup('pair', key) or {}))
+            entries.append(('product pair', reg.get('pair_descriptors', {}).get(key) or {}))
+    for kind, e in entries:
         for k, v in e.items():
-            if _missing(spec.get(k)) and not _missing(v):
-                spec[k] = v
-                filled.append(k)
+            if v is not None:
+                put(k, v, f'{kind} registry')
+    ambiguous = [c for c in (varying or []) if not given(c)]
     if info is not None:
         info['unknown'] = unknown
         info['ambiguous'] = ambiguous
+        info['not_applicable'] = sorted(k for k in blocked if not given(k))
+        info['source'] = source
+        info['cross_feedstock'] = cross
+        info['conflict'] = conflict
     return spec, filled
 
 

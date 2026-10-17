@@ -1403,6 +1403,7 @@ def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir, cv):
                          calib_info=info('pinn', release=True), calib_extra=extra('pinn'),
                          meta=dict(kind='release')))
     results = runner.run(jobs, 'final + release')
+    refresh_registries(jobs, results, s)
     import pandas as pd
     rows = []
     for j in jobs:
@@ -1425,7 +1426,9 @@ def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir, cv):
     if c:
         log(f"release: intervals from {c.get('source')}: {c.get('n')} samples of {c.get('n_calib_groups')} "
             f"configurations, cross-fitted MPSP coverage {c.get('mpsp_coverage_cv', float('nan')):.3f} -> {rel}")
-    # release smoke test through the user-facing API
+    # release check through the user-facing API: it must encode every
+    # training row, and the by-name query of every training configuration,
+    # exactly as the validated path (Ensemble.predict_samples)
     out['release_check'] = None
     if not out['release']['error']:
         try:
@@ -1433,19 +1436,74 @@ def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir, cv):
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore')
                 P = CoefficientPredictor.load(rel)
-                base = s[s['sample_kind'].astype(str) == 'baseline'].head(3)
-                pr = P.predict(base, warn=False)
+                base = s[s['sample_kind'].astype(str) == 'baseline'].reset_index(drop=True)
+                api = api_consistency(P, s, base)
+                pr = P.predict(base.head(1), warn=False)
+                q = P.predict(base[API_QUERY_FIELDS].head(1), warn=False)
             out['release_check'] = dict(ok=True, n=len(pr), columns=int(pr.shape[1]),
                                         example={k: float(pr[k].iloc[0]) for k in TARGETS},
+                                        example_by_name={k: float(q[k].iloc[0]) for k in TARGETS},
                                         intervals=all(f'{k}_lo' in pr for k in TARGETS),
-                                        example_config=str(base['config_id'].iloc[0]))
+                                        example_config=str(base['config_id'].iloc[0]), **api)
             log(f'release: {rel} loads with CoefficientPredictor; prediction for {base["config_id"].iloc[0]} '
                 f'baseline: ' + ', '.join(f'{k}={pr[k].iloc[0]:.4g}' for k in TARGETS)
-                + f'; intervals: {out["release_check"]["intervals"]}')
+                + f'; intervals: {out["release_check"]["intervals"]}; API vs. validated path: max rel. diff '
+                f'{api["rows_max_rel"]:.2g} over {api["n_rows"]} training rows, by-name max rel. MPSP diff '
+                f'{api["by_name_max_rel_mpsp"]:.2g} over {api["n_configs"]} configurations')
         except Exception as e:
             out['release_check'] = dict(ok=False, error=f'{type(e).__name__}: {e}')
             log(f'release: WARNING CoefficientPredictor check failed: {type(e).__name__}: {e}')
     return out
+
+
+#: fields of a by-name query of a training configuration (release check)
+API_QUERY_FIELDS = ['config_id', 'feedstock', 'fermentation_product', 'final_product', 'r', 'feedstock_price',
+                    'electricity_price', 'natural_gas_price']
+
+
+def api_consistency(P, samples, base):
+    """Max relative difference between the user API
+    (``CoefficientPredictor.predict``) and the validated path
+    (``Ensemble.predict_samples``, behind every CV / test number): over all
+    ``samples`` passed as full rows (a', b', c', d', g), and for the by-name
+    query (:data:`API_QUERY_FIELDS`) of each configuration's baseline sample
+    ``base`` (MPSP at its baseline yield and titer)."""
+    import numpy as np
+
+    def ref(rows):
+        _, o = P.ensemble.predict_samples(rows, strict=False)
+        return np.column_stack([o['coef'].mean(0), o['g'].mean(0)])
+
+    def rel(a, b):
+        return np.abs(a - b) / np.maximum(np.abs(b), 1e-9)
+
+    full = P.predict(samples, warn=False)[list(TARGETS)].to_numpy(float)
+    q = P.predict(base[API_QUERY_FIELDS], warn=False)[list(TARGETS)].to_numpy(float)
+    y, t = base['baseline_yield'].to_numpy(float), base['baseline_titer'].to_numpy(float)
+    mp = lambda C: (C[:, 0] + C[:, 1] / y + C[:, 2] / t + C[:, 3] / (y * t)) / C[:, 4]
+    return dict(n_rows=int(len(samples)), rows_max_rel=float(np.nanmax(rel(full, ref(samples)))),
+                n_configs=int(base['config_id'].nunique()),
+                by_name_max_rel_mpsp=float(np.nanmax(rel(mp(q), mp(ref(base))))))
+
+
+def refresh_registries(jobs, results, samples):
+    """Spec registries (by-name defaults of the user API) of the saved
+    checkpoints in the current layout (``predict.refresh_spec_registry``;
+    their networks, encoding and intervals are unchanged): a checkpoint
+    saved by an earlier run with a cached fit gets the per-configuration
+    defaults. A no-op for checkpoints trained by this code."""
+    from fermentation_insights.coeff_predictor.predict import refresh_spec_registry
+    for j in jobs:
+        path = j.get('save_model')
+        if not path or results[j['key']].get('error') or not os.path.isdir(path):
+            continue
+        tr = samples[samples['sample_id'].astype(str).isin(set(map(str, j['train_ids'])))]
+        try:
+            if refresh_spec_registry(path, tr):
+                log(f'final: spec registry of {os.path.relpath(path, PKG_DIR)} refreshed (per-configuration '
+                    'defaults; model unchanged)')
+        except ValueError as e:
+            log(f'final: WARNING spec registry of {path} not refreshed: {e}')
 
 
 def final_intervals(fin, samples_by_id, alpha=ALPHA):
