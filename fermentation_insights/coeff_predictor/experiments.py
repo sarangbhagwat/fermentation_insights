@@ -2192,6 +2192,15 @@ def changes_since_v1(ctx):
          'divide by the member spread); the PI-NN and the plain MLP run on every LOCO fold, the PI-NN '
          'ablations on a stratified subset of configurations (`--ablation-loco-folds`). The hyperparameter '
          'search was re-run under the new protocol.',
+         '',
+         '**All changes together** (development set only; DESIGN.md round 4e): PI-NN with the v1 settings vs v2 on '
+         "the pipeline's CV folds, 3 members, paired over 3 seeds, the v1-selected hyperparameters for both "
+         '(fold-mean MPSP MAPE): leave-one-configuration-out 16.1 -> 9.7 % (t = -10.8), leave-one-feedstock-out '
+         '64.1 -> 34.9 % (t = -24), leave-one-product-out 86.1 -> 50.1 % (t = -7.5; succinic 28 -> 51 % is the one '
+         'held-out group that got worse), productivity extrapolation 18.3 -> 4.3 % (t = -4.2), random 4.10 -> 3.91 % '
+         '(t = -9.1); LOCO restricted to the families of the OOD test configurations 13.3 -> 6.2 % (t = -9.5). On '
+         'the development proxy of the frozen test (6 draws): OOD 11.8 -> 7.1 %, ID 14.3 -> 3.8 %, better than '
+         'HGB (9.2 / 4.8 %), the plain MLP (10.3 / 6.1 %) and ridge (11.4 / 7.7 %) on both.',
          '']
     return '\n'.join(L)
 
