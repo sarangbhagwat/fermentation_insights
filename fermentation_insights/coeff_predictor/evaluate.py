@@ -16,7 +16,23 @@ Metrics (natural units)
 * MPSP surface: MAPE of the predicted equation on the held-out simulated TY
   points (``mpsp_mape``), the same for the per-sample OLS coefficients
   (``oracle_mape``, the irreducible error of the 4-coefficient form) and the
-  mean of the samples' recorded ``fit_mape``;
+  mean of the samples' recorded ``fit_mape``; configuration-balanced
+  (``mpsp_mape_cfg``, ``_cfg_gmean``) and split by sample kind:
+  ``*_spec`` = spec-determined samples (``sample_kind`` baseline or
+  productivity: every biorefinery-specific ``bp_*`` parameter at its
+  baseline, so the features determine the target), ``*_random`` = random
+  samples (unobserved ``bp_*`` draws add noise no model can remove; see
+  :func:`noise_floor`);
+* conditioning-aware coefficient error (``coef_gram_rel``): the error vector
+  e = theta_hat - theta of the numerator coefficients (a', b', c', d') in
+  the norm of the sample's own design, sqrt(e' G e) with G = Phi' Phi / n
+  over its simulated points (Phi = [1, 1/y, 1/t, 1/(y t)]), i.e. the RMS
+  error of the numerator surface, relative to the RMS of the target
+  numerator; per coefficient ``coef_gram_rel`` with target k =
+  sqrt(G_kk) |e_k| / RMS (the surface error that coefficient's error alone
+  would cause). Unlike per-coefficient MAE/R^2 it does not punish errors
+  along ill-determined directions (b'-d' correlation -0.9 on the domain)
+  that leave the surface unchanged;
 * constraint-violation rates of the predictions (fraction of samples):
   ``mono_y``, ``mono_t``, ``positive`` at the sample's points, ``g_le_gmax``,
   ``nonneg_fs``/``nonneg_ng`` (price-explicit models), and ``mono_r`` by a
@@ -52,7 +68,7 @@ from .train import (LossConfig, TrainConfig, train_ensemble, make_splits, pad_po
                     setup_torch)
 
 __all__ = ('compute_metrics', 'fit_method', 'run_cv', 'summarize', 'grouped_holdout', 'ABLATIONS',
-           'METHODS', 'main')
+           'METHODS', 'main', 'gram_errors', 'spec_determined', 'noise_floor', 'SPEC_KINDS')
 
 TARGETS = COEFF_KEYS + ('g',)
 METHODS = ('pinn', 'plain', 'ridge', 'hgb', 'knn')
@@ -120,8 +136,8 @@ class _EnsembleMethod:
 
 
 class _SklearnMethod:
-    def __init__(self, kind, samples, seed=0):
-        self.spec = FeatureSpec(price_explicit=False).fit(samples)
+    def __init__(self, kind, samples, seed=0, spec_kw=None):
+        self.spec = FeatureSpec(price_explicit=False, **(spec_kw or {})).fit(samples)
         X = self.spec.full_matrix(self.spec.transform(samples, strict=False))
         Z = _targets(samples)
         ok = np.isfinite(Z).all(1) & np.isfinite(X).all(1)
@@ -178,13 +194,14 @@ def _configs(method, mcfg_kw=None, lcfg_kw=None):
 
 
 def fit_method(method, samples, points, n_members=1, mcfg_kw=None, lcfg_kw=None, tcfg_kw=None,
-               group_col=None, calib_frac=0.15, seed=0, log=None):
+               group_col=None, calib_frac=0.15, seed=0, log=None, spec_kw=None):
     """Fit ``method`` on training tables; returns an object with
     ``predict(samples_df) -> dict(coef, g, ...)`` and ``fit_info`` (samples /
     configurations actually fitted). The sklearn baselines are fit on exactly
     the samples the network members train on (same calibration and
     early-stopping hold-outs, :func:`train.ensemble_splits`), so that methods
-    are compared at equal training data."""
+    are compared at equal training data. ``spec_kw``: FeatureSpec options
+    (e.g. ``{'downstream': True}``), for every method."""
     base = method.partition('-')[0]
     tcfg = TrainConfig(**(tcfg_kw or {}))
     if base in ('ridge', 'hgb', 'knn'):
@@ -192,7 +209,7 @@ def fit_method(method, samples, points, n_members=1, mcfg_kw=None, lcfg_kw=None,
         sp = ensemble_splits(samples, n_members, calib_frac, tcfg.val_frac, group_col, seed)
         s_fit = samples.iloc[sp['fit']].reset_index(drop=True)
         s_use = s_fit.iloc[sorted({int(i) for tr, _, _ in sp['members'] for i in tr})].reset_index(drop=True)
-        m = _SklearnMethod(base, s_use, seed)
+        m = _SklearnMethod(base, s_use, seed, spec_kw)
         m.fit_info = dict(n_fit=len(s_use), n_fit_configs=_n_configs(s_use), n_calib=len(sp['calib']),
                           calib_group_used=sp['calib_group'])
         return m
@@ -200,7 +217,7 @@ def fit_method(method, samples, points, n_members=1, mcfg_kw=None, lcfg_kw=None,
         raise ValueError(f'unknown method {method!r}')
     mcfg, lcfg = _configs(method, mcfg_kw, lcfg_kw)
     ens = train_ensemble(samples, points, n_members, mcfg, lcfg, tcfg, calib_frac=calib_frac,
-                         group_col=group_col, seed=seed, log=log)
+                         group_col=group_col, seed=seed, log=log, spec_kwargs=spec_kw)
     return _EnsembleMethod(ens)
 
 
@@ -212,6 +229,38 @@ def _r2(y, yhat):
         return float('nan')
     ss = np.sum((y[m] - y[m].mean()) ** 2)
     return float(1 - np.sum((y[m] - yhat[m]) ** 2) / ss) if ss > 0 else float('nan')
+
+
+#: sample kinds whose biorefinery-specific parameters are all at baseline
+SPEC_KINDS = ('baseline', 'productivity')
+
+
+def spec_determined(samples):
+    """Boolean array: spec-determined samples (``sample_kind`` in SPEC_KINDS)."""
+    if 'sample_kind' not in samples:
+        return np.zeros(len(samples), bool)
+    return samples['sample_kind'].astype(str).isin(SPEC_KINDS).to_numpy()
+
+
+def gram_errors(coef_hat, coef, Y, T, mask):
+    """Conditioning-aware errors of numerator coefficients per sample:
+    (rel (n,), per_coef (n, 4)) = (sqrt(e' G e), sqrt(G_kk) |e_k|) / RMS of
+    the target numerator over the sample's points, G = Phi' Phi / n_points."""
+    Yf = np.where(mask, Y, 1.)
+    Tf = np.where(mask, T, 1.)
+    Phi = np.stack([np.ones_like(Yf), 1. / Yf, 1. / Tf, 1. / (Yf * Tf)], -1) * mask[..., None]
+    npts = np.maximum(mask.sum(1), 1)
+    G = np.einsum('npk,npl->nkl', Phi, Phi) / npts[:, None, None]
+    e = np.asarray(coef_hat, float) - np.asarray(coef, float)
+    N = np.einsum('npk,nk->np', Phi, np.asarray(coef, float))
+    rms = np.sqrt((N ** 2).sum(1) / npts)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rel = np.sqrt(np.maximum(np.einsum('nk,nkl,nl->n', e, G, e), 0.)) / rms
+        per = np.sqrt(np.einsum('nkk->nk', G)) * np.abs(e) / rms[:, None]
+    bad = ~mask.any(1) | ~(rms > 0)
+    rel[bad] = np.nan
+    per[bad] = np.nan
+    return rel, per
 
 
 def compute_metrics(pred, samples, points, model=None, fd_delta=0.05, tol=1e-3):
@@ -242,13 +291,35 @@ def compute_metrics(pred, samples, points, model=None, fd_delta=0.05, tol=1e-3):
     rows.append(('oracle_mape', 'MPSP', float(np.nanmean(vo)) if len(vo) else np.nan))
     # configuration-balanced summaries (each held-out configuration counts once;
     # the point-weighted MAPE is dominated by configurations with many samples)
-    if 'config_id' in samples and len(v):
-        cid = np.repeat(samples['config_id'].astype(str).to_numpy()[:, None], mask.shape[1], 1)[mask]
-        per = pd.Series(v).groupby(cid).mean()
-        per = per[np.isfinite(per)]
-        if len(per):
-            rows.append(('mpsp_mape_cfg', 'MPSP', float(per.mean())))
-            rows.append(('mpsp_mape_cfg_gmean', 'MPSP', float(np.exp(np.log(np.maximum(per, 1e-12)).mean()))))
+    # -- all samples, spec-determined samples (bp_* at baseline) and random ones
+    sd = spec_determined(samples)
+    cid_s = samples['config_id'].astype(str).to_numpy() if 'config_id' in samples else None
+    for suffix, sel in (('', np.ones(len(samples), bool)), ('_spec', sd), ('_random', ~sd)):
+        mk = mask & sel[:, None]
+        vv = ape[mk]
+        if suffix:
+            rows.append((f'mpsp_mape{suffix}', 'MPSP', float(np.nanmean(vv)) if len(vv) else np.nan))
+            rows.append((f'n_samples{suffix}', 'rows', float(sel.sum())))
+        if cid_s is not None and len(vv):
+            cid = np.repeat(cid_s[:, None], mask.shape[1], 1)[mk]
+            per = pd.Series(vv).groupby(cid).mean()
+            per = per[np.isfinite(per)]
+            if len(per):
+                rows.append((f'mpsp_mape_cfg{suffix}', 'MPSP', float(per.mean())))
+                rows.append((f'mpsp_mape_cfg_gmean{suffix}', 'MPSP',
+                             float(np.exp(np.log(np.maximum(per, 1e-12)).mean()))))
+    # conditioning-aware coefficient error (numerator surface over the sample's own domain)
+    grel, gper = gram_errors(pred['coef'], Z[:, :4], Y, T, mask)
+    if np.isfinite(grel).any():
+        rows.append(('coef_gram_rel', 'abcd', float(np.nanmean(grel))))
+        rows.append(('coef_gram_rel_median', 'abcd', float(np.nanmedian(grel))))
+        for j, k in enumerate(COEFF_KEYS):
+            rows.append(('coef_gram_rel', k, float(np.nanmean(gper[:, j]))))
+        if cid_s is not None:
+            per = pd.Series(grel).groupby(cid_s).mean()
+            per = per[np.isfinite(per)]
+            if len(per):
+                rows.append(('coef_gram_rel_cfg', 'abcd', float(per.mean())))
     if 'fit_mape' in samples:
         rows.append(('fit_mape', 'MPSP', float(np.nanmean(pd.to_numeric(samples['fit_mape'], errors='coerce')))))
     # constraint violations of the predictions
@@ -374,7 +445,9 @@ def run_cv(samples, points, scheme='random', methods=METHODS, n_splits=5, max_fo
             p_all = pd.concat([p[2] for p in parts], ignore_index=True)
             for metric, target, value in compute_metrics(pred, s_all, p_all):
                 if metric in ('MAE', 'RMSE', 'R2', 'mpsp_mape', 'mpsp_mape_median', 'mpsp_mape_cfg',
-                              'mpsp_mape_cfg_gmean', 'oracle_mape', 'fit_mape'):
+                              'mpsp_mape_cfg_gmean', 'oracle_mape', 'fit_mape', 'mpsp_mape_spec',
+                              'mpsp_mape_random', 'mpsp_mape_cfg_spec', 'mpsp_mape_cfg_random',
+                              'coef_gram_rel', 'coef_gram_rel_cfg'):
                     rows.append(dict(scheme=scheme, fold=-1, label='pooled', method=meth, n_train=np.nan,
                                      n_test=len(s_all), seconds=np.nan, metric=metric, target=target,
                                      value=value))
@@ -413,6 +486,83 @@ def summarize(results, metrics=('mpsp_mape', 'oracle_mape', 'R2', 'MAE', 'violat
     nk = pd.Series(n_ok.to_numpy(), index=pd.MultiIndex.from_tuples(
         [(s, m, 'n_folds_ok', 'folds') for s, m in n_ok.index], names=out.index.names))
     return pd.concat([out, nk]).unstack('method')
+
+
+# %% Noise floor of random samples
+
+def noise_floor(samples, points, k=5, seed=0, min_random=10, alphas=np.logspace(-3, 3, 13)):
+    """Estimate of the error that unobserved biorefinery-specific parameters
+    (``bp_*``) cause on random samples, per configuration.
+
+    Within each configuration with >= ``min_random`` random samples, a
+    K-fold (over its random samples) ridge regression predicts the target
+    vector (a', b', c', d', g) of a held-out random sample from the inputs a
+    model can see (the canonical ``p_*`` parameters, prices, log r and 1/r;
+    columns constant within the configuration dropped) -- ``floor_mape`` --
+    and, for comparison, additionally from the ``bp_*`` draws
+    (``with_bp_mape``: how much of that error the unobserved parameters
+    explain) and from nothing (``const_mape``: the configuration mean). The
+    surface MAPE is evaluated on the sample's own points. ``floor_mape`` is
+    an estimate (an upper bound up to model-form error) of the irreducible
+    error of any model that knows the configuration exactly. Returns
+    (per-configuration DataFrame, summary dict with configuration means and
+    geometric means)."""
+    from sklearn.linear_model import RidgeCV
+    samples = samples.reset_index(drop=True)
+    kind = samples['sample_kind'].astype(str) if 'sample_kind' in samples else pd.Series('random', index=samples.index)
+    rows = []
+    for cid, grp in samples[kind == 'random'].groupby('config_id'):
+        if len(grp) < min_random:
+            continue
+        grp = grp.reset_index(drop=True)
+        g_pts = points[points['sample_id'].astype(str).isin(set(grp['sample_id'].astype(str)))]
+        Y, T, M, _, mask = pad_points(grp, g_pts)
+        Z = _targets(grp)
+        r = pd.to_numeric(grp['r'], errors='coerce').to_numpy(float)
+        base_cols = [c for c in grp.columns if (c.startswith('p_') or c in ('feedstock_price', 'electricity_price',
+                                                                            'natural_gas_price'))]
+        bp_cols = [c for c in grp.columns if c.startswith('bp_')]
+
+        def design(cols):
+            A = [np.log(r), 1. / r]
+            for c in cols:
+                v = pd.to_numeric(grp[c], errors='coerce').to_numpy(float)
+                if np.isfinite(v).sum() >= 2 and np.nanstd(v) > 1e-12 * max(1., abs(np.nanmean(v))):
+                    A.append(np.where(np.isfinite(v), v, np.nanmedian(v)))
+            A = np.column_stack(A)
+            return (A - A.mean(0)) / (A.std(0) + 1e-12)
+
+        Xs = {'floor': design(base_cols), 'with_bp': design(base_cols + bp_cols), 'const': None}
+        rng = np.random.RandomState(seed)
+        fold = rng.permutation(len(grp)) % k
+        out = {}
+        for lab, X in Xs.items():
+            P = np.full_like(Z, np.nan)
+            for f in range(k):
+                te, tr = fold == f, fold != f
+                if X is None:
+                    P[te] = Z[tr].mean(0)
+                    continue
+                mu, sdv = Z[tr].mean(0), Z[tr].std(0) + 1e-12
+                m = RidgeCV(alphas=alphas).fit(X[tr], (Z[tr] - mu) / sdv)
+                P[te] = m.predict(X[te]) * sdv + mu
+            Mh = mpsp_equation_np(P[:, None, :4], P[:, 4:5], Y, T)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                ape = np.abs(Mh - M) / np.abs(M)
+            out[f'{lab}_mape'] = float(np.nanmean(ape[mask]))
+        rows.append(dict(config_id=cid, n_random=len(grp), fit_mape=float(np.nanmean(
+            pd.to_numeric(grp['fit_mape'], errors='coerce'))) if 'fit_mape' in grp else np.nan,
+            mpsp_cv=float(np.nanmean(np.nanstd(np.where(mask, M, np.nan), 0) / np.nanmean(np.where(mask, M, np.nan), 0))),
+            **out))
+    df = pd.DataFrame(rows)
+    summ = {}
+    if len(df):
+        for c in ('floor_mape', 'with_bp_mape', 'const_mape', 'fit_mape'):
+            v = df[c].to_numpy(float)
+            summ[f'{c}_cfg_mean'] = float(np.nanmean(v))
+            summ[f'{c}_cfg_gmean'] = float(np.exp(np.nanmean(np.log(np.maximum(v, 1e-12)))))
+        summ['n_configs'] = int(len(df))
+    return df, summ
 
 
 def grouped_holdout(samples, frac, seed=12345, col='config_id'):

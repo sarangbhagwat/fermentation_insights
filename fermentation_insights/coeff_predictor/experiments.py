@@ -222,6 +222,17 @@ def stage_data(a):
         _dump_json(dict(raw_fingerprint=fp, raw_dirs=a.raw, files=files,
                         built=time.strftime('%Y-%m-%d %H:%M:%S')), fp_path)
         log(f'data: built in {time.time() - t0:.0f}s -> {proc}')
+    # processed tables built before the downstream specification (patch S1):
+    # add it on disk (idempotent), so that worker processes read the same tables
+    from fermentation_insights.coeff_predictor import downstream
+    PD = dataset.ProcessedData.load(proc)
+    s_new, n_s = downstream.apply_to_frame(PD.samples)
+    c_new, n_c = downstream.apply_to_frame(PD.configs)
+    if n_s or n_c:
+        dataset.ProcessedData(samples=s_new, points=PD.points, configs=c_new,
+                              report=dict(PD.report, downstream_applied=n_s)).save(proc)
+        log(f'data: added the downstream specification (S1, version {downstream.SPEC_VERSION}) to {n_s} '
+            f'processed samples')
     samples, points, configs = load_tables(proc)
     samples = samples.sort_values('sample_id', kind='mergesort').reset_index(drop=True)
     rep = {}
@@ -571,7 +582,8 @@ def _run_job(job):
         try:
             s_tr, p_tr = _subset(job['train_ids'])
             model = fit_method(job['method'], s_tr, p_tr, job['members'], job['mk'], job['lk'], job['tk'],
-                               group_col=job['group_col'], calib_frac=job['calib_frac'], seed=job['seed'])
+                               group_col=job['group_col'], calib_frac=job['calib_frac'], seed=job['seed'],
+                               spec_kw=job.get('spec_kw') or None)
             out['fit_seconds'] = time.time() - t0
             out['info'] = {k: v for k, v in (getattr(model, 'fit_info', {}) or {}).items()}
             ens = getattr(model, 'ens', None)
@@ -623,13 +635,24 @@ def _run_job(job):
 
 
 def make_job(stage, tag, method, train_ids, evals, members, mk, lk, tk, group_col, calib_frac, seed, ctx,
-             extras=(), save_model=None, meta=None):
+             extras=(), save_model=None, meta=None, spec_kw=None):
+    """One fit + evaluation. ``spec_kw``: FeatureSpec options of every method
+    (e.g. ``{'downstream': True}``; default ``ctx['spec_kw']``, CLI
+    ``--downstream``; part of the cache key only when non-empty).
+    ``ctx['mk_extra']`` (CLI ``--water-gate``) is merged into ``mk``."""
+    if spec_kw is None:
+        spec_kw = ctx.get('spec_kw')
+    if ctx.get('mk_extra'):
+        mk = {**mk, **ctx['mk_extra']}
     spec = dict(v=CODE_VERSION, data=ctx['data_hash'], split=ctx['split_hash'], stage=stage, tag=tag,
                 method=method, members=members, mk=mk, lk=lk, tk=tk, group_col=group_col, calib_frac=calib_frac,
                 seed=seed, train=_sha(list(train_ids)), evals={k: _sha(list(v)) for k, v in evals.items()},
                 extras=sorted(extras), save=bool(save_model))
+    if spec_kw:
+        spec['spec_kw'] = dict(spec_kw)
     return dict(key=_sha(spec, 24), stage=stage, tag=tag, method=method, train_ids=list(train_ids),
                 evals={k: list(v) for k, v in evals.items()}, members=members, mk=mk, lk=lk, tk=tk,
+                spec_kw=dict(spec_kw or {}),
                 group_col=group_col, calib_frac=calib_frac, seed=seed, extras=tuple(extras),
                 save_model=save_model, meta=meta or {}, data_hash=ctx['data_hash'],
                 cost=(members if method.split('-')[0] in NN_BASES else 0.3) * len(train_ids))
@@ -894,7 +917,12 @@ def headline(res, methods=None):
                    mpsp_mape_cfg=v(per, 'mpsp_mape_cfg', 'MPSP').mean(),
                    mpsp_mape_cfg_gmean=v(per, 'mpsp_mape_cfg_gmean', 'MPSP').mean(),
                    mpsp_mape_pooled=v(pool, 'mpsp_mape', 'MPSP').mean(),
-                   fit_mape=v(per, 'fit_mape', 'MPSP').mean(), oracle_mape=v(per, 'oracle_mape', 'MPSP').mean())
+                   fit_mape=v(per, 'fit_mape', 'MPSP').mean(), oracle_mape=v(per, 'oracle_mape', 'MPSP').mean(),
+                   # spec-determined (bp_* at baseline) vs random samples; Gram-norm coefficient error
+                   mpsp_mape_cfg_gmean_spec=v(per, 'mpsp_mape_cfg_gmean_spec', 'MPSP').mean(),
+                   mpsp_mape_cfg_gmean_random=v(per, 'mpsp_mape_cfg_gmean_random', 'MPSP').mean(),
+                   coef_gram_rel=v(per, 'coef_gram_rel', 'abcd').mean(),
+                   coef_gram_rel_cfg=v(per, 'coef_gram_rel_cfg', 'abcd').mean())
         for k in TARGETS:
             src = pool if len(v(pool, 'R2', k)) else per
             row[f'R2_{k}'] = v(src, 'R2', k).mean()
@@ -1712,6 +1740,16 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
                                         points=('n_points', 'sum'), median_fit_mape=('median_fit_mape', 'median'))
     bio = bio.reindex([b for b in BIO_ORDER if b in bio.index] + [b for b in bio.index if b not in BIO_ORDER])
     P(md_table(bio.reset_index(), pct_cols=('median_fit_mape',)) + '\n\n(median_fit_mape in %)\n')
+    nf = checks.get('noise_floor') or {}
+    if nf.get('n_configs'):
+        P(f'Noise floor of random samples (unobserved biorefinery-specific `bp_*` draws; '
+          f'`evaluate.noise_floor`, within-configuration 5-fold ridge on the observable inputs, '
+          f'{nf["n_configs"]} development configurations with >= 10 random samples): MPSP MAPE '
+          f'{100 * nf["floor_mape_cfg_gmean"]:.1f} % (configuration geo-mean; mean '
+          f'{100 * nf["floor_mape_cfg_mean"]:.1f} %), vs. {100 * nf["const_mape_cfg_gmean"]:.1f} % for the '
+          f'configuration mean and {100 * nf["fit_mape_cfg_gmean"]:.1f} % for the 4-coefficient fit itself. '
+          'Spec-determined samples (baseline / productivity: every `bp_*` at baseline) have no such noise; '
+          'the CV tables report both kinds separately (`*_spec`, `*_random`). `tables/noise_floor.csv`.\n')
     flags = checks.get('data_flags')
     if flags is not None and len(flags):
         P('Data-consistency flags (configurations to inspect; they are kept): '
@@ -1882,6 +1920,10 @@ def parse_args(argv=None):
                          'get a held-out test configuration (default 4)')
     ap.add_argument('--id-test-frac', type=float, default=None, help='only when the split is created (default 0.10)')
     ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--downstream', action='store_true',
+                    help='use the structured downstream specification features (FeatureSpec(downstream=True))')
+    ap.add_argument('--water-gate', action='store_true',
+                    help='PI-NN water-removal gate (ModelConfig.water_gate; implies --downstream)')
     ap.add_argument('--split-seed', type=int, default=None, help='only when the split is created (default 2026)')
     ap.add_argument('--replan', action='store_true', help='recompute plan.json from the pilot timings')
     ap.add_argument('--fresh', action='store_true', help='delete the fit cache first')
@@ -1928,6 +1970,10 @@ def main(argv=None):
     ctx = dict(argv=['python -m ' + MODULE] + (sys.argv[1:] if argv is None else list(argv)),
                versions=f'torch {torch.__version__}, numpy {np.__version__}, pandas {pd.__version__}, '
                         f'scikit-learn {sklearn.__version__}, matplotlib {matplotlib.__version__}')
+    if a.downstream or a.water_gate:
+        ctx['spec_kw'] = {'downstream': True}
+    if a.water_gate:
+        ctx['mk_extra'] = {'water_gate': True}
     T = lambda name, t0: stage_t.__setitem__(name, time.time() - t0)
 
     t0 = time.time()
@@ -1974,6 +2020,12 @@ def main(argv=None):
     _dump_json(dict(selected=hpo['selected'], candidate=hpo['best'], hpo_folds=hpo['fold_info'], plan=plan),
                os.path.join(tdir, 'selected_hyperparameters.json'))
     cv['results'].to_csv(os.path.join(tdir, 'cv_results.csv'), index=False)
+    # noise floor of random samples (unobserved bp_* parameters; development set only)
+    from fermentation_insights.coeff_predictor.evaluate import noise_floor
+    nf, nf_summ = noise_floor(dev, D['points'])
+    nf.to_csv(os.path.join(tdir, 'noise_floor.csv'), index=False)
+    _dump_json(nf_summ, os.path.join(tdir, 'noise_floor_summary.json'))
+    checks['noise_floor'] = nf_summ
     cv['headline'] = headline(cv['results'], METHOD_ORDER)
     cv['headline'].to_csv(os.path.join(tdir, 'cv_headline.csv'), index=False)
     if len(cv['oof']):

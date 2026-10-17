@@ -42,6 +42,38 @@ PRODUCTS = {
             8.6, 'crystallization', 0.2, 0.85),
     'NewAcid': ('NewAcid', 'NewAcid', 'NewAcid', 0.58, 1.0, True, 1, 4.6, False, True,
                 300., 'crystallization', 0.4, 0.90),
+    # broth product (sold as the fermentation broth: no water removal)
+    'BrothAcid': ('OxalicAcid', 'BrothAcid', 'OxalicAcid', 1.0, 1.0, True, 2, 1.25, False, True,
+                  143., 'acidulation', 0.3, 0.97),
+}
+
+#: structured downstream specification per fake product (downstream.FIELDS)
+DOWNSTREAM = {
+    'HP': dict(final_product_mass_fraction=0.997, final_product_is_broth=False, final_product_phase='liquid',
+               water_removal_route='evaporate_water', separation_ops='evaporation+ion_exchange+distillation',
+               upgrading_ops='dehydration', coproducts='electricity', neutralization_degree=1.,
+               acid_regeneration='H2SO4'),
+    'LA': dict(final_product_mass_fraction=0.88, final_product_is_broth=False,
+               final_product_phase='aqueous_solution', water_removal_route='evaporate_water',
+               separation_ops='flash+esterification+distillation+hydrolysis', upgrading_ops='none',
+               coproducts='none', neutralization_degree=1., acid_regeneration='H2SO4'),
+    'SA': dict(final_product_mass_fraction=0.85, final_product_is_broth=False, final_product_phase='solid',
+               water_removal_route='crystallize', separation_ops='evaporation+crystallization+drying',
+               upgrading_ops='none', coproducts='electricity', neutralization_degree=1., acid_regeneration='H2SO4'),
+    'EtOH': dict(final_product_mass_fraction=0.97, final_product_is_broth=False, final_product_phase='liquid',
+                 water_removal_route='distill_product', separation_ops='distillation+molecular_sieves',
+                 upgrading_ops='none', coproducts='electricity', neutralization_degree=0., acid_regeneration='none'),
+    'TAL': dict(final_product_mass_fraction=0.9, final_product_is_broth=False, final_product_phase='solid',
+                water_removal_route='crystallize', separation_ops='evaporation+crystallization+drying',
+                upgrading_ops='hydrogenation+dehydration', coproducts='electricity', neutralization_degree=0.,
+                acid_regeneration='none'),
+    'NewAcid': dict(final_product_mass_fraction=0.95, final_product_is_broth=False, final_product_phase='solid',
+                    water_removal_route='crystallize', separation_ops='evaporation+crystallization',
+                    upgrading_ops='none', coproducts='none', neutralization_degree=1., acid_regeneration='H2SO4'),
+    'BrothAcid': dict(final_product_mass_fraction=None, final_product_is_broth=True,
+                      final_product_phase='aqueous_solution', water_removal_route='none',
+                      separation_ops='centrifugation+acidulation+gypsum_filtration', upgrading_ops='none',
+                      coproducts='electricity', neutralization_degree=0.9, acid_regeneration='H2SO4'),
 }
 
 # fp_* columns as the harness would record them (registry overrides known IDs)
@@ -58,6 +90,8 @@ _FP_COLS = {
                 LHV=2.6e6, Hvap_298=7.0e4),
     'NewAcid': dict(MW=104.1, n_C=4, n_H=8, n_O=3, n_N=0, Tb=480., Tm=320., Psat_ferm=30.,
                     LHV=1.8e6, Hvap_298=6.8e4),
+    'OxalicAcid': dict(MW=90.03, n_C=2, n_H=2, n_O=4, n_N=0, Tb=569., Tm=375., Psat_ferm=0.05,
+                       LHV=2.0e5, Hvap_298=9.7e4),
 }
 _FP_COLS.update({'AcrylicAcid': dict(MW=72.06, n_C=3, n_H=4, n_O=2, n_N=0, Tb=414., Tm=286.,
                                      Psat_ferm=1.0e3, LHV=1.3e6, Hvap_298=5.3e4),
@@ -89,6 +123,11 @@ def _channels(fs, prod, params, r, rng):
         'coproducts': np.array([0., -0.02 * lig, 0., 0.]),
         'closure': rng.normal(0., 0.003, 4),
     }
+    if DOWNSTREAM[prod]['water_removal_route'] == 'none':
+        # broth sold: no titer-proportional downstream water processing
+        for c in ('capex_downstream', 'capex_utilities', 'capex_wastewater', 'utilities_other'):
+            ch[c][2:] = 0.
+        q['ng'][2:] = 0.
     for key, pcol in (('fs', 'feedstock_price'), ('el', 'electricity_price'), ('ng', 'natural_gas_price')):
         ch[{'fs': 'feedstock', 'el': 'electricity', 'ng': 'natural_gas'}[key]] = params[pcol] * q[key]
     return q, ch, phi
@@ -164,7 +203,7 @@ def make_fake_tables(n_samples_per_config=6, products=None, feedstocks=None, see
                            a=tot[0], b=tot[1], c=tot[2], d=tot[3], g=g, R2=0.999,
                            n_points=int(len(M)),
                            fit_mape=float(np.mean(np.abs(m - M) / np.abs(M))),
-                           phi=phi, F_fixed=1e6, closure_rel=0.002)
+                           phi=phi, F_fixed=1e6, closure_rel=0.002, **DOWNSTREAM[prod])
                 for k, v in _FP_COLS[fpc].items():
                     row[f'fp_{k}'] = v
                 for k, v in _FP_COLS.get(ppc, _FP_COLS[fpc]).items():

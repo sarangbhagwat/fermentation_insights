@@ -39,6 +39,30 @@ Feature groups
 * one-hot categoricals (``feedstock_type``, ``neutralizing_agent``,
   ``fermentation_mode``, ``separation_principle``) with an explicit
   ``__other__`` level for unseen values;
+* with ``FeatureSpec(downstream=True)``: the structured final-product /
+  downstream-process specification (:mod:`downstream`, DESIGN.md section 5)
+  replaces the free-text ``separation_principle`` (which is the product
+  identity in disguise): ``neutralization_degree``, ``final_product_is_broth``,
+  multi-hot ``ds_sep__<op>`` / ``ds_upg__<op>`` / ``ds_cop__<coproduct>`` over
+  the controlled vocabularies, one-hot ``final_product_phase`` and
+  ``water_removal_route``, and derived physics features (``DS_PHYS``):
+
+  - water to remove per kg product ~ 1000/t - (1 - w_f)/w_f [kg/kg; t in
+    g/L, w_f = final-product mass fraction], i.e. a term 1000 x [water is
+    removed] on c' (``phys_water_removal_c``) and -(1 - w_f)/w_f x [water is
+    removed] on a' (``phys_water_removal_a``); route-specific c' loads
+    ``phys_evap_water_c`` = 1000 x [water boiled off: evaporate_water or
+    crystallize] and ``phys_distill_c`` = 1000 x [distill_product];
+    ``phys_log10_w_final`` (broth product: w_f ~ t_ref/1000);
+  - neutralization stoichiometry per kg fermentation product: base
+    ``phys_base_per_product`` = n_acid_groups x neutralization_degree x
+    (g base per eq.) / MW, acid regeneration ``phys_acid_per_product``
+    (H2SO4) and gypsum ``phys_gypsum_per_product`` (calcium base + H2SO4);
+  - ``phys_n_separation_ops``, ``phys_n_upgrading_ops``;
+  - the structural input ``struct_water_removal`` (1 if broth water is
+    removed, 0 for route 'none'; unknown -> 1, reported): appended raw (not
+    standardized) after the categoricals, never fed to the network encoder
+    (``encoder_index``) but used by ``ModelConfig.water_gate``;
 * productivity enters the network through ``log r`` and ``1/r``, which the
   model computes itself from ``log_r`` (so that ``dMPSP/dr`` is available by
   autograd); their standardization statistics are stored here.
@@ -58,12 +82,15 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from . import downstream as _ds
+
 __all__ = (
     'FeatureSpec', 'FeatureBatch', 'MissingSpecError', 'ApplicabilityDomain',
     'ApplicabilityWarning', 'resolve_chemical_descriptors', 'derive_features',
     'build_spec_registry', 'apply_spec_registry', 'register_chemical',
     'describe_new_chemical', 'psat_water', 'PRICE_COLUMNS', 'PRICE_KEYS',
     'PRICE_ALIASES', 'REQUIRED_FIELDS', 'FIELD_UNITS', 'REGIME_FIELDS',
+    'DS_PHYS', 'DS_CATEGORICAL', 'STRUCTURAL', 'DOWNSTREAM_FIELDS',
 )
 
 try:
@@ -120,13 +147,31 @@ FIELD_UNITS = {
     'y': 'g fermentation product / g glucose-eq. sugar',
     't': 'g/L',
     'MPSP': 'USD/kg final product',
+    **_ds.FIELDS,
 }
 
 SPEC_NUMERIC = ('n_acid_groups', 'pKa1', G_MAX, 'T_fermentation',
                 'theoretical_yield', 'inflection_yield')
+#: free-text categorical replaced by the structured fields (downstream=True)
+FREE_TEXT_CATEGORICAL = ('separation_principle',)
 SPEC_BOOLEAN = ('neutralization', 'upgrading', 'aerobic')
 SPEC_CATEGORICAL = ('feedstock_type', 'neutralizing_agent', 'fermentation_mode',
                     'separation_principle')
+
+#: Structured downstream specification (FeatureSpec(downstream=True))
+DOWNSTREAM_FIELDS = tuple(_ds.FIELDS)
+DS_SPEC_NUMERIC = ('neutralization_degree',)
+DS_FLAGS = ('final_product_is_broth',)
+DS_CATEGORICAL = ('final_product_phase', 'water_removal_route')
+DS_MULTI = {'ds_sep': ('separation_ops', _ds.SEPARATION_OPS), 'ds_upg': ('upgrading_ops', _ds.UPGRADING_OPS),
+            'ds_cop': ('coproducts', _ds.COPRODUCTS)}
+DS_PHYS = ('phys_log10_w_final', 'phys_water_removal_c', 'phys_water_removal_a', 'phys_evap_water_c',
+           'phys_distill_c', 'phys_base_per_product', 'phys_acid_per_product', 'phys_gypsum_per_product',
+           'phys_n_separation_ops', 'phys_n_upgrading_ops')
+#: raw structural inputs (not standardized, not seen by the encoder)
+STRUCTURAL = ('struct_water_removal',)
+#: fallback titer for the mass fraction of a broth product [g/L]
+_T_REF_BROTH = 30.
 
 #: Chemical descriptors (registry keys) resolved for fp_ and pp_.
 CHEM_DESCRIPTORS = ('MW', 'Tb', 'Tm', 'Hvap_298', 'Psat_ferm', 'LHV', 'n_C', 'n_H',
@@ -320,7 +365,76 @@ def derive_features(df):
     # NaN when the water fraction is unknown (then imputed and reported, not
     # silently computed as if the feedstock were dry)
     out['phys_fs_nonsugar_solids'] = (1. - _col(df, W_SUGAR) - _col(df, 'fs_w_water')).to_numpy()
+    out.update(downstream_features(df))
     return pd.DataFrame(out, index=df.index)
+
+
+def _strings(df, name):
+    if name not in df:
+        return [None] * len(df)
+    return [None if _omitted(v) else v for v in df[name]]
+
+
+def downstream_features(df):
+    """Derived features of the structured downstream specification
+    (:mod:`downstream`): multi-hot ``ds_*__<term>`` columns, ``DS_PHYS`` and
+    the structural ``struct_water_removal`` (NaN where the fields are
+    missing)."""
+    n = len(df)
+    out = {}
+    counts = {}
+    for pre, (field, vocab) in DS_MULTI.items():
+        vals = _strings(df, field)
+        M = np.full((n, len(vocab)), np.nan)
+        cnt = np.full(n, np.nan)
+        for i, v in enumerate(vals):
+            if v is None:
+                continue
+            items = _ds.parse_ops(v)
+            M[i] = [float(t in items) for t in vocab]
+            cnt[i] = len(items)
+        for j, t in enumerate(vocab):
+            out[f'{pre}__{t}'] = M[:, j]
+        counts[field] = cnt
+    route = _strings(df, 'water_removal_route')
+    gate = np.array([_ds.water_removal_factor(r) for r in route], float)
+    evap = np.array([np.nan if r is None else float(str(r) in ('evaporate_water', 'crystallize')) for r in route])
+    dist = np.array([np.nan if r is None else float(str(r) == 'distill_product') for r in route])
+    wf = _col(df, 'final_product_mass_fraction').to_numpy().copy()
+    broth = _to_float(df['final_product_is_broth']).to_numpy() if 'final_product_is_broth' in df else np.full(n, np.nan)
+    tref = _col(df, 'baseline_titer').to_numpy()
+    tgeo = np.sqrt(_col(df, 't_min').to_numpy() * _col(df, 't_max').to_numpy())
+    tref = np.where(np.isfinite(tref), tref, np.where(np.isfinite(tgeo), tgeo, _T_REF_BROTH))
+    with np.errstate(invalid='ignore'):
+        wf = np.where(~np.isfinite(wf) & (broth > 0.5), _ds.broth_mass_fraction(tref), wf)
+        wf = np.where((wf > 0) & (wf <= 1), wf, np.nan)
+    out['phys_log10_w_final'] = _log10_pos(wf)
+    out['phys_water_removal_c'] = 1000. * gate
+    # broth product: no removal, the term vanishes whatever w_f is
+    out['phys_water_removal_a'] = np.where(gate == 0, 0., -(1. - wf) / wf * gate)
+    out['phys_evap_water_c'] = 1000. * evap
+    out['phys_distill_c'] = 1000. * dist
+    # neutralization stoichiometry (kg per kg fermentation product)
+    nag = _col(df, 'n_acid_groups').to_numpy()
+    deg = _col(df, 'neutralization_degree').to_numpy()
+    MW = _col(df, 'fp_MW').to_numpy()
+    agent = _strings(df, 'neutralizing_agent')
+    acid = _strings(df, 'acid_regeneration')
+    eq_b = np.array([_ds.BASE_EQ_MASS.get(str(a), np.nan) if a not in (None, '') else np.nan for a in agent])
+    eq_a = np.array([np.nan if a is None else (0. if str(a) in ('', 'none') else _ds.ACID_EQ_MASS.get(str(a), np.nan))
+                     for a in acid])
+    ca = np.array([a is not None and str(a).startswith('Ca') for a in agent])
+    with np.errstate(invalid='ignore', divide='ignore'):
+        eqmol = nag * deg / MW                              # mol eq. per g product
+        zero = (deg == 0) | (nag == 0)
+        out['phys_base_per_product'] = np.where(zero, 0., eqmol * eq_b)
+        out['phys_acid_per_product'] = np.where(zero | (eq_a == 0), 0., eqmol * eq_a)
+        out['phys_gypsum_per_product'] = np.where(zero | (eq_a == 0), 0.,
+                                                  np.where(ca, eqmol * _ds.GYPSUM_EQ_MASS, 0.))
+    out['phys_n_separation_ops'] = counts['separation_ops']
+    out['phys_n_upgrading_ops'] = counts['upgrading_ops']
+    out['struct_water_removal'] = gate
+    return out
 
 
 # %% Spec-level registry (fill omitted fields by name)
@@ -332,7 +446,7 @@ _PAIR_REG_COLS = ('final_product_chemical', G_MAX, 'upgrading')
 #: fermentation-regime fields, stored per 'fp|pp' and filled only where they
 #: are unique for that pair in training
 REGIME_FIELDS = ('neutralization', 'neutralizing_agent', 'aerobic', 'fermentation_mode',
-                 'T_fermentation', 'separation_principle')
+                 'T_fermentation', 'separation_principle') + DOWNSTREAM_FIELDS
 
 
 def _baseline_rows(grp):
@@ -345,9 +459,9 @@ def _baseline_rows(grp):
 
 def _regime_values(grp, c):
     """Normalized regime values of a column (categoricals as in transform)."""
-    if c in SPEC_CATEGORICAL:
+    if c in SPEC_CATEGORICAL or c in _ds.STRING_FIELDS:
         return _cat(grp[c])
-    if c in SPEC_BOOLEAN:
+    if c in SPEC_BOOLEAN or c in DS_FLAGS:
         return _to_float(grp[c]).dropna().map(bool)
     return _to_float(grp[c]).dropna().round(6)
 
@@ -440,6 +554,15 @@ def apply_spec_registry(spec, reg, info=None):
             unknown.append((kind, str(name)))
         return e
 
+    # a known configuration: its downstream specification (downstream.TABLE)
+    if not _missing(spec.get('config_id')):
+        e = _ds.spec_for(spec['config_id'])
+        if e is not None:
+            for k in DOWNSTREAM_FIELDS:
+                if _omitted(spec.get(k)) and not _omitted(e.get(k)):
+                    spec[k] = e[k]
+                    filled.append(k)
+
     if not _missing(spec.get('feedstock')):
         entries.append(lookup('feedstock', spec['feedstock']) or {})
     if not _missing(spec.get('fermentation_product')):
@@ -531,12 +654,19 @@ class FeatureSpec:
         Standardized continuous features are clipped to [-clip, clip].
     exclude : iterable of str
         Additional columns never to use.
+    downstream : bool
+        Use the structured final-product / downstream-process specification
+        (see the module docstring) instead of the free-text
+        ``separation_principle``, and append the structural inputs
+        ``STRUCTURAL``. Off by default (specs saved before it existed load
+        with it off).
     """
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self, price_explicit=True, use_names=False, clip=10., exclude=(),
-                 log_ratio=100., min_level_count=1):
+                 log_ratio=100., min_level_count=1, downstream=False):
+        self.downstream = bool(downstream)
         self.price_explicit = bool(price_explicit)
         self.use_names = bool(use_names)
         self.clip = float(clip)
@@ -546,6 +676,7 @@ class FeatureSpec:
         self.numeric = []        # list of dicts: name, log, fill, mean, std, kind
         self.indicators = []     # numeric names with a missing indicator
         self.categoricals = {}   # name -> levels (incl. OTHER)
+        self.structural = list(STRUCTURAL) if self.downstream else []
         self.r_stats = {}
         self.price_stats = {}
         self.price_fill = {}
@@ -577,6 +708,14 @@ class FeatureSpec:
             cands.append((c, 'spec'))
         for c in SPEC_BOOLEAN:
             cands.append((c, 'flag'))
+        if self.downstream:
+            for c in DS_SPEC_NUMERIC:
+                cands.append((c, 'spec'))
+            for c in DS_FLAGS:
+                cands.append((c, 'flag'))
+            for pre, (_, vocab) in DS_MULTI.items():
+                for t in vocab:
+                    cands.append((f'{pre}__{t}', 'flag'))
         for p in ('fp', 'pp'):
             for k in CHEM_FEATURES:
                 cands.append((f'{p}_{k}', 'descriptor'))
@@ -584,7 +723,7 @@ class FeatureSpec:
             if c.startswith('fs_w_'):
                 cands.append((c, 'feedstock'))
         for c in df.columns:
-            if c.startswith('phys_'):
+            if c.startswith('phys_') and (self.downstream or c not in DS_PHYS):
                 # capacity is contextual (baseline-imputed like p_* parameters)
                 cands.append((c, 'param' if c == 'phys_log10_capacity' else 'derived'))
         params = list(CANONICAL_PARAMETERS) + sorted(
@@ -638,6 +777,8 @@ class FeatureSpec:
             if has_missing:
                 self.indicators.append(c)
         cats = list(SPEC_CATEGORICAL)
+        if self.downstream:
+            cats = [c for c in cats if c not in FREE_TEXT_CATEGORICAL] + list(DS_CATEGORICAL)
         if self.use_names:
             cats += ['feedstock', 'fermentation_product', 'final_product']
         self.categoricals = {}
@@ -678,7 +819,19 @@ class FeatureSpec:
         cols += [f'missing__{c}' for c in self.indicators]
         for c, levels in self.categoricals.items():
             cols += [f'{c}=={lv}' for lv in levels]
+        cols += list(self.structural)
         return cols
+
+    def structural_index(self, name):
+        """Column of a structural input in ``X`` (None if absent)."""
+        if name not in self.structural:
+            return None
+        return self.n_features - len(self.structural) + self.structural.index(name)
+
+    def encoder_index(self):
+        """Columns of ``X`` fed to the network encoder (all but the raw
+        structural inputs)."""
+        return list(range(self.n_features - len(self.structural)))
 
     @property
     def n_features(self):
@@ -767,6 +920,11 @@ class FeatureSpec:
             B = np.zeros((n, len(levels)))
             B[np.arange(n), k] = 1.
             blocks.append(B)
+        for c in self.structural:
+            # raw structural input; unknown -> 1 (the conventional case), reported
+            v = _to_float(df[c]).to_numpy() if c in df else np.full(n, np.nan)
+            note(c, ~np.isfinite(v))
+            blocks.append(np.where(np.isfinite(v), v, 1.)[:, None])
         X = np.hstack([Xn, Xi] + blocks)
         r = req['r']
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -831,7 +989,8 @@ class FeatureSpec:
 
     # ---- serialization ----
     def to_dict(self):
-        return dict(version=self.VERSION, price_explicit=self.price_explicit,
+        return dict(version=self.VERSION, price_explicit=self.price_explicit, downstream=self.downstream,
+                    structural=list(self.structural),
                     use_names=self.use_names, clip=self.clip, exclude=list(self.exclude),
                     log_ratio=self.log_ratio, min_level_count=self.min_level_count,
                     numeric=self.numeric, indicators=self.indicators,
@@ -844,7 +1003,8 @@ class FeatureSpec:
     def from_dict(cls, d):
         self = cls(price_explicit=d['price_explicit'], use_names=d['use_names'], clip=d['clip'],
                    exclude=d.get('exclude', ()), log_ratio=d.get('log_ratio', 100.),
-                   min_level_count=d.get('min_level_count', 1))
+                   min_level_count=d.get('min_level_count', 1), downstream=d.get('downstream', False))
+        self.structural = list(d.get('structural', []))
         self.numeric = [dict(x) for x in d['numeric']]
         self.indicators = list(d['indicators'])
         self.categoricals = {k: list(v) for k, v in d['categoricals'].items()}

@@ -581,7 +581,10 @@ def _cat_dropout(X, blocks, p, gen):
 
 
 def build_model(spec, layout, scales, mcfg, dtype=torch.float32):
-    m = CoefficientNet(spec.n_features, mcfg, layout, scales, spec.r_stats).to(dtype)
+    m = CoefficientNet(spec.n_features, mcfg, layout, scales, spec.r_stats,
+                       enc_index=spec.encoder_index() if hasattr(spec, 'encoder_index') else None,
+                       gate_index=spec.structural_index('struct_water_removal')
+                       if hasattr(spec, 'structural_index') else None).to(dtype)
     m.scales_np = scales
     return m
 

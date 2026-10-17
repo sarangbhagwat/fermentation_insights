@@ -177,7 +177,7 @@ def test_config_patches_and_unpatchable():
     t0 = 'TAL|TAL_corn|s1|0'
     assert S.loc[t0, 'p_cell_mass_yield'] == 0.35 and np.isnan(S.loc[t0, dp.TAL_OLD_CELL_MASS])
     assert S.loc[t0, '_config']['neutralizing_agent'] == 'NaOH'    # the sample's own record too
-    assert set(S.loc[t0, dp.MARK].split(';')) == {'M1', 'M3', 'M12'}
+    assert set(S.loc[t0, dp.MARK].split(';')) == {'M1', 'M3', 'M12', 'S1'}   # S1: downstream spec
     assert S['_unpatchable'].tolist().count('D2') == 1
     assert S.loc['ethanol|ethanol_corn|s1|5', '_unpatchable'] == 'D2'
     assert n['M1']['configs'] == ['TAL|TAL_corn', 'succinic|succinic_corn']

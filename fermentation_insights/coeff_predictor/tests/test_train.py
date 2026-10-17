@@ -256,7 +256,7 @@ def test_predict_by_name_fills_regime_and_contextual(ensemble, tables):
     by_name = dict(feedstock='corn', fermentation_product='HP', final_product='AcrylicAcid', r=0.5,
                    feedstock_price=0.2, electricity_price=0.07, natural_gas_price=0.25)
     hp = samples[samples.fermentation_product == 'HP'].iloc[0]
-    explicit = dict(by_name, **{c: hp[c] for c in REGIME_FIELDS})
+    explicit = dict(by_name, **{c: hp[c] for c in REGIME_FIELDS if c in hp})
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         o1, o2 = P.predict(by_name), P.predict(explicit)

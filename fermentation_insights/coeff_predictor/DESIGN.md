@@ -61,6 +61,7 @@ carries `harness_version`, `adapter_version` and `data_patches`.
 | M3 | TAL, adapter < 2 | `bp_fermentation_fermentation_y_lipolytica_yield` → `p_cell_mass_yield`, in the sample values and in the config's parameter list. |
 | M12 | TAL, adapter < 2 | `product_water_solubility` = 9.8 g/L water at 25 °C, interpolated from the TAL module's experimental data. v1 used 5.41 from the fitted model. |
 | M23 | HP non-neutral, adapter < 2 | `separation_principle` loses its 'acidulation+' prefix. |
+| S1 | every known configuration, `downstream_spec_version` < 1 (all recorded data) | Not a defect fix: adds the structured final-product / downstream-process specification of `downstream.TABLE` (§5) to the config record (the table wins; a differing recorded `coproducts` / `neutralization_degree` is kept as `<field>_recorded`). Versioned by `downstream_spec_version`; `downstream.apply_to_frame` does the same for processed tables built before S1. |
 
 Resumed samples append duplicate rows (M11). `read_raw` already keeps only
 the points of each sample's chosen, complete attempt. Points above the
@@ -216,6 +217,19 @@ Totals `a', b', c', d'` = Σ channels. The **equation layer** turns totals into
 MPSP at any (y, t). Raw head outputs are scaled by per-target training
 standard deviations for conditioning.
 
+**Water-removal gate** (`ModelConfig.water_gate`, off by default; needs
+`FeatureSpec(downstream=True)`): the c′ and d′ coefficients of the channels
+that scale with the broth water processed downstream (`capex_downstream`,
+`capex_utilities`, `capex_wastewater`, `utilities_other` and the natural-gas
+intensity) are multiplied by the raw structural input `struct_water_removal`
+(0 when the broth itself is the product, route `none`). This is a hard
+physical constraint: without evaporation, distillation or treatment of the
+broth water these titer-proportional costs vanish (oxalic acid, the only
+broth product: NG c′ 0.24, downstream/utility/wastewater capex c′ ≤ 0.10,
+versus 5–18 and 1–2 for products whose water is removed). The structural
+input is never an encoder input, so a value unseen in training (0 when the
+broth product is held out) cannot shift the latent features.
+
 **Input clipping** (`ModelConfig.clip_inputs` ≥ 0 = margin in training
 standard deviations; default −1 = off; an HPO search dimension): the standardized continuous encoder
 features are clipped to their training range (`x_lo`/`x_hi` in
@@ -277,6 +291,8 @@ Options (`LossConfig`; defaults = the loss above):
   acid groups, pKa1, LHV;
 * final product: MW, stoichiometric mass ratio to fermentation product,
   upgrading flag, Tb, Tm, LHV;
+* final product and downstream process (structured, `FeatureSpec(downstream=True)`;
+  replaces the free-text `separation_principle`, see below);
 * regime: neutralization flag and agent, aerobic flag, fermentation mode,
   temperature, productivity (log r and 1/r), inflection/theoretical yield ratio,
   separation principle;
@@ -284,12 +300,78 @@ Options (`LossConfig`; defaults = the loss above):
   price, natural gas price, IRR, income tax, operating days, boiler/
   turbogenerator efficiency, etc.
 
+### Downstream specification (`downstream.py`)
+
+`separation_principle` is free text, i.e. the product identity in disguise,
+and the final product's water content and the separation route -- which set
+the titer-dependent c′ (and part of a′) -- were not specified at all. Per kg
+product the broth water to remove is ≈ 1000/t − (1 − w_f)/w_f (t in g/L, w_f
+the final-product mass fraction; recorded broth water per kg product ∝ 1/t
+with slope 1000 for ethanol, succinic, oxalic, IBO), a c′ term 1000 × [water
+removed] and an a′ term −(1 − w_f)/w_f × [water removed], times a unit cost
+that depends on the route. Fields (units/vocabularies in `downstream.FIELDS`,
+merged into `features.FIELD_UNITS`; multi-valued fields '+'-joined; empty =
+'none', which survives CSV round trips unlike ''):
+
+| field | values |
+|---|---|
+| `final_product_mass_fraction` | w_f at baseline (purity of the sold stream; MPSP is per kg pure product); None for a broth product |
+| `final_product_is_broth` | the broth is sold (w_f ≈ t/1000: 0.005 / 0.031 / 0.117 at 5 / 30 / 100 g/L for oxalic) |
+| `final_product_phase` | liquid, solid, aqueous_solution |
+| `water_removal_route` | evaporate_water, crystallize, distill_product, none |
+| `separation_ops` | centrifugation, filtration, acidulation, gypsum_filtration, adsorption, ion_exchange, membrane, flash, evaporation, distillation, LLE, decantation, molecular_sieves, crystallization, drying, esterification, hydrolysis |
+| `upgrading_ops` | dehydration, hydrogenation, ring_opening_hydrolysis, esterification, hydrolysis, decarboxylation, oxidation, amination, polymerization |
+| `coproducts` | electricity (on-site turbogenerator generating electricity), DDGS, corn_oil, ethanol, lignin, gypsum, CO2, fertilizer |
+| `neutralization_degree` | mol base-eq. per mol product acid groups converted to the salt (0–1) |
+| `acid_regeneration` | H2SO4, none |
+
+Values for all 41 planned configurations (`downstream.TABLE`, sources in its
+`downstream_sources` field): from the adapters (separation principle /
+variant, neutralization, lactic `product_purity_spec` 0.88, oxalic
+`product_form` and `neutralization_degree` 0.91, succinic partial pH control
+0.42 mol OH-eq./mol → degree 0.21, isobutanol `coproducts`), the
+Bioindustrial-Park flowsheets (read-only: unit operations of the separation
+and upgrading areas, boiler-turbogenerator setup) and the recorded baseline
+data (w_f = median purity of the final-product stream; electricity listed
+where the CHP generates at baseline):
+
+| family | w_f | phase | route | separation ops | upgrading | coproducts | neutr. degree / acid |
+|---|---|---|---|---|---|---|---|
+| HP (improved) | 0.9967 | liquid | evaporate_water | centrifugation, adsorption, ion_exchange, evaporation, distillation (+ acidulation, gypsum_filtration if neutral) | dehydration | electricity | 1 / H2SO4 (neutral), 0 / none |
+| HP hexanol | 0.9967 | liquid | evaporate_water | centrifugation, evaporation, LLE, distillation (+ acid./gypsum if neutral) | dehydration | electricity | as above |
+| TAL | 0.82–0.90 (per feedstock; varies with titer) | solid | crystallize | centrifugation, evaporation, crystallization, drying, distillation | – | electricity | 0 / none |
+| TAL_SA (KSA) | 0.949 | solid | crystallize | as TAL | hydrogenation, dehydration, ring_opening_hydrolysis | electricity | 0 / none |
+| succinic | 0.8487 | solid | crystallize | centrifugation, evaporation, crystallization, filtration, drying (+ acid./gypsum if neutral) | – | electricity | 0.21 / none; neutral 1 / H2SO4 |
+| lactic | 0.88 | aqueous_solution | evaporate_water | filtration, flash, distillation, esterification, hydrolysis (+ acid./gypsum if neutral) | – | – | 1 / H2SO4 (neutral), 0 / none |
+| ethanol corn / cornstover / sugarcane | 0.9505 / 0.9693 / 0.9704 | liquid | distill_product | distillation, molecular_sieves (+ corn: centrifugation, evaporation, drying [DDGS]; cornstover: filtration) | – | corn: DDGS, corn_oil; others: electricity | 0 / none |
+| oxalic | broth | aqueous_solution | none | centrifugation, acidulation, gypsum_filtration | – | electricity | 0.91 / H2SO4 |
+| IBO_EtOH_corn | 1.0 | liquid | distill_product | centrifugation, decantation, distillation, drying, evaporation, molecular_sieves | – | DDGS, corn_oil, electricity, ethanol | 0 / none |
+
+Known caveat: the succinic_neutral flowsheet acidulates (R401 + S405), but
+its recorded `acid_cost` is 0 (module behaviour; not corrected).
+
+Derived features (`features.DS_PHYS`): `phys_water_removal_c` = 1000 ×
+[water removed], `phys_water_removal_a` = −(1 − w_f)/w_f × [water removed]
+(0 for a broth product), `phys_evap_water_c` = 1000 × [evaporate_water or
+crystallize], `phys_distill_c` = 1000 × [distill_product],
+`phys_log10_w_final`, neutralization stoichiometry per kg fermentation
+product `phys_base_per_product` = n_acid × degree × (g base per eq.) / MW,
+`phys_acid_per_product` (H2SO4) and `phys_gypsum_per_product` (Ca base +
+H2SO4), `phys_n_separation_ops`, `phys_n_upgrading_ops`; plus multi-hot
+`ds_sep__*`, `ds_upg__*`, `ds_cop__*`, `neutralization_degree`,
+`final_product_is_broth`, one-hot `final_product_phase`,
+`water_removal_route`, and the raw structural input `struct_water_removal`
+(model gate, §3). With `downstream=False` (default) none of these are used and
+the feature matrix is exactly the previous one.
+
 Descriptors of known feedstocks/products are stored in a registry so users can
 specify them by name (composition and baseline capacity per feedstock; yields,
 acid properties per product; per product pair the stoichiometric ratio, the
 fermentation regime where it is unique in training — otherwise the user is
 asked to specify it — and the baseline value of every contextual `p_*`
-parameter, or "not applicable" which keeps its missing indicator at 1); new
+parameter, or "not applicable" which keeps its missing indicator at 1; the
+downstream fields are regime fields, and `config_id` of a known configuration
+fills them from `downstream.TABLE`); new
 chemicals can be described with thermosteam or by supplying descriptor values.
 Omitted categoricals of a query are encoded as the unknown level (trained by
 categorical dropout), and every imputed / defaulted field is reported per row.
@@ -411,7 +493,8 @@ in `coeff_predictor/data/processed/`):
   `neutralizing_agent`, `n_acid_groups`, `pKa1`,
   `final_product_stoich_mass_ratio`, `upgrading`, `separation_variant`,
   `separation_principle`, `aerobic`, `fermentation_mode`, `T_fermentation`,
-  `product_water_solubility`, `theoretical_yield`, `inflection_yield` (the
+  `product_water_solubility`, the downstream fields of §5 (patch S1),
+  `theoretical_yield`, `inflection_yield` (the
   sample's own; config value in `inflection_yield_config`),
   `y_min, y_max, t_min, t_max`, `baseline_productivity`, `r` (g/L/h),
   `r_mult`;

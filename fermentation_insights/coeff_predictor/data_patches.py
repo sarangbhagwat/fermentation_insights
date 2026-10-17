@@ -77,6 +77,22 @@ M23 HP non-neutral: ``separation_principle`` without the 'acidulation+' prefix.
 M11 (resumed samples appending duplicate rows) needs no patch:
     :func:`dataset.read_raw` keeps only the points of the chosen (complete)
     attempt of each sample.
+
+Specification supplement (not a defect fix; independent of the adapter
+version)
+-----------------------------------------------------------------------
+S1  config: the structured final-product / downstream-process fields of
+    :mod:`downstream` (``final_product_mass_fraction``,
+    ``final_product_is_broth``, ``final_product_phase``,
+    ``water_removal_route``, ``separation_ops``, ``upgrading_ops``,
+    ``coproducts``, ``neutralization_degree``, ``acid_regeneration``,
+    ``downstream_sources``) from ``downstream.TABLE``, for every record of a
+    known configuration whose ``downstream_spec_version`` is missing or older
+    than ``downstream.SPEC_VERSION`` (the table wins over a recorded value; a
+    differing recorded ``coproducts``/``neutralization_degree`` is kept as
+    ``<field>_recorded``). Records of unknown configurations are counted in
+    ``configs_without_spec``. :func:`downstream.apply_to_frame` does the same
+    for processed tables built before S1.
 """
 from __future__ import annotations
 
@@ -86,8 +102,10 @@ from collections import Counter, defaultdict
 import numpy as np
 import pandas as pd
 
+from . import downstream
+
 __all__ = ('MARK', 'FIXED_HARNESS_VERSION', 'FIXED_ADAPTER_VERSION', 'apply',
-           'sample_versions', 'POINT_PATCHES', 'CONFIG_PATCHES')
+           'sample_versions', 'POINT_PATCHES', 'CONFIG_PATCHES', 'SPEC_PATCHES')
 
 #: field holding the ';'-joined ids of the patches applied to a row/record
 MARK = 'data_patches'
@@ -98,6 +116,7 @@ FIXED_ADAPTER_VERSION = 2
 
 POINT_PATCHES = ('D3', 'D4', 'D6', 'D7')
 CONFIG_PATCHES = ('M1', 'M3', 'M12', 'M23')
+SPEC_PATCHES = ('S1',)
 
 KG_PER_GAL_ETHANOL = 3.78541 * 0.789
 TAL_WATER_SOLUBILITY_25C = 9.8
@@ -194,6 +213,29 @@ def _patch_config(rec):
     if new:
         rec[MARK] = _join(done | new)
     return new
+
+
+def _patch_downstream(rec):
+    """S1: downstream specification fields (see module docstring). Returns
+    'applied', 'unknown' or None (already current)."""
+    v = rec.get('downstream_spec_version')
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        v = float('nan')
+    if np.isfinite(v) and v >= downstream.SPEC_VERSION:
+        return None
+    e = downstream.spec_for(rec.get('config_id'))
+    if e is None:
+        return 'unknown'
+    for k in ('coproducts', 'neutralization_degree'):
+        old = rec.get(k)
+        if old is not None and not (isinstance(old, float) and not np.isfinite(old)) and old != '' \
+                and old != e.get(k) and f'{k}_recorded' not in rec:
+            rec[f'{k}_recorded'] = old
+    rec.update(e)
+    rec[MARK] = _join(_marks(rec.get(MARK)) | {'S1'})
+    return 'applied'
 
 
 # %% Point patches
@@ -355,12 +397,24 @@ def apply(cfg, starts, points):
     # config records: the global table and each sample's own record
     cp = defaultdict(set)
     n_rec = Counter()
+    no_spec = set()
+
+    def _patch_record(r):
+        key = f"{r.get('biorefinery')}|{r.get('config_id')}"
+        for pid in _patch_config(r):
+            cp[pid].add(key)
+            n_rec[pid] += 1
+        s1 = _patch_downstream(r)
+        if s1 == 'applied':
+            cp['S1'].add(key)
+            n_rec['S1'] += 1
+        elif s1 == 'unknown':
+            no_spec.add(key)
+
     if len(cfg):
         recs = cfg.to_dict('records')
         for r in recs:
-            for pid in _patch_config(r):
-                cp[pid].add(f"{r.get('biorefinery')}|{r.get('config_id')}")
-                n_rec[pid] += 1
+            _patch_record(r)
         cfg = pd.DataFrame(recs)
     if '_config' in starts.columns:
         copies = {}
@@ -369,16 +423,15 @@ def apply(cfg, starts, points):
             if isinstance(c, dict):
                 if id(c) not in copies:
                     copies[id(c)] = dict(c)
-                    for pid in _patch_config(copies[id(c)]):
-                        cp[pid].add(f"{c.get('biorefinery')}|{c.get('config_id')}")
-                        n_rec[pid] += 1
+                    _patch_record(copies[id(c)])
                 new_cfgs.append(copies[id(c)])
             else:
                 new_cfgs.append(c)
         starts['_config'] = new_cfgs
-    for pid in CONFIG_PATCHES:
+    for pid in CONFIG_PATCHES + SPEC_PATCHES:
         if pid in cp or pid not in counts:
             counts[pid] = {'config_records': int(n_rec.get(pid, 0)), 'configs': sorted(cp.get(pid, ()))}
+    counts['S1'].update(spec_version=downstream.SPEC_VERSION, configs_without_spec=sorted(no_spec))
     ver = sample_versions(cfg, starts)
     smark = {sid: set() for sid in starts['sample_id']}
     for sid, crow in ver['config'].items():

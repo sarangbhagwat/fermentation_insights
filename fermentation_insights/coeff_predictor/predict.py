@@ -33,6 +33,28 @@ Input units and basis (``CoefficientPredictor.field_units``,
   glucose-eq. sugar]; ``t`` [g/L]; ``T_fermentation`` [K];
   ``p_feedstock_capacity`` [kg/h wet feedstock]; MPSP [USD/kg final product].
 
+Final product and downstream process (``downstream.FIELDS``; used by
+checkpoints trained with ``FeatureSpec(downstream=True)``, DESIGN.md section 5)
+------------------------------------------------------------------------------
+* ``final_product_mass_fraction`` w_f [kg product / kg final-product stream],
+  in (0, 1]; for a product sold as the broth give
+  ``final_product_is_broth=True`` (w_f ~ t/1000) instead;
+* ``final_product_phase`` in {liquid, solid, aqueous_solution};
+* ``water_removal_route`` in {evaporate_water, crystallize, distill_product,
+  none} ('none' = the broth is sold; the model's water-removal gate then
+  removes the titer-dependent downstream costs);
+* ``separation_ops``, ``upgrading_ops``, ``coproducts``: '+'-joined terms of
+  ``downstream.SEPARATION_OPS`` / ``UPGRADING_OPS`` / ``COPRODUCTS`` (or
+  'none'), e.g. ``separation_ops='centrifugation+evaporation+crystallization+drying'``;
+* ``neutralization_degree`` [mol base-eq. / mol product acid groups, 0-1] and
+  ``acid_regeneration`` ('H2SO4' or 'none').
+
+Values outside the vocabularies raise ValueError. Omitted fields are filled
+from the registry when unique for the product pair in training, from
+``downstream.TABLE`` when ``config_id`` names a known configuration (e.g.
+``config_id='HP_hexanol_corn'``), and otherwise imputed (reported in
+``imputed``; ``struct_water_removal`` then assumes water is removed).
+
 Known feedstocks/products can be given by name: omitted fields (feedstock
 composition and baseline capacity, theoretical/inflection yields,
 stoichiometric mass ratio, chemical IDs, the fermentation regime when it is
@@ -68,6 +90,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from . import downstream
 from .features import (MissingSpecError, ApplicabilityWarning, REQUIRED_FIELDS, FIELD_UNITS,
                        PRICE_ALIASES, W_SUGAR, W_SUGAR_MAX, G_MAX, apply_spec_registry,
                        warn_if_outside, _as_frame)
@@ -105,6 +128,19 @@ class CoefficientPredictor:
     def spec(self):
         return self.ensemble.spec
 
+    @property
+    def downstream_vocabulary(self):
+        """Controlled vocabularies of the downstream specification fields."""
+        return dict(final_product_phase=downstream.PHASES, water_removal_route=downstream.ROUTES,
+                    separation_ops=downstream.SEPARATION_OPS, upgrading_ops=downstream.UPGRADING_OPS,
+                    coproducts=downstream.COPRODUCTS, acid_regeneration=downstream.ACIDS)
+
+    @staticmethod
+    def known_downstream(config_id=None):
+        """Downstream specification of a known configuration (dict), or the
+        whole table (DataFrame) if ``config_id`` is None."""
+        return downstream.table_frame() if config_id is None else downstream.spec_for(config_id)
+
     # ---- inputs ----
     def _frame(self, spec, details=False):
         """Rows after the registry fill (+ contextual defaults). With
@@ -116,6 +152,7 @@ class CoefficientPredictor:
         rows, det = [], []
         for rec in df.to_dict('records'):
             info = {}
+            rec.update(downstream.validate(rec))     # vocabulary / range check (ValueError)
             rec, f = apply_spec_registry(rec, reg, info)
             ctx, extra = [c for c in f if c.startswith('p_') and c != 'p_feedstock_capacity'], []
             pair = f"{rec.get('fermentation_product')}|{rec.get('final_product')}"

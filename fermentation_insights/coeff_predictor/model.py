@@ -33,7 +33,16 @@ Architecture
   continuous encoder features are clipped to their training range, which bounds the
   network's extrapolation to descriptors outside the training products
   (productivity is never clipped, nor are the prices of the price-explicit
-  channels, which do not enter the encoder; the plain MLP's price features are).
+  channels, which do not enter the encoder; the plain MLP's price features are);
+* optional water-removal gate (``water_gate``; needs a FeatureSpec with
+  ``downstream=True``): the c' and d' coefficients of the channels that scale
+  with the broth water processed downstream (``GATED_CHANNELS``: downstream,
+  utilities and wastewater capital, non-electric utilities, and the
+  natural-gas intensity) are multiplied by the raw structural input
+  ``struct_water_removal`` (0 when the broth itself is sold, route 'none').
+  A hard physical constraint: without evaporation, distillation or
+  wastewater treatment of the broth water, these titer-proportional costs
+  vanish. Structural inputs are never fed to the encoder.
 
 All raw head outputs are affine-scaled by per-target training means and
 standard deviations (buffers), so that the network works on O(1) numbers.
@@ -64,6 +73,10 @@ __all__ = ('ModelConfig', 'CoefficientNet', 'mpsp_equation', 'mpsp_equation_np',
            'make_layout', 'COEFF_KEYS', 'CHANNELS', 'PRICE_CHANNELS', 'INTENSITY_KEYS')
 
 COEFF_KEYS = ('a', 'b', 'c', 'd')
+#: channels / intensities whose c', d' are gated by the water-removal input
+GATED_CHANNELS = ('capex_downstream', 'capex_utilities', 'capex_wastewater', 'utilities_other')
+GATED_INTENSITIES = ('ng',)
+GATED_COEFFS = (2, 3)
 #: intensity key -> channel name
 INTENSITY_CHANNEL = {v: k for k, v in PRICE_CHANNELS.items()}
 
@@ -101,6 +114,10 @@ class ModelConfig:
     #: applicability-domain report still flags such queries. Productivity and
     #: the price-explicit prices (not encoder inputs) are never clipped.
     clip_inputs: float = -1.0
+    #: multiply c', d' of GATED_CHANNELS / GATED_INTENSITIES by the structural
+    #: input ``struct_water_removal`` (needs FeatureSpec(downstream=True);
+    #: without that column it has no effect)
+    water_gate: bool = False
 
     def __post_init__(self):
         if self.kind not in ('physics', 'plain'):
@@ -119,6 +136,7 @@ class ModelConfig:
         d = dict(d)
         # checkpoints saved before input clipping existed were trained without it
         d.setdefault('clip_inputs', -1.0)
+        d.setdefault('water_gate', False)
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
@@ -166,9 +184,16 @@ class CoefficientNet(nn.Module):
         Standardization of log r and 1/r (FeatureSpec.r_stats).
     price_index : list of int
         Columns of the ``prices`` input for each of ``layout['price_keys']``.
+    enc_index : list of int
+        Columns of ``X`` fed to the encoder (default: all;
+        ``FeatureSpec.encoder_index`` leaves out the raw structural inputs).
+    gate_index : int
+        Column of ``X`` holding ``struct_water_removal`` (used if
+        ``cfg.water_gate``).
     """
 
-    def __init__(self, n_features, cfg, layout, scales, r_stats, price_index=None):
+    def __init__(self, n_features, cfg, layout, scales, r_stats, price_index=None, enc_index=None,
+                 gate_index=None):
         super().__init__()
         self.cfg = cfg
         self.layout = {k: list(v) for k, v in layout.items()}
@@ -177,7 +202,13 @@ class CoefficientNet(nn.Module):
         self.n_channels, self.n_price = C, J
         self.price_index = list(price_index if price_index is not None
                                 else [INTENSITY_KEYS.index(k) for k in layout['price_keys']])
-        layers, d_in = [], self.n_features + 2
+        enc = list(range(self.n_features)) if enc_index is None else [int(i) for i in enc_index]
+        self.enc_all = enc == list(range(self.n_features))
+        # derived from the FeatureSpec: not part of the state_dict (old checkpoints load)
+        self.register_buffer('enc_index', torch.as_tensor(enc, dtype=torch.long), persistent=False)
+        self.gate_index = None if (gate_index is None or not cfg.water_gate or cfg.kind == 'plain') \
+            else int(gate_index)
+        layers, d_in = [], len(enc) + 2
         for _ in range(cfg.depth):
             layers += [nn.Linear(d_in, cfg.width), nn.LayerNorm(cfg.width), nn.SiLU(),
                        nn.Dropout(cfg.dropout)]
@@ -191,6 +222,18 @@ class CoefficientNet(nn.Module):
                 t = t.reshape(shape)
             self.register_buffer(name, t.clone())
 
+        if self.gate_index is not None:
+            gc = np.ones((C, 4))
+            for i, c in enumerate(layout['channels']):
+                if c in GATED_CHANNELS:
+                    gc[i, list(GATED_COEFFS)] = 0.
+            gi = np.ones((J, 4))
+            for i, k in enumerate(layout['price_keys']):
+                if k in GATED_INTENSITIES:
+                    gi[i, list(GATED_COEFFS)] = 0.
+            # 1 = ungated entry; 0 = entry multiplied by the gate (derived, not saved)
+            self.register_buffer('gate_ch', torch.as_tensor(gc, dtype=torch.float32), persistent=False)
+            self.register_buffer('gate_int', torch.as_tensor(gi, dtype=torch.float32), persistent=False)
         rs = r_stats
         if cfg.clip_inputs >= 0:
             lo = np.asarray(scales.get('x_lo', np.full(self.n_features, -np.inf)), float)
@@ -243,7 +286,15 @@ class CoefficientNet(nn.Module):
     def encode(self, X, log_r):
         if self.cfg.clip_inputs >= 0:
             X = torch.maximum(torch.minimum(X, self.x_hi.to(X.dtype)), self.x_lo.to(X.dtype))
+        if not self.enc_all:
+            X = X[:, self.enc_index]
         return self.encoder(torch.cat([X, self.r_features(log_r)], -1))
+
+    def _gate(self, X, ungated):
+        """Multiplier (n, K, 4): 1 where ``ungated``, else the gate input."""
+        gv = X[:, self.gate_index].clamp(0., 1.)[:, None, None]
+        u = ungated.to(X.dtype)[None]
+        return u + (1. - u) * gv
 
     # ---- forward ----
     def forward(self, X, log_r, prices, w_sugar, g_max):
@@ -268,6 +319,8 @@ class CoefficientNet(nn.Module):
                 qb = torch.exp(z) / w_sugar
                 qfs = torch.stack([q[:, self.j_fs, 0], qb, q[:, self.j_fs, 2], q[:, self.j_fs, 3]], -1)
                 q = torch.cat([q[:, :self.j_fs], qfs[:, None], q[:, self.j_fs + 1:]], 1)
+            if self.gate_index is not None:
+                q = q * self._gate(X, self.gate_int)
             p = prices[:, self.price_index]
             pc = p[:, :, None] * q
             out['intensities'] = q
@@ -275,6 +328,8 @@ class CoefficientNet(nn.Module):
             total = total + pc.sum(1)
         if self.n_channels:
             ch = self.ch_mean + self.ch_std * self.ch_head(h).view(n, self.n_channels, 4)
+            if self.gate_index is not None:
+                ch = ch * self._gate(X, self.gate_ch)
             out['channels'] = ch
             total = total + ch.sum(1)
         else:

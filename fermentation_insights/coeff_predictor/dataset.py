@@ -98,7 +98,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import data_patches, physics
+from . import data_patches, downstream, physics
 
 __all__ = ('DEFAULT_RAW_DIR', 'DEFAULT_PROCESSED_DIR', 'QualityFilters',
            'ProcessedData', 'read_raw', 'build', 'load', 'TOTAL_TARGETS',
@@ -123,7 +123,7 @@ SPEC_COLUMNS = (
     'y_min', 'y_max', 't_min', 't_max', 'baseline_productivity',
     'baseline_yield', 'baseline_titer', 'ferm_product_chemical',
     'final_product_chemical',
-)
+) + downstream.SAMPLE_FIELDS   # structured downstream specification (data_patches S1)
 _DESC_PREFIXES = ('fp_', 'pp_', 'fs_')
 _POINT_KEEP = ('sample_id', 'point_id', 'y', 't', 'r', 'MPSP', 'recovery',
                'F_final_product', 'F_ferm_product', 'F_sugar_fed', 'F_feedstock',
