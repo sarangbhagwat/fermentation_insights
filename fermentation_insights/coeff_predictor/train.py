@@ -62,7 +62,8 @@ from .model import (CoefficientNet, ModelConfig, make_layout, mpsp_equation_np,
 __all__ = (
     'LossConfig', 'TrainConfig', 'Ensemble', 'fit_target_scales', 'make_tensors',
     'pad_points', 'compute_loss', 'physics_residuals', 'mpsp_dlogr', 'train_model', 'train_ensemble',
-    'calibrate_conformal', 'check_constraints', 'apply_constraint_report',
+    'calibrate_conformal', 'calibrate_conformal_oof', 'conformal_scores', 'crossfit_coverage',
+    'REFIT_MODES', 'CONF_KEYS', 'check_constraints', 'apply_constraint_report',
     'split_random', 'split_group', 'split_productivity', 'make_splits', 'inner_split',
     'ensemble_splits', 'SCHEMES', 'SCHEME_GROUP', 'load_tables', 'setup_torch',
 )
@@ -133,6 +134,10 @@ class LossConfig:
         return cls(**d)
 
 
+#: :attr:`TrainConfig.refit` options
+REFIT_MODES = ('none', 'truncate', 'anneal')
+
+
 @dataclass
 class TrainConfig:
     """Optimization settings."""
@@ -157,6 +162,26 @@ class TrainConfig:
     #: term, e.g. 'mpsp' (relative MPSP error) -- on held-out configurations
     #: the channel term can grow while the MPSP error still falls
     early_stop: str = 'data'
+    #: refit after early stopping (:func:`train_ensemble`): 'none' keeps the
+    #: early-stopped member (its validation hold-out is never fitted);
+    #: otherwise pass 1 (early stopping on the member's hold-out, grouped as
+    #: in :func:`ensemble_splits`) gives the best epoch e* and
+    #: pass 2 retrains the member on ALL its fit samples (same seed, no
+    #: hold-out) for exactly e* epochs, with the warm-up + cosine learning-rate
+    #: schedule of length ``epochs`` cut at e* ('truncate': pass 2 follows
+    #: pass 1's schedule) or re-annealed over e* epochs ('anneal')
+    refit: str = 'none'
+    #: e* of the refit pass: 'member' (each member's own best epoch) or
+    #: 'median' (median of the members' best epochs, for every member: the
+    #: members' hold-outs are different random subsets of configurations, so
+    #: the median is a lower-variance estimate of the training length)
+    refit_epochs: str = 'member'
+
+    def __post_init__(self):
+        if self.refit not in REFIT_MODES:
+            raise ValueError(f'TrainConfig.refit={self.refit!r}; choose from {REFIT_MODES}')
+        if self.refit_epochs not in ('member', 'median'):
+            raise ValueError(f"TrainConfig.refit_epochs={self.refit_epochs!r}; choose 'member' or 'median'")
 
     def to_dict(self):
         return asdict(self)
@@ -591,7 +616,8 @@ def build_model(spec, layout, scales, mcfg, dtype=torch.float32):
 
 
 def train_model(spec, samples, points, mcfg=None, lcfg=None, tcfg=None, val=None, layout=None,
-                scales=None, batch=None, seed=None, log=None, tensors=None, val_tensors=None):
+                scales=None, batch=None, seed=None, log=None, tensors=None, val_tensors=None,
+                n_epochs=None, schedule_epochs=None, keep='best'):
     """Train one network.
 
     Parameters
@@ -602,9 +628,22 @@ def train_model(spec, samples, points, mcfg=None, lcfg=None, tcfg=None, val=None
     layout, scales : precomputed (default: from the training data).
     tensors, val_tensors : precomputed :func:`make_tensors` dicts (then
         ``samples``/``points``/``val`` are only used for defaults).
+    n_epochs : maximum number of epochs (default ``tcfg.epochs``).
+    schedule_epochs : length in epochs of the warm-up + cosine learning-rate
+        schedule (default ``tcfg.epochs``); a run shorter than the schedule
+        follows its truncated beginning.
+    keep : 'best' (default) restores the best state on the validation
+        criterion (the training criterion without validation data) and stops
+        early after ``tcfg.patience`` epochs without improvement; 'last' runs
+        exactly ``n_epochs`` epochs and keeps the final state (refit pass).
 
-    Returns ``(model, history)`` with the best-validation state restored.
+    Returns ``(model, history)``; ``model.train_info`` holds ``best_epoch``
+    (number of epochs up to and including the restored state; with 'last'
+    the number run), ``epochs_run``, ``n_train``, ``schedule_epochs``,
+    ``keep`` and ``seconds``.
     """
+    if keep not in ('best', 'last'):
+        raise ValueError(f'keep={keep!r}')
     mcfg = mcfg or ModelConfig()
     lcfg = lcfg or LossConfig()
     tcfg = tcfg or TrainConfig()
@@ -638,8 +677,10 @@ def train_model(spec, samples, points, mcfg=None, lcfg=None, tcfg=None, val=None
         groups.append({'params': resid, 'weight_decay': float(mcfg.residual_weight_decay)})
     opt = torch.optim.AdamW(groups, lr=tcfg.lr)
     n = len(tb['X'])
+    n_epochs = int(tcfg.epochs if n_epochs is None else n_epochs)
+    schedule_epochs = int(tcfg.epochs if schedule_epochs is None else schedule_epochs)
     steps_per_epoch = max(1, math.ceil(n / tcfg.batch_size))
-    total = steps_per_epoch * tcfg.epochs
+    total = steps_per_epoch * max(1, schedule_epochs)
     warm = max(1, int(tcfg.warmup_frac * total))
 
     def lr_lambda(step):
@@ -649,9 +690,9 @@ def train_model(spec, samples, points, mcfg=None, lcfg=None, tcfg=None, val=None
         return tcfg.lr_min_frac + (1 - tcfg.lr_min_frac) * 0.5 * (1 + math.cos(math.pi * f))
 
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
-    best, best_state, bad, hist = float('inf'), None, 0, []
+    best, best_state, bad, hist, best_epoch = float('inf'), None, 0, [], 0
     t0 = time.time()
-    for epoch in range(tcfg.epochs):
+    for epoch in range(n_epochs):
         model.train()
         perm = torch.randperm(n, generator=gen)
         agg = {}
@@ -679,19 +720,23 @@ def train_model(spec, samples, points, mcfg=None, lcfg=None, tcfg=None, val=None
         hist.append(rec)
         if not np.isfinite(crit):
             break
-        if not np.isfinite(best) or crit < best - 1e-6 * abs(best):
-            best, bad = crit, 0
+        if keep == 'last':
+            best_epoch = epoch + 1
+        elif not np.isfinite(best) or crit < best - 1e-6 * abs(best):
+            best, bad, best_epoch = crit, 0, epoch + 1
             best_state = copy.deepcopy(model.state_dict())
         else:
             bad += 1
-        if tcfg.verbose and (epoch % 20 == 0 or epoch == tcfg.epochs - 1):
+        if tcfg.verbose and (epoch % 20 == 0 or epoch == n_epochs - 1):
             msg = f'[seed {seed}] epoch {epoch:4d} train {agg["loss"]:.4g} crit {crit:.4g} ({time.time() - t0:.0f}s)'
             (log or print)(msg)
-        if epoch >= tcfg.min_epochs and bad >= tcfg.patience:
+        if keep == 'best' and epoch >= tcfg.min_epochs and bad >= tcfg.patience:
             break
-    if best_state is not None:
+    if keep == 'best' and best_state is not None:
         model.load_state_dict(best_state)
     model.eval()
+    model.train_info = dict(best_epoch=int(best_epoch), epochs_run=len(hist), n_train=int(n),
+                            schedule_epochs=schedule_epochs, keep=keep, seconds=time.time() - t0)
     return model, hist
 
 
@@ -1095,7 +1140,7 @@ def _jsonable(o):
 
 def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None, calib_frac=0.15,
                    group_col='config_id', check=True, bootstrap=False, alpha=0.1, seed=0, log=None,
-                   spec_kwargs=None, check_kwargs=None):
+                   spec_kwargs=None, check_kwargs=None, keep_pass1=False):
     """Train a deep ensemble.
 
     * the FeatureSpec and target scales are fit on the training rows only;
@@ -1106,6 +1151,18 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
     * each member uses its own inner validation split (``tcfg.val_frac``,
       same grouping) for early stopping and its own seed (optionally a
       bootstrap resample) -- see :func:`ensemble_splits`;
+    * with ``tcfg.refit`` != 'none' every member is refit after early
+      stopping: pass 1 as above gives its best epoch e*, pass 2 retrains it
+      (same seed and initialization) on ALL fit samples, i.e. including its
+      early-stopping hold-out, for e* epochs (its own best epoch, or the
+      median over the members with ``tcfg.refit_epochs = 'median'``; see
+      :attr:`TrainConfig.refit` for the learning-rate schedule); all members
+      finish pass 1 before pass 2 starts; ``keep_pass1`` keeps the pass-1
+      members as ``ens.pass1`` (an Ensemble; not saved), for diagnostics;
+    * ``ens.meta`` records per member the pass-1 epochs run (``epochs``), the
+      best epoch (``best_epochs``), the refit epochs (``refit_epochs``, None
+      without refit), the training samples (``member_n_train``) and the
+      training seconds (``member_seconds``, both passes);
     * with ``check``, physics residuals / hard bounds that the training
       targets violate in > 1 % of cases are disabled (see
       :func:`check_constraints`; ``check_kwargs`` sets its ``threshold``/``tol``).
@@ -1129,7 +1186,7 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
     scales = fit_target_scales(s_fit, points, layout, batch, spec.continuous_mask())
     dt = _dtype(tcfg.dtype)
     tb_fit = make_tensors(spec, s_fit, points, layout, batch, tcfg.max_points, dt)
-    members, hists = [], []
+    members, hists, pass1, refit_hists, info = [], [], [], [], []
     for mi in range(n_members):
         ms = seed + 7919 * mi
         tr, va, _ = sp['members'][mi]
@@ -1140,21 +1197,61 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
                            val_tensors=_index(tb_fit, torch.as_tensor(va)) if len(va) else None)
         members.append(m)
         hists.append(h)
+        info.append(dict(epochs=len(h), best_epoch=m.train_info['best_epoch'], refit_epochs=None,
+                         n_train=int(len(tr)), seconds=m.train_info['seconds'],
+                         seconds_pass1=m.train_info['seconds'], has_val=bool(len(va))))
+    has_val = [r['best_epoch'] for r in info if r['has_val']]
+    if tcfg.refit != 'none' and has_val:
+        # pass 2: every fit sample, e* epochs, final state (no hold-out left to select on)
+        e_med = max(1, int(round(float(np.median(has_val)))))
+        for mi, rec in enumerate(info):
+            if not rec['has_val']:
+                continue
+            ms = seed + 7919 * mi
+            rows = np.arange(len(s_fit))
+            if bootstrap:
+                rows = np.random.RandomState(ms).choice(rows, len(rows), replace=True)
+            e_star = e_med if tcfg.refit_epochs == 'median' else max(1, rec['best_epoch'])
+            m2, h2 = train_model(spec, s_fit, points, mcfg, lcfg, tcfg, layout=layout, scales=scales,
+                                 seed=ms, log=log, tensors=_index(tb_fit, torch.as_tensor(rows)),
+                                 n_epochs=e_star, keep='last',
+                                 schedule_epochs=e_star if tcfg.refit == 'anneal' else tcfg.epochs)
+            rec.update(refit_epochs=len(h2), n_train=int(len(rows)),
+                       seconds=rec['seconds'] + m2.train_info['seconds'])
+            pass1.append(members[mi])
+            refit_hists.append(h2)
+            members[mi] = m2
+    refit = bool(pass1)
     ad = ApplicabilityDomain().fit(spec.ad_matrix(batch), spec.ad_columns())
     ngroups = lambda d: int(d['config_id'].astype(str).nunique()) if 'config_id' in d else int(len(d))
     s_cal = samples.iloc[cal_idx].reset_index(drop=True)
     gcol = sp['calib_group'] if sp['calib_group'] in samples else None
-    n_fit_rows = sorted({int(i) for tr, _, _ in sp['members'] for i in tr})
+    n_fit_rows = (list(range(len(s_fit))) if refit else
+                  sorted({int(i) for tr, _, _ in sp['members'] for i in tr}))
     ens = Ensemble(members, spec, layout, scales, mcfg, lcfg, tcfg, constraint_report=report, ad=ad,
                    meta=dict(n_train=int(len(s_fit)), n_calib=int(len(cal_idx)),
                              n_fit=int(len(n_fit_rows)), n_fit_configs=ngroups(s_fit.iloc[n_fit_rows]),
                              n_calib_groups=int(s_cal[gcol].astype(str).nunique()) if gcol else int(len(s_cal)),
-                             epochs=[len(h) for h in hists], seed=seed, group_col=group_col,
+                             epochs=[r['epochs'] for r in info], best_epochs=[r['best_epoch'] for r in info],
+                             refit=tcfg.refit if refit else 'none',
+                             refit_epochs=[r['refit_epochs'] for r in info],
+                             member_n_train=[r['n_train'] for r in info],
+                             member_seconds=[round(r['seconds'], 2) for r in info],
+                             seed=seed, group_col=group_col, calib_frac=float(calib_frac),
                              calib_group_used=sp['calib_group'],
                              val_group_used=[m[2] for m in sp['members']]))
     ens.histories = hists
+    ens.refit_histories = refit_hists
+    if keep_pass1 and refit:
+        ens.pass1 = Ensemble(pass1, spec, layout, scales, mcfg, lcfg, tcfg, constraint_report=report, ad=ad,
+                             meta=dict(ens.meta, refit='none', refit_epochs=[None] * len(pass1),
+                                       n_fit=len(sorted({int(i) for tr, _, _ in sp['members'] for i in tr})),
+                                       member_n_train=[len(tr) for tr, _, _ in sp['members']],
+                                       member_seconds=[round(r['seconds_pass1'], 2) for r in info]))
     if len(cal_idx):
         calibrate_conformal(ens, s_cal, points, alpha, group_col=gcol)
+        if getattr(ens, 'pass1', None) is not None:
+            calibrate_conformal(ens.pass1, s_cal, points, alpha, group_col=gcol)
     return ens
 
 
@@ -1191,57 +1288,191 @@ def _conf_info(scores, alpha, warn=True):
 MIN_CALIB_GROUPS = 10
 
 
-def calibrate_conformal(ens, samples, points, alpha=0.1, group_col=None):
-    """Split-conformal scaling of ensemble spreads on held-out samples:
-    score = |target - mean| / (std + eps) with eps = 0.1 * training target
-    std (so a single member still gets valid, constant-width intervals);
-    MPSP uses relative errors with eps = 1 %, reduced to ONE score per sample
-    (max over its points -> simultaneous coverage of the sample's surface;
-    the exchangeable units are samples, not points). Rows with invalid
-    physical inputs are excluded explicitly. Stores quantiles in
-    ``ens.conformal`` with, per key, the number of scores ``<key>_n`` and the
-    guaranteed level ``<key>_level``, plus the calibration grouping and
-    ``coverage_guaranteed`` (finite-sample valid AND calibrated on >=
-    MIN_CALIB_GROUPS held-out groups)."""
+#: interval keys of ``Ensemble.conformal`` (one nonconformity score each)
+CONF_KEYS = (*COEFF_KEYS, 'g', 'mpsp')
+
+
+def conformal_eps(ens):
+    """Additive spread floors of the scores: 0.1 * training target std for
+    a', b', c', d' and g; MPSP uses the relative floor ``mpsp_rel``."""
+    sc = ens.scales
+    eps = {key: 0.1 * float(sc['coef_std'][k]) for k, key in enumerate(COEFF_KEYS)}
+    eps['g'] = 0.1 * float(sc['g_std'])
+    eps['mpsp_rel'] = 0.01
+    return eps
+
+
+def conformal_scores(ens, samples, points):
+    """Per-sample nonconformity scores of ``ens`` on held-out ``samples``
+    (the ones :func:`calibrate_conformal` uses): score = |target - mean| /
+    (std + eps) over the ensemble members (eps from :func:`conformal_eps`);
+    MPSP: relative errors with eps = 1 %, ONE score per sample = max over its
+    points (simultaneous coverage of the sample's surface; +inf when the mean
+    predicted MPSP is 0, NaN without points). Rows with invalid physical
+    inputs get NaN scores. Returns a DataFrame with ``sample_id`` /
+    ``config_id`` (when present), ``invalid`` and one column per key in
+    :data:`CONF_KEYS`; :func:`calibrate_conformal_oof` calibrates from such
+    tables collected out of fold."""
+    samples = samples.reset_index(drop=True)
     batch, outs = ens.predict_samples(samples, strict=False)
     ok = ~batch.invalid if batch.invalid is not None else np.ones(len(samples), bool)
     coef, g = outs['coef'], outs['g']
-    sc = ens.scales
-    n_groups = int(samples[group_col].astype(str).nunique()) if group_col and group_col in samples else len(samples)
-    conf = {'alpha': float(alpha), 'n': int(len(samples)), 'n_invalid': int((~ok).sum()),
-            'calibration_grouping': group_col or 'sample (within-config)', 'n_calib_groups': n_groups}
-    need = int(math.ceil((1 - alpha) / alpha))
-    if ok.sum() < need:
-        warnings.warn(f'conformal calibration on {int(ok.sum())} samples (< {need}): intervals are unbounded',
-                      UserWarning, stacklevel=2)
-
-    def put(key, scores):
-        q, n, lev = _conf_info(np.where(ok, scores, np.nan), alpha, warn=False)
-        conf[key], conf[f'{key}_n'], conf[f'{key}_level'] = q, n, lev
-
+    eps = conformal_eps(ens)
+    out = pd.DataFrame({c: samples[c].astype(str).to_numpy() for c in ('sample_id', 'config_id') if c in samples})
+    out['invalid'] = ~ok
     tgt = np.column_stack([pd.to_numeric(samples[k], errors='coerce').to_numpy(float) for k in COEFF_KEYS])
     for k, key in enumerate(COEFF_KEYS):
         mu, sd = coef[:, :, k].mean(0), coef[:, :, k].std(0)
-        eps = 0.1 * sc['coef_std'][k]
-        put(key, np.abs(tgt[:, k] - mu) / (sd + eps))
-        conf[f'{key}_eps'] = eps
+        out[key] = np.where(ok, np.abs(tgt[:, k] - mu) / (sd + eps[key]), np.nan)
     gt = pd.to_numeric(samples['g'], errors='coerce').to_numpy(float)
-    mu, sd = g.mean(0), g.std(0)
-    conf['g_eps'] = 0.1 * sc['g_std']
-    put('g', np.abs(gt - mu) / (sd + conf['g_eps']))
+    out['g'] = np.where(ok, np.abs(gt - g.mean(0)) / (g.std(0) + eps['g']), np.nan)
     Y, T, M, _, mask = pad_points(samples, points)
     mm = ens.mpsp_members(outs, Y, T)
     mu, sd = mm.mean(0), mm.std(0)
     with np.errstate(divide='ignore', invalid='ignore'):
-        s = np.abs(M / mu - 1.) / (sd / np.abs(mu) + 0.01)
-    s = np.where(np.isnan(s), np.inf, s)          # mu = 0 -> not covered
-    s_sample = np.where(mask.any(1), np.where(mask, s, -np.inf).max(1), np.nan)
-    put('mpsp', s_sample)
-    conf['mpsp_eps_rel'] = 0.01
+        sc = np.abs(M / mu - 1.) / (sd / np.abs(mu) + eps['mpsp_rel'])
+    sc = np.where(np.isnan(sc), np.inf, sc)          # mu = 0 -> not covered
+    s_sample = np.where(mask.any(1), np.where(mask, sc, -np.inf).max(1), np.nan)
+    out['mpsp'] = np.where(ok, s_sample, np.nan)
+    return out
+
+
+def _conf_info_grouped(scores, groups, alpha):
+    """``(q, n, level)`` of the group-weighted ("pooled CDF") conformal
+    quantile for hierarchical data (Dunn, Gray & Ramdas 2022): every group
+    (configuration) carries total weight 1/G spread over its samples, and q is
+    the smallest score whose weighted CDF reaches (1 - alpha)(1 + 1/G) -- a
+    new configuration then counts once, whatever its number of samples (the
+    plain quantile is dominated by the configurations with most samples).
+    ``level`` is the target (1 - alpha), not a finite-sample guarantee."""
+    v = np.asarray(scores, float)
+    g = np.asarray(groups).astype(str)
+    ok = ~np.isnan(v)
+    v, g = v[ok], g[ok]
+    if not len(v):
+        return float('nan'), 0, float('nan')
+    _, inv, cnt = np.unique(g, return_inverse=True, return_counts=True)
+    G = len(cnt)
+    target = (1 - alpha) * (G + 1) / G
+    if target > 1:
+        return float('inf'), len(v), 1.
+    o = np.argsort(v, kind='stable')
+    cw = np.cumsum(1. / cnt[inv][o]) / G
+    k = int(np.searchsorted(cw, target - 1e-12))
+    return float(v[o][min(k, len(v) - 1)]), len(v), float(1 - alpha)
+
+
+def _conformal_from_scores(scores, alpha, eps, n_groups, grouping, weighting='sample', group_col=None):
+    """Quantiles (and n / guaranteed level per key) from a score table;
+    ``weighting='group'`` uses :func:`_conf_info_grouped` over ``group_col``."""
+    n_inv = int(np.sum(scores['invalid'])) if 'invalid' in scores else 0
+    conf = {'alpha': float(alpha), 'n': int(len(scores)), 'n_invalid': n_inv,
+            'calibration_grouping': grouping, 'n_calib_groups': int(n_groups), 'weighting': weighting}
+    need = int(math.ceil((1 - alpha) / alpha))
+    if conf['n'] - n_inv < need:
+        warnings.warn(f"conformal calibration on {conf['n'] - n_inv} samples (< {need}): "
+                      'intervals are unbounded', UserWarning, stacklevel=3)
+    for key in CONF_KEYS:
+        if weighting == 'group':
+            q, n, lev = _conf_info_grouped(scores[key].to_numpy(float), scores[group_col].to_numpy(), alpha)
+        else:
+            q, n, lev = _conf_info(scores[key].to_numpy(float), alpha, warn=False)
+        conf[key], conf[f'{key}_n'], conf[f'{key}_level'] = q, n, lev
+        if key != 'mpsp':
+            conf[f'{key}_eps'] = eps[key]
+    conf['mpsp_eps_rel'] = eps['mpsp_rel']
     conf['n_eff'] = int(conf['mpsp_n'])
-    conf['finite_sample_valid'] = bool(all(np.isfinite(conf[k]) for k in (*COEFF_KEYS, 'g', 'mpsp')))
+    conf['finite_sample_valid'] = bool(all(np.isfinite(conf[k]) for k in CONF_KEYS))
+    return conf
+
+
+def calibrate_conformal(ens, samples, points, alpha=0.1, group_col=None):
+    """Split-conformal scaling of ensemble spreads on held-out samples
+    (scores: :func:`conformal_scores`; the exchangeable units are samples,
+    not points). Stores quantiles in ``ens.conformal`` with, per key, the
+    number of scores ``<key>_n`` and the guaranteed level ``<key>_level``,
+    plus the calibration grouping and ``coverage_guaranteed`` (finite-sample
+    valid AND calibrated on >= MIN_CALIB_GROUPS held-out groups)."""
+    n_groups = int(samples[group_col].astype(str).nunique()) if group_col and group_col in samples else len(samples)
+    sc = conformal_scores(ens, samples, points)
+    conf = _conformal_from_scores(sc, alpha, conformal_eps(ens), n_groups, group_col or 'sample (within-config)')
+    conf['source'] = 'calibration hold-out'
     conf['coverage_guaranteed'] = bool(conf['finite_sample_valid'] and group_col is not None
                                        and n_groups >= MIN_CALIB_GROUPS)
+    ens.conformal = conf
+    return conf
+
+
+def crossfit_coverage(scores, alpha=0.1, fold_col='config_id', keys=CONF_KEYS, weighting='sample',
+                      group_col='config_id'):
+    """Cross-fitted coverage estimate of quantiles calibrated on out-of-fold
+    scores: for every fold (value of ``fold_col``), the conformal quantile of
+    the scores of all OTHER folds (``weighting`` as in
+    :func:`calibrate_conformal_oof`) and the fraction of the fold's own scores
+    at or below it (NaN scores dropped). Returns ``{key: dict(mean, pooled,
+    min, q10, frac_ok, n_folds)}``: fold-balanced mean, sample-pooled
+    coverage, the worst fold, the 10 % quantile over folds and the fraction
+    of folds with coverage >= 1 - alpha."""
+    f = scores[fold_col].astype(str).to_numpy()
+    grp = scores[group_col].astype(str).to_numpy() if weighting == 'group' else None
+    folds = sorted(set(f))
+    res = {}
+    for key in keys:
+        v = scores[key].to_numpy(float)
+        covs, n_cov, n_tot = [], 0, 0
+        for fo in folds:
+            te = (f == fo) & ~np.isnan(v)
+            if not te.any():
+                continue
+            if weighting == 'group':
+                q = _conf_info_grouped(v[f != fo], grp[f != fo], alpha)[0]
+            else:
+                q = _conf_q(v[f != fo], alpha, warn=False)
+            c = v[te] <= q
+            covs.append(float(c.mean()))
+            n_cov += int(c.sum())
+            n_tot += int(te.sum())
+        covs = np.asarray(covs)
+        nan = float('nan')
+        res[key] = dict(mean=float(covs.mean()) if len(covs) else nan,
+                        pooled=float(n_cov / n_tot) if n_tot else nan,
+                        min=float(covs.min()) if len(covs) else nan,
+                        q10=float(np.quantile(covs, 0.1)) if len(covs) else nan,
+                        frac_ok=float(np.mean(covs >= 1 - alpha)) if len(covs) else nan,
+                        n_folds=int(len(covs)))
+    return res
+
+
+def calibrate_conformal_oof(ens, scores, alpha=0.1, group_col='config_id', fold_col=None,
+                            source='out-of-fold scores of grouped cross-validation', weighting='sample',
+                            **info):
+    """Split-conformal quantiles for an ensemble trained on ALL its samples
+    (no calibration hold-out), from out-of-fold scores of the SAME training
+    procedure: ``scores`` is a :func:`conformal_scores` table of the
+    cross-validation fold ensembles on their held-out samples (one row per
+    held-out sample, e.g. the leave-configurations-out CV of the development
+    set; must contain ``group_col``). The quantile rule, keys and eps floors
+    are those of :func:`calibrate_conformal` (eps from ``ens``'s own target
+    scales); the fold ensembles are not ``ens``, so ``coverage_guaranteed`` is
+    False. ``conformal['crossfit']`` holds the cross-fitted coverage estimate
+    (:func:`crossfit_coverage` over ``fold_col``, default ``group_col``) and
+    ``<key>_coverage_cv`` its fold-balanced mean. ``weighting``: 'sample'
+    (plain split-conformal quantile over all scores) or 'group' (every
+    configuration weighted equally, :func:`_conf_info_grouped`). ``info`` is
+    stored as metadata (e.g. scheme, members of the fold ensembles)."""
+    if group_col not in scores:
+        raise ValueError(f'scores need a {group_col!r} column')
+    if weighting not in ('sample', 'group'):
+        raise ValueError(f'weighting={weighting!r}')
+    fold_col = fold_col or group_col
+    sc = scores.reset_index(drop=True)
+    n_groups = int(sc[group_col].astype(str).nunique())
+    conf = _conformal_from_scores(sc, alpha, conformal_eps(ens), n_groups, group_col, weighting, group_col)
+    cf = crossfit_coverage(sc, alpha, fold_col, weighting=weighting, group_col=group_col)
+    conf.update(source=source, coverage_guaranteed=False, crossfit=cf, crossfit_fold_col=fold_col,
+                n_folds=int(sc[fold_col].astype(str).nunique()), **info)
+    for key in CONF_KEYS:
+        conf[f'{key}_coverage_cv'] = cf[key]['mean']
     ens.conformal = conf
     return conf
 

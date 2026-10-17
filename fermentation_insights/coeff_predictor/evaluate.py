@@ -208,7 +208,10 @@ def fit_method(method, samples, points, n_members=1, mcfg_kw=None, lcfg_kw=None,
         samples = samples.reset_index(drop=True)
         sp = ensemble_splits(samples, n_members, calib_frac, tcfg.val_frac, group_col, seed)
         s_fit = samples.iloc[sp['fit']].reset_index(drop=True)
-        s_use = s_fit.iloc[sorted({int(i) for tr, _, _ in sp['members'] for i in tr})].reset_index(drop=True)
+        if tcfg.refit == 'none':
+            s_use = s_fit.iloc[sorted({int(i) for tr, _, _ in sp['members'] for i in tr})].reset_index(drop=True)
+        else:       # refit members train on every fit sample (their early-stopping hold-outs included)
+            s_use = s_fit
         m = _SklearnMethod(base, s_use, seed, spec_kw)
         m.fit_info = dict(n_fit=len(s_use), n_fit_configs=_n_configs(s_use), n_calib=len(sp['calib']),
                           calib_group_used=sp['calib_group'])
