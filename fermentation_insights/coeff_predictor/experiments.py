@@ -2579,7 +2579,8 @@ def parse_args(argv=None):
     ap.add_argument('--threads', type=int, default=1, help='parallel single-threaded worker processes')
     ap.add_argument('--budget-hours', type=float, default=2.5, help='full mode: wall-time budget of the whole run')
     ap.add_argument('--hpo-candidates', type=int, default=0, help='override the budget-derived search size')
-    ap.add_argument('--loco-folds', type=int, default=0, help='override: number of LOCO folds (0 = budget / all)')
+    ap.add_argument('--loco-folds', type=int, default=0,
+                    help='quick mode only: number of LOCO folds of every method (0 = all)')
     ap.add_argument('--members', type=int, default=5,
                     help='full mode: ensemble members of the CV, final_dev and release ensembles (equal, so that '
                          'the CV out-of-fold scores calibrate the final intervals)')
@@ -2694,6 +2695,10 @@ def main(argv=None):
     if a.hpo_candidates:
         plan['hpo_candidates'] = a.hpo_candidates
     if a.loco_folds:
+        if not a.quick:
+            raise SystemExit('--loco-folds subsets the LOCO folds of every method; the final intervals need the '
+                             'out-of-fold scores of every development configuration (use --ablation-loco-folds '
+                             'to subset only the ablations)')
         plan['loco_folds'] = a.loco_folds
     runner = Runner(a.threads, a.processed, D['hash'], os.path.join(a.out, 'cache'), a.force_pool)
     try:
