@@ -30,6 +30,11 @@ interrupted run resumes where it stopped)
                which data exist; the file is loaded, never regenerated, and the
                final stage refuses to run while a test configuration has no
                data. The rest = development set (``development_set``);
+   Every network fit of stages 3-5 uses the same training procedure
+   (``PROTOCOL``; v1 behaviour with ``--v1-protocol``): no calibration
+   hold-out, every ensemble member early-stops on its own random 15 %
+   sample-level hold-out, no refit -- so the CV estimates the procedure that
+   makes the final models;
 3. ``hpo``     random search (candidate 0 = package defaults) of width, depth,
                dropout, weight decay, learning rate, w_mpsp, w_ch, w_phys,
                collocation ratio, early-stopping criterion and input clipping by
@@ -37,19 +42,29 @@ interrupted run resumes where it stopped)
                stratified by biorefinery; ``hpo_members`` networks per fit),
                selecting by the fold mean of the configuration-balanced held-out
                MPSP-surface MAPE (``HPO_METRIC``). Full mode sizes the search
-               (and, if needed, the number of leave-one-configuration-out folds)
-               to ``--budget-hours`` from the measured cost of the first
-               candidate (``plan.json``);
+               (and, if needed, the number of LOCO folds of the PI-NN
+               ablations) to ``--budget-hours`` from the measured cost of the
+               first candidate (``plan.json``);
 4. ``cv``      generalization CV on the development set with the selected
-               hyperparameters: random-by-sample, leave-one-configuration-out,
-               leave-one-feedstock-out, leave-one-product-out and productivity
+               hyperparameters: random-by-sample, leave-one-configuration-out
+               (every development configuration for the PI-NN, plain MLP and
+               baselines; the ablations on a stratified subset), leave-one-
+               feedstock-out, leave-one-product-out and productivity
                extrapolation; methods PI-NN ensemble, plain MLP, ridge, HGB, kNN
                and the PI-NN ablations no_channels / no_price / no_phys (config
-               and product schemes);
-5. ``final``   selected PI-NN ensemble (and the baselines) trained on the whole
-               development set, evaluated ONCE on the final test set
-               (``models/final_dev``); then the release ensemble trained on ALL
-               data (``models/release``, ``train.Ensemble`` checkpoint format);
+               and product schemes). The network fits also return the
+               per-sample conformal scores of their held-out samples
+               (``tables/cv_oof_scores.csv.gz``) and a cross-fitted coverage
+               estimate (``tables/cv_coverage_crossfit.csv``);
+5. ``final``   selected PI-NN ensemble (and the plain MLP and the baselines)
+               trained on the whole development set and evaluated on the
+               final test set (``models/final_dev``), its intervals calibrated
+               from the out-of-fold scores of the development LOCO CV
+               (``train.calibrate_conformal_oof``; never from test data); then
+               the release ensemble trained on ALL data (``models/release``,
+               ``train.Ensemble`` checkpoint format), calibrated from the same
+               scores. CV, final_dev and release ensembles have the same number
+               of members (``--members``);
 6. ``checks``  publication baseline coefficients vs. ours, predicted vs.
                simulated price sensitivities, channel breakdown of the test
                configurations;
@@ -78,7 +93,7 @@ import warnings
 
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 MODULE = 'fermentation_insights.coeff_predictor.experiments'
-CODE_VERSION = '3'
+CODE_VERSION = '4'
 
 DEFAULT_RAW = '/home/user/work/data/raw'
 DEFAULT_PROCESSED = os.path.join(PKG_DIR, 'data', 'processed')
@@ -88,14 +103,41 @@ PUB_DIR = os.path.join(os.path.dirname(PKG_DIR), 'results', 'data')
 
 TARGETS = ('a', 'b', 'c', 'd', 'g')
 SCHEMES = ('random', 'config', 'feedstock', 'product', 'productivity')
-#: inner calibration / early-stopping grouping per scheme. Like the package
+#: Training protocol of EVERY network fit of the pipeline -- HPO, all CV
+#: schemes (PI-NN, plain MLP, ablations), ``models/final_dev`` and
+#: ``models/release`` -- so that the CV estimates the procedure that makes the
+#: final models (round 4, DESIGN.md section 6): no calibration hold-out
+#: (``calib_frac`` 0); every member early-stops on its own random 15 %
+#: SAMPLE-level hold-out (``es_group`` None; the hold-outs differ between
+#: members, so the ensemble sees every sample); no refit. Intervals of the
+#: final models are calibrated from the out-of-fold conformal scores of the
+#: development leave-one-configuration-out CV of this same procedure
+#: (``train.calibrate_conformal_oof``), never from test data. On the dev proxy
+#: of the frozen test it beat the v1 protocol (configuration-grouped
+#: calibration and early-stopping hold-outs): OOD MAPE 7.2 vs 12.0 %, ID 3.9 vs
+#: 13.9 % (6 draws, paired).
+PROTOCOL = dict(name='v2', calib_frac=0.0, es_group=None, refit='none')
+#: the v1 protocol (CLI ``--v1-protocol``; commit fd3f386): CV calibration and
+#: early-stopping hold-outs grouped per scheme by ``INNER_GROUP_V1``,
+#: ``final_dev`` with a 15 % configuration-grouped calibration hold-out,
+#: HPO and release without one, members early-stopping on held-out
+#: configurations. Kept to reproduce v1; the release intervals then come
+#: from the dev LOCO out-of-fold scores as well (v1 transferred them from the
+#: dev model scored on the test configurations, which is no longer done).
+PROTOCOL_V1 = dict(name='v1', calib_frac=0.15, es_group='inner', refit='none')
+#: v1 inner calibration / early-stopping grouping per scheme. Like the package
 #: default (train.SCHEME_GROUP) except leave-one-feedstock-out: with only four
 #: feedstocks, grouping the calibration AND validation hold-outs by feedstock
 #: would leave a single feedstock to train on, so they hold out whole
 #: configurations instead (intervals are then calibrated for new
-#: configurations, not for new feedstocks).
-INNER_GROUP = {'random': None, 'config': 'config_id', 'feedstock': 'config_id',
-               'product': 'fermentation_product', 'productivity': 'config_id'}
+#: configurations, not for new feedstocks). Round 4 found that grouped
+#: early stopping on a few held-out groups is noisy and often stops far too
+#: early (dev proxy: best epochs 6-226; LOPO: members stop within ~25 epochs).
+INNER_GROUP_V1 = {'random': None, 'config': 'config_id', 'feedstock': 'config_id',
+                  'product': 'fermentation_product', 'productivity': 'config_id'}
+#: early-stopping grouping per scheme under PROTOCOL (report alias: sample
+#: level everywhere)
+INNER_GROUP = {s: None for s in SCHEMES}
 BASE_METHODS = ('pinn', 'plain', 'ridge', 'hgb', 'knn')
 ABLATIONS = ('pinn-no_channels', 'pinn-no_price', 'pinn-no_phys')
 ABLATION_SCHEMES = ('config', 'product')
@@ -106,6 +148,19 @@ NN_BASES = ('pinn', 'plain')
 #: prior of the structured feedstock intensity, the neutralization gate, and
 #: clipping of the feedstock-composition inputs to the training range
 EXTRAPOLATION_SAFEGUARDS = dict(fs_prior=True, neutralization_gate=True, clip_groups=['feedstock', 'pretreatment'])
+#: hard productivity structure of the pipeline PI-NN (DESIGN.md section 3,
+#: round 4; CLI ``--no-r-structure``)
+R_STRUCTURE = 'physics'
+#: channel-wise input masking preset of the pipeline PI-NN ('physics' = v1;
+#: CLI ``--v1-g-inputs``): 'physics_v2' keeps the reagent prices away from the
+#: recovery g
+MASKING_PRESET = 'physics_v2'
+#: development configurations of the families with a held-out test
+#: configuration (the frozen test holds out one configuration of each):
+#: LOCO restricted to them is the matched CV estimate of the OOD test
+OOD_FAMILIES = ('HP', 'TAL', 'succinic', 'lactic')
+#: nominal miscoverage of the conformal intervals
+ALPHA = 0.1
 
 HP_DEFAULT = dict(width=128, depth=3, dropout=0.05, weight_decay=1e-4, lr=2e-3,
                   w_mpsp=1.0, w_ch=0.5, w_phys=0.1, colloc_ratio=1.0, early_stop='data', clip_inputs=-1.0)
@@ -579,10 +634,12 @@ def _run_job(job):
     """Fit one method on the job's training samples and evaluate it on each
     of its evaluation sets. Never raises (errors are returned)."""
     import numpy as np
+    import pandas as pd
     from fermentation_insights.coeff_predictor.evaluate import fit_method, compute_metrics
+    from fermentation_insights.coeff_predictor.train import calibrate_conformal_oof, conformal_scores
     t0 = time.time()
     out = dict(key=job['key'], stage=job['stage'], tag=job['tag'], method=job['method'], error=None,
-               evals={}, info={}, epochs=[], n_train=len(job['train_ids']))
+               evals={}, info={}, epochs=[], best_epochs=[], refit_epochs=None, n_train=len(job['train_ids']))
     with warnings.catch_warnings(record=True) as wl:
         warnings.simplefilter('always')
         try:
@@ -595,8 +652,22 @@ def _run_job(job):
             ens = getattr(model, 'ens', None)
             if ens is not None:
                 out['epochs'] = [int(e) for e in ens.meta.get('epochs', [])]
-                out['conformal'] = dict(ens.conformal)
+                out['best_epochs'] = [int(e) for e in ens.meta.get('best_epochs', [])]
+                out['refit_epochs'] = ens.meta.get('refit_epochs')
                 out['n_fit_rows'] = int(ens.meta.get('n_fit', 0))
+                # intervals from out-of-fold scores of the same procedure (before the
+                # evaluations and the save); reporting-only calibrations go to ens.meta
+                own = dict(ens.conformal or {})
+                for name, (rec, info) in (job.get('calib_extra') or {}).items():
+                    ens.meta[f'conformal_{name}'] = calibrate_conformal_oof(
+                        ens, pd.DataFrame(rec), alpha=ALPHA, group_col='config_id', fold_col='fold', **info)
+                ens.conformal = own
+                if job.get('calib_scores') is not None:
+                    calibrate_conformal_oof(ens, pd.DataFrame(job['calib_scores']), alpha=ALPHA,
+                                            group_col='config_id', fold_col='fold', **(job.get('calib_info') or {}))
+                out['conformal'] = dict(ens.conformal)
+                out['conformal_extra'] = {k[len('conformal_'):]: v for k, v in ens.meta.items()
+                                          if k.startswith('conformal_') and isinstance(v, dict)}
             for name, ids in job['evals'].items():
                 if not len(ids):
                     continue
@@ -617,6 +688,8 @@ def _run_job(job):
                             ev['price_keys'] = list(ens.layout['price_keys'])
                 if 'sens' in job['extras']:
                     ev['sens'] = _price_sensitivities(model, s_te)
+                if 'scores' in job['extras'] and ens is not None:
+                    ev['scores'] = conformal_scores(ens, s_te, p_te).to_dict('list')
                 out['evals'][name] = ev
             if job.get('save_model'):
                 if ens is None:
@@ -628,6 +701,8 @@ def _run_job(job):
                 _dump_json(dict(job_key=job['key'], tag=job['tag'], method=job['method'], members=job['members'],
                                 mk=job['mk'], lk=job['lk'], tk=job['tk'], seed=job['seed'],
                                 group_col=job['group_col'], calib_frac=job['calib_frac'],
+                                protocol=job.get('protocol'), calib_info=job.get('calib_info'),
+                                best_epochs=out['best_epochs'],
                                 n_train_samples=len(job['train_ids']), data_hash=job.get('data_hash'),
                                 saved=time.strftime('%Y-%m-%d %H:%M:%S')),
                            os.path.join(path, 'experiment_info.json'))
@@ -641,7 +716,8 @@ def _run_job(job):
 
 
 def make_job(stage, tag, method, train_ids, evals, members, mk, lk, tk, group_col, calib_frac, seed, ctx,
-             extras=(), save_model=None, meta=None, spec_kw=None):
+             extras=(), save_model=None, meta=None, spec_kw=None, calib_scores=None, calib_info=None,
+             calib_extra=None):
     """One fit + evaluation. ``spec_kw``: FeatureSpec options of every method
     (e.g. ``{'downstream': True}``; default ``ctx['spec_kw']``, off with CLI
     ``--no-downstream``; part of the cache key only when non-empty).
@@ -650,7 +726,16 @@ def make_job(stage, tag, method, train_ids, evals, members, mk, lk, tk, group_co
     ``--no-extrapolation-safeguards``) is merged into ``mk``. A masked
     PI-NN without explicit sub-network sizes gets ``masked_width = width // 2``
     and ``masked_depth = depth - 1`` (64 / 2 for the defaults, as in the
-    development CV), so that the HPO dimensions width and depth still apply."""
+    development CV), so that the HPO dimensions width and depth still apply.
+
+    ``calib_scores`` (records of a ``train.conformal_scores`` table with a
+    ``fold`` column, e.g. the dev LOCO out-of-fold scores) calibrates the
+    fitted ensemble's intervals with ``train.calibrate_conformal_oof``
+    (``calib_info``: its metadata, e.g. source / scheme / weighting) right
+    after the fit; ``calib_extra`` = {name: (records, info)} adds
+    reporting-only calibrations as ``ens.meta['conformal_<name>']``. Both
+    are part of the cache key. ``extras`` 'scores' stores the per-sample
+    conformal scores of every evaluation set (``ev['scores']``)."""
     if spec_kw is None:
         spec_kw = ctx.get('spec_kw')
     if ctx.get('mk_extra'):
@@ -665,9 +750,12 @@ def make_job(stage, tag, method, train_ids, evals, members, mk, lk, tk, group_co
                 extras=sorted(extras), save=bool(save_model))
     if spec_kw:
         spec['spec_kw'] = dict(spec_kw)
+    if calib_scores is not None or calib_extra:
+        spec['calib'] = _sha([calib_scores, calib_info, calib_extra], 24)
     return dict(key=_sha(spec, 24), stage=stage, tag=tag, method=method, train_ids=list(train_ids),
                 evals={k: list(v) for k, v in evals.items()}, members=members, mk=mk, lk=lk, tk=tk,
-                spec_kw=dict(spec_kw or {}),
+                spec_kw=dict(spec_kw or {}), calib_scores=calib_scores, calib_info=dict(calib_info or {}),
+                calib_extra=calib_extra or None, protocol=(ctx.get('protocol') or PROTOCOL)['name'],
                 group_col=group_col, calib_frac=calib_frac, seed=seed, extras=tuple(extras),
                 save_model=save_model, meta=meta or {}, data_hash=ctx['data_hash'],
                 cost=(members if method.split('-')[0] in NN_BASES else 0.3) * len(train_ids))
@@ -778,15 +866,45 @@ class Runner:
 # %% Plan (budget)
 
 def base_plan(a):
+    """Plan of a run. The ensembles of the CV, final_dev and release fits
+    have the same number of members: the conformal scores divide by the
+    member spread, so out-of-fold scores of the CV ensembles calibrate the
+    final ensembles only at equal M (``check_plan``). LOCO covers every
+    development configuration for the PI-NN and the plain MLP; the ablations
+    run on a stratified subset of ``ablation_loco_folds`` configurations
+    (None = all)."""
     if a.quick:
         return dict(mode='quick', hpo_k=3, hpo_candidates=3, hpo_members=1, cv_members=2, final_members=2,
-                    release_members=2, random_k=3, loco_folds=4, epochs=12, patience=6, min_epochs=4, batch_size=128)
+                    release_members=2, random_k=3, loco_folds=None, ablation_loco_folds=4, epochs=12, patience=6,
+                    min_epochs=4, batch_size=128)
     # hpo_members: single-member fits differ between seeds by up to ~50 % (relative)
     # in held-out MAPE on the development folds, so one member per candidate
     # and fold mostly ranks seeds, not hyperparameters
     return dict(mode='full', hpo_k=5, hpo_candidates=None, hpo_members=a.hpo_members, cv_members=a.members,
-                final_members=5, release_members=5, random_k=5, loco_folds=None, epochs=300, patience=40,
-                min_epochs=20, batch_size=128)
+                final_members=a.members, release_members=a.members, random_k=5, loco_folds=None,
+                ablation_loco_folds=(a.ablation_loco_folds or None), epochs=300, patience=40, min_epochs=20,
+                batch_size=128)
+
+
+def check_plan(plan):
+    """Raise unless the CV, final_dev and release ensembles have the same
+    number of members (out-of-fold calibration, ``base_plan``)."""
+    m = (plan['cv_members'], plan['final_members'], plan['release_members'])
+    if len(set(m)) != 1:
+        raise SystemExit(f'plan: cv_members, final_members, release_members = {m}; they must be equal '
+                         '(the final intervals are calibrated from the CV ensembles\' out-of-fold scores)')
+    return plan
+
+
+def protocol_holdouts(protocol, stage, scheme=None):
+    """``(group_col, calib_frac)`` of a network fit of ``stage`` ('hpo',
+    'cv', 'final', 'release') under ``protocol`` (PROTOCOL or PROTOCOL_V1).
+    The sklearn baselines get the same values, so they fit exactly the rows
+    the network members train on."""
+    if protocol['name'] == 'v1':
+        return dict(hpo=('config_id', 0.0), cv=(INNER_GROUP_V1.get(scheme), 0.15), final=('config_id', 0.15),
+                    release=('config_id', 0.0))[stage]
+    return protocol['es_group'], float(protocol['calib_frac'])
 
 
 def hpo_candidates(n, seed):
@@ -807,58 +925,85 @@ def hpo_candidates(n, seed):
     return out[:n]
 
 
-def hp_kwargs(hp, plan):
+def hp_kwargs(hp, plan, protocol=None):
+    """(ModelConfig, LossConfig, TrainConfig) kwargs of hyperparameters
+    ``hp``; ``TrainConfig.refit`` from ``protocol`` (default PROTOCOL)."""
     mk = dict(width=int(hp['width']), depth=int(hp['depth']), dropout=float(hp['dropout']),
               clip_inputs=float(hp.get('clip_inputs', -1.0)))
     lk = dict(w_mpsp=float(hp['w_mpsp']), w_ch=float(hp['w_ch']), w_phys=float(hp['w_phys']),
               colloc_ratio=float(hp['colloc_ratio']))
     tk = dict(lr=float(hp['lr']), weight_decay=float(hp['weight_decay']), epochs=plan['epochs'],
               patience=plan['patience'], min_epochs=plan['min_epochs'], batch_size=plan['batch_size'], threads=1,
-              early_stop=str(hp.get('early_stop', 'data')))
+              early_stop=str(hp.get('early_stop', 'data')), refit=str((protocol or PROTOCOL)['refit']))
     return mk, lk, tk
 
 
+def ablation_fold_labels(dev, plan, seed):
+    """Labels (configurations) of the LOCO folds the ablations run on: a
+    stratified subset of ``plan['ablation_loco_folds']`` configurations, or
+    None = every LOCO fold."""
+    n = plan.get('ablation_loco_folds')
+    if not n or n >= dev['config_id'].nunique():
+        return None
+    return set(stratified_subset(dev, int(n), seed))
+
+
+def cv_methods(scheme, label, abl_labels):
+    """Methods fit on one CV fold: the base methods everywhere, the PI-NN
+    ablations on the ABLATION_SCHEMES (LOCO: only the folds in
+    ``abl_labels``, None = all)."""
+    meths = list(BASE_METHODS)
+    if scheme in ABLATION_SCHEMES and (scheme != 'config' or abl_labels is None or label in abl_labels):
+        meths += list(ABLATIONS)
+    return meths
+
+
 def plan_budget(plan, a, pilot, dev, test_n, n_all, seed):
-    """Full mode: size the HPO search and the number of LOCO folds so that
-    the estimated wall time fits ``--budget-hours`` with ``--threads``
-    workers. Cost model: seconds per member fit proportional to the number
-    of training samples (measured on the HPO pilot = candidate 0)."""
-    import numpy as np
+    """Full mode: size the HPO search (and, if needed, the number of LOCO
+    folds of the ABLATIONS; the PI-NN and the plain MLP always run on every
+    LOCO fold) so that the estimated wall time fits ``--budget-hours`` with
+    ``--threads`` workers. Cost model: seconds per member fit proportional to
+    the number of training samples, measured on the HPO pilot (candidate 0,
+    trained with the pipeline protocol, so the longer sample-level
+    early-stopping runs are included)."""
     per = pilot['seconds_per_member_sample']
     hgb = pilot.get('hgb_seconds_per_sample', 0.004)
 
     def fit(n, members, method='pinn'):
         return members * per * n if method.split('-')[0] in NN_BASES else hgb * n
 
-    def cv_cost(loco_folds):
+    def cv_cost(abl_folds):
+        pl = dict(plan, ablation_loco_folds=abl_folds)
+        abl = ablation_fold_labels(dev, pl, seed)
         tot = 0.
         for sch in SCHEMES:
-            sp = scheme_splits(dev, sch, dict(plan, loco_folds=loco_folds), seed)
-            meths = list(BASE_METHODS) + (list(ABLATIONS) if sch in ABLATION_SCHEMES else [])
-            for _, tr, _, _ in sp:
-                tot += sum(fit(len(tr), plan['cv_members'], m) for m in meths if m != 'ridge' and m != 'knn')
+            for _, tr, _, lab in scheme_splits(dev, sch, plan, seed):
+                tot += sum(fit(len(tr), plan['cv_members'], m) for m in cv_methods(sch, lab, abl)
+                           if m not in ('ridge', 'knn'))
         return tot
 
     n_dev = len(dev)
-    final = fit(n_dev, plan['final_members']) * 2 + fit(n_all, plan['release_members']) + 3 * fit(n_dev, 1, 'hgb')
+    # final_dev PI-NN + plain MLP, release PI-NN, three baselines
+    final = (2 * fit(n_dev, plan['final_members']) + fit(n_all, plan['release_members'])
+             + 3 * fit(n_dev, 1, 'hgb'))
     hpo_one = plan['hpo_k'] * fit(n_dev * (plan['hpo_k'] - 1) / plan['hpo_k'], plan.get('hpo_members', 1))
     budget = a.budget_hours * 3600 * max(1, a.threads)
-    n_loco = dev['config_id'].nunique()
     n_cand = a.hpo_candidates or 12
-    loco = a.loco_folds or None
-    total = lambda nc, lf: nc * hpo_one + cv_cost(lf) + final
-    if not a.hpo_candidates and not a.loco_folds:
-        # shrink LOCO folds (min 12), then candidates (min 8); grow candidates (max 16) with slack
-        while total(n_cand, loco) > budget and (loco or n_loco) > 12:
-            loco = max(12, (loco or n_loco) - 2)
-        while total(n_cand, loco) > budget and n_cand > 8:
+    abl = plan.get('ablation_loco_folds')
+    total = lambda nc, af: nc * hpo_one + cv_cost(af) + final
+    if not a.hpo_candidates:
+        # shrink the ablations' LOCO folds (min 6), then candidates (min 8); grow candidates (max 16) with slack
+        n_loco = dev['config_id'].nunique()
+        while total(n_cand, abl) > budget and (abl or n_loco) > 6:
+            abl = max(6, (abl or n_loco) - 2)
+        while total(n_cand, abl) > budget and n_cand > 8:
             n_cand -= 1
-        while n_cand < 16 and total(n_cand + 1, loco) <= budget:
+        while n_cand < 16 and total(n_cand + 1, abl) <= budget:
             n_cand += 1
-    est = total(n_cand, loco)
-    plan.update(hpo_candidates=int(n_cand), loco_folds=None if (loco is None or loco >= n_loco) else int(loco),
+    est = total(n_cand, abl)
+    plan.update(hpo_candidates=int(n_cand), ablation_loco_folds=abl,
                 estimate=dict(seconds_per_member_sample=per, hpo_hours=n_cand * hpo_one / 3600 / max(1, a.threads),
-                              cv_hours=cv_cost(loco) / 3600 / max(1, a.threads),
+                              cv_hours=cv_cost(abl) / 3600 / max(1, a.threads),
                               final_hours=final / 3600 / max(1, a.threads),
                               total_hours=est / 3600 / max(1, a.threads), budget_hours=a.budget_hours,
                               threads=a.threads, fits_budget=bool(est <= budget)))
@@ -963,11 +1108,14 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
     n_max = 16 if plan['hpo_candidates'] is None else plan['hpo_candidates']
     cands = hpo_candidates(max(n_max, 1), a.seed)
 
+    protocol = ctx.get('protocol') or PROTOCOL
+    gcol, cfrac = protocol_holdouts(protocol, 'hpo')
+
     def jobs_for(ci):
-        mk, lk, tk = hp_kwargs(cands[ci], plan)
+        # the pipeline protocol (as in CV and the final models): the HPO selects for the procedure used
+        mk, lk, tk = hp_kwargs(cands[ci], plan, protocol)
         return [make_job('hpo', f'cand{ci} {lab}', 'pinn', ids[tr], {'test': ids[te]}, plan.get('hpo_members', 1),
-                         mk, lk, tk, 'config_id',
-                         0.0, a.seed + 101 * ci + f, ctx, meta=dict(cand=ci, fold=f))
+                         mk, lk, tk, gcol, cfrac, a.seed + 101 * ci + f, ctx, meta=dict(cand=ci, fold=f))
                 for f, (tr, te, lab) in enumerate(folds)]
 
     results = runner.run(jobs_for(0), 'hpo pilot (candidate 0 = defaults)')
@@ -978,8 +1126,10 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
             with open(pl_path) as fh:
                 old = json.load(fh)
         if old.get('data_hash') == ctx['data_hash'] and old.get('split_hash') == ctx['split_hash'] \
-                and old.get('mode') == 'full' and old.get('threads') == a.threads:
-            plan.update({k: old[k] for k in ('hpo_candidates', 'loco_folds', 'estimate')})
+                and old.get('mode') == 'full' and old.get('threads') == a.threads \
+                and old.get('code_version') == CODE_VERSION and old.get('protocol') == protocol['name'] \
+                and old.get('cv_members') == plan['cv_members']:
+            plan.update({k: old[k] for k in ('hpo_candidates', 'ablation_loco_folds', 'estimate') if k in old})
             log(f'plan: reusing {pl_path}')
         else:
             ok = [r for r in results.values() if not r['error'] and r.get('n_fit_rows')]
@@ -987,7 +1137,8 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
                    if ok else 0.05)
             plan_budget(plan, a, dict(seconds_per_member_sample=per), dev, n_test, n_all, a.seed)
         e = plan['estimate']
-        log(f"plan: {plan['hpo_candidates']} HPO candidates, LOCO folds = {plan['loco_folds'] or 'all'}; "
+        log(f"plan: {plan['hpo_candidates']} HPO candidates, LOCO folds = {plan['loco_folds'] or 'all'} "
+            f"(ablations: {plan.get('ablation_loco_folds') or 'all'}); "
             f"estimated {e['total_hours']:.2f} h on {e['threads']} worker(s) (HPO {e['hpo_hours']:.2f}, "
             f"CV {e['cv_hours']:.2f}, final {e['final_hours']:.2f}; budget {e['budget_hours']} h"
             f"{'' if e['fits_budget'] else ' -- EXCEEDS BUDGET'})")
@@ -1037,25 +1188,36 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
                  for tr, te, lab in folds]
     log(f'hpo: selected candidate {best}: {sel} (fold-mean configuration-balanced held-out MPSP MAPE '
         f'{tab.loc[best, "criterion"]:.4f}; point-weighted {tab.loc[best, "mpsp_mape"]:.4f})')
-    return dict(table=tab, folds=pd.DataFrame(fold_rows), selected=sel, best=best, fold_info=fold_info)
+    return dict(table=tab, folds=pd.DataFrame(fold_rows), selected=sel, best=best, fold_info=fold_info,
+                jobs=jobs, raw=results)
 
 
 def stage_cv(a, plan, runner, dev, ctx, hp, D):
+    """Generalization CV of every method with the pipeline protocol (the
+    same procedure as the final models). The PI-NN and plain-MLP fits also
+    return the per-sample conformal scores of their held-out samples:
+    ``cv['oof_scores']`` (scheme, method, fold = fold label, fold_index and
+    the ``train.conformal_scores`` columns; every development sample once
+    per scheme and method), from which the final models are calibrated
+    (LOCO) and ``cv['crossfit']`` estimates the coverage."""
     import pandas as pd
-    mk, lk, tk = hp_kwargs(hp, plan)
+    protocol = ctx.get('protocol') or PROTOCOL
+    mk, lk, tk = hp_kwargs(hp, plan, protocol)
     ids = dev['sample_id'].astype(str).to_numpy()
+    abl = ablation_fold_labels(dev, plan, a.seed)
     jobs, meta = [], {}
     for sch in SCHEMES:
-        meths = list(BASE_METHODS) + (list(ABLATIONS) if sch in ABLATION_SCHEMES else [])
+        gcol, cfrac = protocol_holdouts(protocol, 'cv', sch)
         for f, tr, te, lab in scheme_splits(dev, sch, plan, a.seed):
-            for m in meths:
+            for m in cv_methods(sch, lab, abl):
                 j = make_job('cv', f'{sch} {lab}', m, ids[tr], {'test': ids[te]}, plan['cv_members'], mk, lk, tk,
-                             INNER_GROUP[sch], 0.15, a.seed + f, ctx, meta=dict(scheme=sch, fold=f, label=lab))
+                             gcol, cfrac, a.seed + f, ctx, extras=('scores',) if m in NN_BASES else (),
+                             meta=dict(scheme=sch, fold=f, label=lab))
                 jobs.append(j)
     results = runner.run(jobs, 'cv')
     S = D['samples'].assign(sample_id=D['samples']['sample_id'].astype(str)).set_index('sample_id', drop=False)
     P = {k: v for k, v in D['points'].assign(sample_id=D['points']['sample_id'].astype(str)).groupby('sample_id')}
-    rows, oofs = [], []
+    rows, oofs, scores = [], [], []
     for sch in SCHEMES:
         js = [j for j in jobs if j['meta']['scheme'] == sch]
         failed = {j['meta']['fold'] for j in js if results[j['key']]['error']}
@@ -1067,6 +1229,9 @@ def stage_cv(a, plan, runner, dev, ctx, hp, D):
             if not r['error'] and j['meta']['fold'] not in failed:
                 ev = dict(r['evals']['test'], _fold=j['meta']['fold'])
                 parts.setdefault(j['method'], []).append(ev)
+            if not r['error'] and r['evals']['test'].get('scores') is not None:
+                scores.append(pd.DataFrame(r['evals']['test']['scores']).assign(
+                    scheme=sch, method=j['method'], fold=str(j['meta']['label']), fold_index=j['meta']['fold']))
         if failed:
             log(f'cv {sch}: pooled metrics exclude fold(s) {sorted(failed)} (a method failed there)')
         if len({j['meta']['fold'] for j in js}) > 1:
@@ -1075,35 +1240,132 @@ def stage_cv(a, plan, runner, dev, ctx, hp, D):
             oofs += oof
     res = pd.DataFrame(rows)
     oof = pd.concat(oofs, ignore_index=True) if oofs else pd.DataFrame()
-    return dict(results=res, oof=oof, jobs=jobs, raw=results)
+    sc = pd.concat(scores, ignore_index=True) if scores else pd.DataFrame()
+    if len(sc):
+        lead = ['scheme', 'method', 'fold', 'fold_index']
+        sc = sc[lead + [c for c in sc.columns if c not in lead]]
+    return dict(results=res, oof=oof, jobs=jobs, raw=results, oof_scores=sc, crossfit=crossfit_table(sc),
+                ablation_folds=sorted(abl) if abl is not None else None)
 
 
-def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir):
+def crossfit_table(scores, alpha=ALPHA):
+    """Cross-fitted coverage estimate (``train.crossfit_coverage``, leave
+    one CV fold out) per scheme x method x interval key of the out-of-fold
+    score table, with both weightings."""
+    import pandas as pd
+    from fermentation_insights.coeff_predictor.train import crossfit_coverage, CONF_KEYS
+    rows = []
+    if not len(scores):
+        return pd.DataFrame(columns=['scheme', 'method', 'weighting', 'key', 'mean', 'pooled', 'min', 'q10',
+                                     'frac_ok', 'n_folds'])
+    for (sch, meth), g in scores.groupby(['scheme', 'method'], sort=False):
+        if g['fold'].nunique() < 2:
+            continue
+        for w in ('sample', 'group'):
+            cf = crossfit_coverage(g, alpha, 'fold', CONF_KEYS, weighting=w, group_col='config_id')
+            rows += [dict(scheme=sch, method=meth, weighting=w, key=k, **v) for k, v in cf.items()]
+    return pd.DataFrame(rows)
+
+
+def oof_calibration_scores(cv, scheme, method, dev, sp, strict=True):
+    """Records of the out-of-fold conformal scores of ``method`` in CV
+    ``scheme``, checked for use as a calibration set: every development
+    sample scored exactly once, none of them a test sample, and >=
+    train.MIN_CALIB_GROUPS configurations. Raises (``strict``) or logs a
+    warning otherwise."""
+    from fermentation_insights.coeff_predictor.train import MIN_CALIB_GROUPS
+    sc = cv.get('oof_scores')
+    if sc is None or not len(sc):
+        msg = f'no out-of-fold conformal scores of {method} in the {scheme} CV'
+        if strict:
+            raise SystemExit('final: ' + msg)
+        log('final: WARNING ' + msg)
+        return None
+    sc = sc[(sc['scheme'] == scheme) & (sc['method'] == method)].reset_index(drop=True)
+    ids = sc['sample_id'].astype(str)
+    dev_ids = set(dev['sample_id'].astype(str))
+    test = set(map(str, sp['ood_test_sample_ids'])) | set(map(str, sp['id_test_sample_ids']))
+    problems = []
+    if ids.duplicated().any():
+        problems.append(f'{int(ids.duplicated().sum())} samples scored more than once')
+    if set(ids) != dev_ids:
+        problems.append(f'{len(dev_ids - set(ids))} development samples not scored, '
+                        f'{len(set(ids) - dev_ids)} scored samples outside the development set')
+    if set(ids) & test:
+        problems.append(f'{len(set(ids) & test)} scored samples are test samples')
+    n_cfg = int(sc['config_id'].astype(str).nunique()) if len(sc) else 0
+    if n_cfg < MIN_CALIB_GROUPS:
+        problems.append(f'{n_cfg} configurations (< {MIN_CALIB_GROUPS})')
+    if problems:
+        msg = f'out-of-fold scores of {method} ({scheme} CV) unusable for calibration: ' + '; '.join(problems)
+        if set(ids) & test or strict:
+            raise SystemExit('final: ' + msg)
+        log('final: WARNING (quick mode) ' + msg)
+    keep = ['sample_id', 'config_id', 'fold', 'invalid', *[c for c in ('a', 'b', 'c', 'd', 'g', 'mpsp')]]
+    return sc[keep].to_dict('list')
+
+
+def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir, cv):
+    """``models/final_dev`` (PI-NN, plain MLP and the baselines trained on the
+    development set, evaluated once on the frozen test split) and
+    ``models/release`` (PI-NN on ALL samples), all with the pipeline protocol.
+    Under PROTOCOL the PI-NN / plain intervals are calibrated from their own
+    out-of-fold scores of the development LOCO CV (same procedure;
+    ``train.calibrate_conformal_oof``); the release PI-NN uses the SAME dev
+    LOCO PI-NN scores. Test samples are never used to calibrate or select."""
     if sp['test_configs_missing']:
         msg = (f"final: held-out test configuration(s) {sp['test_configs_missing']} have no samples; the frozen "
                f"split ({a.split_file}) is never changed -- generate their data before the final evaluation")
         if not a.quick:
             raise SystemExit(msg)
         log('WARNING (quick mode only) ' + msg)
-    mk, lk, tk = hp_kwargs(hp, plan)
+    check_plan(plan)
+    protocol = ctx.get('protocol') or PROTOCOL
+    mk, lk, tk = hp_kwargs(hp, plan, protocol)
     s = D['samples']
     dev_ids = dev['sample_id'].astype(str).tolist()
     evals = dict(test_ood=list(sp['ood_test_sample_ids']), test_id=list(sp['id_test_sample_ids']),
                  test_all=sorted(set(sp['ood_test_sample_ids']) | set(sp['id_test_sample_ids'])))
     all_ids = s['sample_id'].astype(str).tolist()
+    strict = not a.quick
+    cal = {m: oof_calibration_scores(cv, 'config', m, dev, sp, strict) for m in NN_BASES}
+    rnd = {m: oof_calibration_scores(cv, 'random', m, dev, sp, False) for m in NN_BASES}
+    src = ('out-of-fold scores of the development leave-one-configuration-out CV '
+           f'({plan["cv_members"]}-member ensembles, same training procedure)')
+
+    def info(m, release=False):
+        return dict(source=src + ('; the release ensemble trains on development + test samples' if release else ''),
+                    scheme='config', cv_members=plan['cv_members'], weighting='sample', method_scores=m)
+
+    def extra(m):
+        if rnd[m] is None:
+            return None
+        return {'random_cv': (rnd[m], dict(source='out-of-fold scores of the development random CV (reporting '
+                                                  'only: in-distribution diagnostics)', scheme='random',
+                                           cv_members=plan['cv_members'], weighting='sample'))}
+
+    gcol, cfrac = protocol_holdouts(protocol, 'final')
+    # v1 protocol: final_dev keeps its own calibration hold-out (as in v1)
+    own_hold_out = cfrac > 0
     jobs = []
     for m in BASE_METHODS:
         nn = m in NN_BASES
         jobs.append(make_job('final', 'final(dev->test)', m, dev_ids, evals, plan['final_members'], mk, lk, tk,
-                             'config_id', 0.15, a.seed, ctx,
-                             extras=('channels', 'sens') if m == 'pinn' else ('sens',),
+                             gcol, cfrac, a.seed, ctx,
+                             extras=(('channels', 'sens', 'scores') if m == 'pinn' else
+                                     ('sens', 'scores') if nn else ('sens',)),
                              save_model=os.path.join(models_dir, 'final_dev') if m == 'pinn' else None,
+                             calib_scores=cal[m] if nn and not own_hold_out else None,
+                             calib_info=info(m) if nn and not own_hold_out else None,
+                             calib_extra=extra(m) if nn else None,
                              meta=dict(kind='final', nn=nn)))
-    # release: ALL samples are fitted (calib_frac = 0; the members' early-stopping
-    # hold-outs rotate), intervals are transferred from the dev model (below)
+    # release: ALL samples are fitted, intervals from the dev LOCO PI-NN scores
+    gcol_r, cfrac_r = protocol_holdouts(protocol, 'release')
     jobs.append(make_job('final', 'release(all data)', 'pinn', all_ids, dict(train_all=all_ids),
-                         plan['release_members'], mk, lk, tk, 'config_id', 0.0, a.seed, ctx,
-                         save_model=os.path.join(models_dir, 'release'), meta=dict(kind='release')))
+                         plan['release_members'], mk, lk, tk, gcol_r, cfrac_r, a.seed, ctx,
+                         save_model=os.path.join(models_dir, 'release'), calib_scores=cal['pinn'],
+                         calib_info=info('pinn', release=True), calib_extra=extra('pinn'),
+                         meta=dict(kind='release')))
     results = runner.run(jobs, 'final + release')
     import pandas as pd
     rows = []
@@ -1122,16 +1384,11 @@ def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir):
     out['final'] = {j['method']: results[j['key']] for j in jobs if j['meta']['kind'] == 'final'}
     out['release'] = next(results[j['key']] for j in jobs if j['meta']['kind'] == 'release')
     rel = os.path.join(models_dir, 'release')
-    out['release_conformal'] = None
-    if not out['release']['error'] and not out['final']['pinn']['error']:
-        try:
-            out['release_conformal'] = transfer_conformal(os.path.join(models_dir, 'final_dev'), rel, dev_ids,
-                                                          sp, plan, D, a.seed)
-            c = out['release_conformal']
-            log(f"release: intervals calibrated with the dev model on {c['n']} samples of {c['n_calib_groups']} "
-                f"held-out configurations (level {c.get('mpsp_level', float('nan')):.3f}) -> {rel}")
-        except Exception as e:
-            log(f'release: WARNING conformal transfer failed: {type(e).__name__}: {e}')
+    out['release_conformal'] = out['release'].get('conformal') if not out['release']['error'] else None
+    c = out['release_conformal'] or {}
+    if c:
+        log(f"release: intervals from {c.get('source')}: {c.get('n')} samples of {c.get('n_calib_groups')} "
+            f"configurations, cross-fitted MPSP coverage {c.get('mpsp_coverage_cv', float('nan')):.3f} -> {rel}")
     # release smoke test through the user-facing API
     out['release_check'] = None
     if not out['release']['error']:
@@ -1155,34 +1412,75 @@ def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir):
     return out
 
 
-def transfer_conformal(dev_path, rel_path, dev_ids, sp, plan, D, seed):
-    """Split-conformal quantiles for the release ensemble (which fits ALL
-    data, so nothing is left to calibrate it on): scores of the dev-trained
-    ensemble (same architecture and hyperparameters, slightly less data) on
-    every configuration it never saw -- its own calibration configurations
-    plus the held-out test configurations -- grouped by configuration. Valid
-    for the dev ensemble; for the release ensemble an approximation (expected
-    to be conservative), hence ``coverage_guaranteed = False``."""
+def final_intervals(fin, samples_by_id, alpha=ALPHA):
+    """Realized test coverage of the final models' intervals (report only;
+    never used for any choice): per model x test set x key, the
+    sample-simultaneous coverage (a sample counts as covered only if its
+    score <= q, i.e. for MPSP every TY point is inside its interval) pooled,
+    averaged over configurations and in the worst configuration, the
+    pointwise MPSP coverage, the mean / median relative half-width, next to
+    the cross-fitted estimate of the calibration (mean, min, q10 over the
+    LOCO folds). Returns (summary, per-configuration table)."""
+    import numpy as np
     import pandas as pd
-    from fermentation_insights.coeff_predictor.train import Ensemble, ensemble_splits, calibrate_conformal
-    ens_dev = Ensemble.load(dev_path)
-    S = D['samples'].assign(sample_id=D['samples']['sample_id'].astype(str)).set_index('sample_id', drop=False)
-    dev_s = S.loc[dev_ids].reset_index(drop=True)
-    spl = ensemble_splits(dev_s, plan['final_members'], 0.15, ens_dev.tcfg.val_frac, 'config_id', seed)
-    if len(spl['calib']) != int(ens_dev.meta.get('n_calib', -1)):
-        raise RuntimeError('cannot reproduce the calibration split of the dev ensemble')
-    ids = list(dev_s['sample_id'].iloc[spl['calib']]) + list(sp['ood_test_sample_ids'])
-    s_cal = S.loc[ids].reset_index(drop=True)
-    pts = D['points'][D['points']['sample_id'].astype(str).isin(set(ids))]
-    conf = dict(calibrate_conformal(ens_dev, s_cal, pts, alpha=0.1, group_col='config_id'))
-    conf.update(transferred=True, coverage_guaranteed=False,
-                calibration_source='dev-trained ensemble (models/final_dev) scored on its calibration '
-                                   'configurations + the held-out test configurations',
-                calibration_configs=sorted(set(s_cal['config_id'].astype(str))))
-    ens_rel = Ensemble.load(rel_path)
-    ens_rel.conformal = conf
-    ens_rel.save(rel_path)
-    return conf
+    from fermentation_insights.coeff_predictor.train import CONF_KEYS
+    rows, per = [], []
+    cals = []
+    for meth, r in (fin.get('final') or {}).items():
+        if r is None or r.get('error'):
+            continue
+        if r.get('conformal'):
+            cals.append((meth, r, 'loco', r['conformal']))
+        for name, c in (r.get('conformal_extra') or {}).items():
+            cals.append((meth, r, name, c))
+    for meth, r, cal, conf in cals:
+        for st, ev in r['evals'].items():
+            if ev.get('scores') is None:
+                continue
+            sc = pd.DataFrame(ev['scores'])
+            mm = {(m, t): v for m, t, v in ev['rows']}
+            cfg = sc['config_id'].astype(str).to_numpy()
+            for j, key in enumerate(CONF_KEYS):
+                q = conf.get(key)
+                v = sc[key].to_numpy(float)
+                ok = ~np.isnan(v)
+                if q is None or not ok.any():
+                    continue
+                cov = v[ok] <= q
+                byc = pd.Series(cov).groupby(cfg[ok]).mean()
+                cf = (conf.get('crossfit') or {}).get(key, {})
+                if key == 'mpsp':
+                    hw_mean = mm.get(('interval_halfwidth_rel', 'MPSP'), np.nan)
+                    hw_med = np.nan
+                else:
+                    if key == 'g':
+                        mu, sd = np.asarray(ev['g'], float), np.asarray(ev.get('g_std', np.nan), float)
+                    else:
+                        mu = np.asarray(ev['coef'], float)[:, j]
+                        sd = np.asarray(ev.get('coef_std'), float)[:, j] if ev.get('coef_std') is not None \
+                            else np.full(len(mu), np.nan)
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        rel = q * (sd + conf.get(f'{key}_eps', 0.)) / np.abs(mu)
+                    rel = rel[np.isfinite(rel)]
+                    hw_mean = float(np.mean(rel)) if len(rel) else np.nan
+                    hw_med = float(np.median(rel)) if len(rel) else np.nan
+                rows.append(dict(method=meth, calibration=cal, set=st, key=key, n=int(ok.sum()),
+                                 n_configs=int(byc.size),
+                                 q=float(q), level=1 - alpha, coverage=float(cov.mean()),
+                                 coverage_cfg_mean=float(byc.mean()), coverage_cfg_min=float(byc.min()),
+                                 coverage_pointwise=(mm.get(('coverage', 'MPSP'), np.nan) if key == 'mpsp'
+                                                     else float(cov.mean())),
+                                 halfwidth_rel_mean=hw_mean, halfwidth_rel_median=hw_med,
+                                 crossfit_mean=cf.get('mean', np.nan), crossfit_min=cf.get('min', np.nan),
+                                 crossfit_q10=cf.get('q10', np.nan), source=conf.get('source'),
+                                 weighting=conf.get('weighting'), n_calib=conf.get('n'),
+                                 n_calib_groups=conf.get('n_calib_groups'),
+                                 coverage_guaranteed=conf.get('coverage_guaranteed')))
+                if st != 'test_all':
+                    per += [dict(method=meth, calibration=cal, set=st, key=key, config_id=c,
+                                 n=int((cfg[ok] == c).sum()), coverage=float(v_), crossfit_mean=cf.get('mean'))
+                            for c, v_ in byc.items()]
+    return pd.DataFrame(rows), pd.DataFrame(per)
 
 
 def final_headline(table):
@@ -1208,6 +1506,91 @@ def final_headline(table):
         df['_m'] = df['method'].map({m: i for i, m in enumerate(METHOD_ORDER)})
         df = df.sort_values(['_s', '_m']).drop(columns=['_s', '_m']).reset_index(drop=True)
     return df
+
+
+def loco_matched(res, samples_by_id, families=OOD_FAMILIES):
+    """LOCO CV restricted to the configurations of the families that have a
+    held-out test configuration: the matched CV estimate of the OOD test
+    (which holds out ONE configuration of each family). Per method: the
+    family-balanced mean (mean over families of the mean over their LOCO
+    folds; comparable to the configuration-balanced OOD test MAPE), the
+    configuration mean, and one column per family."""
+    import numpy as np
+    import pandas as pd
+    r = res[(res['scheme'] == 'config') & (res['fold'] >= 0) & (res['metric'] == 'mpsp_mape')
+            & (res['target'] == 'MPSP')]
+    if not len(r):
+        return pd.DataFrame()
+    bio = samples_by_id.groupby('config_id')['biorefinery'].first()
+    r = r.assign(family=r['label'].map(bio))
+    r = r[r['family'].isin(families)]
+    rows = []
+    for meth, g in r.groupby('method', sort=False):
+        fam = g.groupby('family')['value'].mean()
+        rows.append(dict(method=meth, n_configs=int(g['label'].nunique()), family_mean=float(fam.mean()),
+                         config_mean=float(g['value'].mean()),
+                         **{f: float(fam.get(f, np.nan)) for f in families}))
+    out = pd.DataFrame(rows)
+    out['_m'] = out['method'].map({m: i for i, m in enumerate(METHOD_ORDER)})
+    return out.sort_values('_m').drop(columns='_m').reset_index(drop=True)
+
+
+def protocol_table(cv, fin, hpo, plan):
+    """Training protocol in practice, per stage (HPO, CV per scheme,
+    final_dev, release) and network method: member fits, best-epoch
+    distribution (median, min, max; members whose best epoch is <= 20 and
+    members that ran into the epoch limit), epochs run and CPU time."""
+    import numpy as np
+    import pandas as pd
+    groups = {}
+
+    def add(stage, method, r):
+        if r is None or r.get('error') or not r.get('epochs'):
+            return
+        g = groups.setdefault((stage, method), dict(best=[], run=[], sec=[], fits=0))
+        g['fits'] += 1
+        g['run'] += list(r['epochs'])
+        g['best'] += list(r.get('best_epochs') or r['epochs'])
+        g['sec'].append(float(r.get('seconds', np.nan)))
+
+    for j in (hpo or {}).get('jobs', []):
+        add('hpo', j['method'], hpo['raw'].get(j['key']))
+    for j in cv.get('jobs', []):
+        if j['method'].split('-')[0] in NN_BASES:
+            add(f"cv {j['meta']['scheme']}", j['method'], cv['raw'].get(j['key']))
+    for j in fin.get('jobs', []):
+        if j['method'] in NN_BASES:
+            add('final_dev' if j['meta']['kind'] == 'final' else 'release', j['method'], fin['raw'].get(j['key']))
+    rows = []
+    for (st, m), g in groups.items():
+        b, e = np.asarray(g['best'], float), np.asarray(g['run'], float)
+        rows.append(dict(stage=st, method=m, fits=g['fits'], members=len(b), best_epoch_median=float(np.median(b)),
+                         best_epoch_min=int(b.min()), best_epoch_max=int(b.max()),
+                         members_best_le_20=int((b <= 20).sum()),
+                         members_at_max_epochs=int((e >= plan['epochs']).sum()),
+                         epochs_run_median=float(np.median(e)), cpu_hours=float(np.nansum(g['sec']) / 3600),
+                         seconds_per_fit=float(np.nanmean(g['sec']))))
+    return pd.DataFrame(rows)
+
+
+def load_v1_tables(out_dir):
+    """Headline tables of the v1 run (commit fd3f386; ``results/v1/tables``)
+    for the v1 / v2 comparison of the report: {name: DataFrame}."""
+    import pandas as pd
+    for d in (os.path.join(out_dir, 'v1', 'tables'), os.path.join(DEFAULT_RESULTS, 'v1', 'tables')):
+        if os.path.isdir(d):
+            res = {}
+            for name in ('final_test_headline', 'cv_headline', 'final_test_per_config', 'cv_lopo_per_product',
+                         'timings', 'timings_fits', 'hpo_candidates'):
+                f = os.path.join(d, f'{name}.csv')
+                if os.path.exists(f):
+                    try:
+                        res[name] = pd.read_csv(f)
+                    except Exception:
+                        pass
+            res['dir'] = d
+            return res
+    return {}
 
 
 # %% Stage 6: checks
@@ -1689,6 +2072,182 @@ def md_table(df, pct_cols=()):
     return '\n'.join(out)
 
 
+def ablation_results(res, ablation_folds):
+    """Per-fold CV results of the ablation schemes restricted to the folds
+    the ablations ran on (LOCO: ``ablation_folds``; None = all), for a
+    like-for-like ablation figure."""
+    r = res[res['scheme'].isin(ABLATION_SCHEMES) & (res['fold'] >= 0)]
+    if ablation_folds is not None:
+        keep = set(map(str, ablation_folds))
+        r = r[(r['scheme'] != 'config') | r['label'].astype(str).isin(keep)]
+    return r.reset_index(drop=True)
+
+
+def ablation_deltas(res):
+    """{scheme: dict(n_folds, delta={ablation: mean over the common folds of
+    (ablation - PI-NN) fold MAPE})}: the ablations may run on a subset of the
+    LOCO folds, so they are compared with the PI-NN on the same folds."""
+    out = {}
+    r = res[(res['fold'] >= 0) & (res['metric'] == 'mpsp_mape') & (res['target'] == 'MPSP')]
+    for sch in ABLATION_SCHEMES:
+        g = r[r['scheme'] == sch].pivot_table(index='fold', columns='method', values='value', aggfunc='mean')
+        if 'pinn' not in g:
+            continue
+        d, n = {}, 0
+        for m in ABLATIONS:
+            if m in g:
+                ok = g[[m, 'pinn']].dropna()
+                if len(ok):
+                    d[m] = float((ok[m] - ok['pinn']).mean())
+                    n = max(n, len(ok))
+        if d:
+            out[sch] = dict(n_folds=n, delta=d)
+    return out
+
+
+def v1_comparison(fh, head, v1):
+    """Markdown: v1 vs v2 final-test and CV headline numbers side by side."""
+    import pandas as pd
+    L = ['## v1 vs v2 headline numbers\n']
+    f1 = v1.get('final_test_headline')
+    if f1 is None or not len(fh):
+        L.append('v1 tables not found (`results/v1/tables/`); no side-by-side comparison.\n')
+        return '\n'.join(L)
+    rows = []
+    for st in ('test_ood', 'test_id', 'test_all'):
+        for m in BASE_METHODS:
+            a = f1[(f1['set'] == st) & (f1['method'] == m)]
+            b = fh[(fh['set'] == st) & (fh['method'] == m)]
+            if not len(a) and not len(b):
+                continue
+            g = lambda d, c: float(d[c].iloc[0]) if len(d) and c in d else float('nan')
+            rows.append(dict(set=st, method=m, v1_mpsp_mape=g(a, 'mpsp_mape'), v2_mpsp_mape=g(b, 'mpsp_mape'),
+                             v1_median=g(a, 'mpsp_mape_median'), v2_median=g(b, 'mpsp_mape_median'),
+                             v1_R2_g=g(a, 'R2_g'), v2_R2_g=g(b, 'R2_g'), n_test=g(b, 'n_test')))
+    L.append('**Final test** (same frozen split; v1 = commit fd3f386; MAPE in %):\n')
+    L.append(md_table(pd.DataFrame(rows), pct_cols=('v1_mpsp_mape', 'v2_mpsp_mape', 'v1_median', 'v2_median')) + '\n')
+    c1 = v1.get('cv_headline')
+    if c1 is not None and len(head):
+        rows = []
+        for sch in SCHEMES:
+            for m in BASE_METHODS:
+                a = c1[(c1['scheme'] == sch) & (c1['method'] == m)]
+                b = head[(head['scheme'] == sch) & (head['method'] == m)]
+                if len(a) or len(b):
+                    g = lambda d: float(d['mpsp_mape'].iloc[0]) if len(d) else float('nan')
+                    rows.append(dict(scheme=sch, method=m, v1_mpsp_mape=g(a), v2_mpsp_mape=g(b)))
+        L.append('**Development CV** (fold-mean MPSP MAPE, %; v1 used the v1 protocol and settings, so the CV '
+                 'estimates changed as well):\n')
+        L.append(md_table(pd.DataFrame(rows), pct_cols=('v1_mpsp_mape', 'v2_mpsp_mape')) + '\n')
+    return '\n'.join(L)
+
+
+def changes_since_v1(ctx):
+    """Markdown section: what changed between v1 and v2 and why (development
+    evidence only; details in DESIGN.md section 6, round 4)."""
+    mk = ctx.get('mk_extra') or {}
+    v2p = (ctx.get('protocol') or PROTOCOL)['name'] == 'v2'
+    on = lambda b, flag: '' if b else f' **Not used in this run (`{flag}`).**'
+    L = ['## Changes since v1 (development-set evidence only)\n',
+         'Each change was chosen on the development set (paired over seeds or draws, test split never used); '
+         'DESIGN.md section 6 ("Development-set diagnostics, round 4") has the full evidence tables, including '
+         'the combined validation of all changes together. Each has a CLI flag that restores the v1 behaviour.\n',
+         '1. **Training protocol** (`PROTOCOL`): every network fit -- HPO, all CV schemes, `final_dev` and '
+         '`release` -- trains on all its samples with sample-level early stopping (each member on its own '
+         'random 15 % hold-out), without a calibration hold-out and without refit, so the CV estimates the '
+         'procedure of the final models. v1 held out 15 % of the configurations for calibration and '
+         'early-stopped every member on about five held-out configurations: noisy and often far too short '
+         '(dev proxy of the frozen test: best epochs 6-226, in 4 of 6 draws a member stopped at <= 20 '
+         'epochs). On that proxy the v1 protocol gave OOD 12.0 ± 6.9 % / ID 13.9 ± 5.5 %, the new one '
+         '7.2 ± 1.2 % / 3.9 ± 0.2 % (6 draws, paired t = -1.8 / -4.6). Refitting after early stopping did not '
+         'help (+0.2 pp at twice the cost) and is not used.' + on(v2p, '--v1-protocol'),
+         '2. **Intervals**: the final and release ensembles have no calibration hold-out; their split-conformal '
+         'quantiles come from the out-of-fold scores of the development leave-one-configuration-out CV of the '
+         'same procedure and ensemble size (`train.calibrate_conformal_oof`, `coverage_guaranteed = False`), '
+         'with a cross-fitted coverage estimate. v1 calibrated `final_dev` on its own 6 calibration '
+         'configurations and transferred the release intervals from the dev model scored on its calibration '
+         'configurations AND the test configurations; v2 never uses test samples for calibration.',
+         "3. **Hard productivity structure** (`ModelConfig.r_structure='physics'`): the coefficients of the "
+         "fermentation capital and of the electricity intensity are theta0(x) + theta1(x) r_ref/r with "
+         'theta1 >= 0, so dMPSP/dr <= 0 holds by construction (v1 violated it for 0.8-8 % of held-out samples). '
+         'In the data only the fermentation capital depends materially on r, as 1/r (beta = 1.0, R² = 0.9999 '
+         'within configurations). Dev productivity CV with sample-level hold-outs: 5.16 -> 4.29 % (t = -4.5; '
+         'low-r side 6.34 -> 4.39 %, t = -12.5); LOCO and random CV unchanged.'
+         + on(bool(mk.get('r_structure')), '--no-r-structure'),
+         "4. **Recovery inputs** (masking preset 'physics_v2'): the recovery g no longer sees the reagent "
+         '(base / acid) prices, which set what the reagents cost, not how much product is recovered '
+         '(dg/dprice = 0 exactly; within-configuration correlation -0.05 / -0.02). Dev CV: in-family g unchanged, '
+         'LOPO -10.5 points (t = -1.2; g error t = -2.9), LOFO configuration-balanced -2.5 points (t = -2.4), LOCO '
+         'neutral. Feedstock, fermentation, scale or titer-domain inputs for g, and a larger g loss weight, did '
+         'not help and are not used.' + on(mk.get('channel_inputs') == 'physics_v2', '--v1-g-inputs'),
+         '5. **Extrapolation safeguards** (`EXTRAPOLATION_SAFEGUARDS`): a sugar-availability prior of the '
+         'feedstock intensity (free sugars and starch fully available, structural polysaccharides by the '
+         'saccharification yield; the network predicts only the residual), clipping of the feedstock and '
+         'pretreatment inputs to their training range, and a neutralization gate (no neutralization cost '
+         'without an acid group or neutralizing agent; verified on the data). v1 extrapolated a new '
+         "feedstock's minor composition fractions (corn: 9.5 training sd) into a saturated feedstock efficiency "
+         '(corn 1/eta 1.50 vs 0.93-1.01). Dev LOFO fold mean 63.4 -> 34.4 % (t = -5.3, 5 seeds; corn 128 -> 43 %); '
+         'LOCO and random not worse.' + on(bool(mk.get('fs_prior')), '--no-extrapolation-safeguards'),
+         '6. **Plan**: the CV, final_dev and release ensembles have the same number of members (the scores '
+         'divide by the member spread); the PI-NN and the plain MLP run on every LOCO fold, the PI-NN '
+         'ablations on a stratified subset of configurations (`--ablation-loco-folds`). The hyperparameter '
+         'search was re-run under the new protocol.',
+         '']
+    return '\n'.join(L)
+
+
+def intervals_section(fin, protocol):
+    """Markdown: how the final intervals were calibrated and their realized
+    test coverage (report only)."""
+    import numpy as np
+    L = []
+    r = (fin.get('final') or {}).get('pinn') or {}
+    conf = r.get('conformal') or {}
+    if not conf:
+        return 'PI-NN intervals: none (no usable calibration scores; see log).\n'
+    L.append(f'**Intervals.** Source: {conf.get("source")}. {conf.get("n")} out-of-fold samples of '
+             f'{conf.get("n_calib_groups")} configurations, weighting `{conf.get("weighting")}`, nominal level '
+             f'{1 - conf.get("alpha", ALPHA):.2f}, `coverage_guaranteed = {conf.get("coverage_guaranteed")}`: the '
+             'calibration scores come from the CV fold ensembles (same procedure, same number of members), not '
+             'from the final ensemble itself, so the split-conformal guarantee does not apply exactly; the '
+             'cross-fitted estimate (leave one LOCO fold out) is reported instead. Quantiles: '
+             + ', '.join(f'{k} {_fmt(conf.get(k, float("nan")))}' for k in ('a', 'b', 'c', 'd', 'g', 'mpsp'))
+             + '. A sample counts as covered for MPSP only if every TY point of it is inside its interval '
+             '(sample-simultaneous); `coverage_pointwise` counts points.\n'
+             if protocol['name'] == 'v2' or conf.get('source') != 'calibration hold-out' else
+             f'**Intervals** (v1 protocol): calibrated on the final_dev calibration hold-out ({conf.get("n")} samples '
+             f'of {conf.get("n_calib_groups")} configurations).\n')
+    iv = fin.get('intervals')
+    if iv is not None and len(iv):
+        sub = iv[(iv['set'] != 'test_all') & (iv['method'] == 'pinn')
+                 & ((iv['calibration'] == 'loco') | iv['key'].isin(['mpsp', 'g']))]
+        cols = ['method', 'calibration', 'set', 'key', 'n', 'q', 'coverage', 'coverage_cfg_mean', 'coverage_cfg_min',
+                'coverage_pointwise', 'halfwidth_rel_mean', 'halfwidth_rel_median', 'crossfit_mean', 'crossfit_min',
+                'crossfit_q10']
+        L.append('Realized test coverage (report only, never used for any choice) next to the cross-fitted '
+                 'estimate of the calibration (`tables/final_intervals.csv`; `calibration` = loco: the intervals '
+                 'of the saved models; random_cv: reporting-only calibration on the random-CV out-of-fold scores, '
+                 'stored in the checkpoint meta as `conformal_random_cv`; the plain MLP\'s rows are in the CSV):\n')
+        L.append(md_table(sub[cols]) + '\n')
+    pc = fin.get('intervals_per_config')
+    if pc is not None and len(pc):
+        sub = pc[(pc['method'] == 'pinn') & (pc['calibration'] == 'loco') & (pc['set'] == 'test_ood')
+                 & pc['key'].isin(['mpsp', 'g'])]
+        if len(sub):
+            t = sub.pivot_table(index='config_id', columns='key', values='coverage', aggfunc='mean').reset_index()
+            t.columns = [str(c) if c == 'config_id' else f'coverage_{c}' for c in t.columns]
+            est = sub.groupby('key')['crossfit_mean'].first()
+            L.append('PI-NN realized coverage per held-out test configuration (estimate = cross-fitted mean: '
+                     + ', '.join(f'{k} {_fmt(v)}' for k, v in est.items()) + '):\n')
+            L.append(md_table(t) + '\n')
+    L.append('Coverage is marginal over configurations: the per-configuration coverage of the out-of-fold '
+             'scores spreads widely (cross-fitted `min` / `q10` in section 5), and a new configuration of a family '
+             'whose scores are larger than the calibration set\'s (e.g. TAL on the development proxy) is '
+             'under-covered. For in-distribution queries the LOCO-calibrated intervals are conservative (they are '
+             'calibrated for new configurations). No test sample was used for selection or calibration.\n')
+    return '\n'.join(L)
+
+
 def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
     import numpy as np
     import pandas as pd
@@ -1714,15 +2273,27 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
     if D['recent_raw_files']:
         P(f'> **Partial data:** {len(D["recent_raw_files"])} raw file(s) were still being written when the tables '
           'were built; the numbers describe the data available at that time.\n')
+    protocol = ctx.get('protocol') or PROTOCOL
     P('**Where numbers come from.** (1) *CV estimates*: models re-trained inside each fold on parts of the '
       'development set only (selected hyperparameters, '
-      f'{plan["cv_members"]}-member ensembles for the networks). (2) *Final-test estimate*: the selected PI-NN '
+      f'{plan["cv_members"]}-member ensembles for the networks), with the same training procedure as the final '
+      f'models (protocol `{protocol["name"]}`, section 3). (2) *Final-test estimate*: the selected PI-NN '
       f'ensemble ({plan["final_members"]} members, `models/final_dev`) and the baselines, trained once on the whole '
-      'development set and evaluated once on the final test set, which played no role in any choice. (3) *Release '
-      f'model*: {plan["release_members"]}-member PI-NN ensemble with the same hyperparameters trained on ALL data '
+      'development set and evaluated on the final test set, which played no role in any choice or calibration. '
+      f'(3) *Release model*: {plan["release_members"]}-member PI-NN ensemble with the same hyperparameters and '
+      'procedure trained on ALL data '
       '(`models/release`); it has no independent test estimate -- the CV and final-test numbers are the estimates '
-      'of its accuracy (slightly pessimistic: it is trained on more data). MAPE = mean absolute percentage error of MPSP over the held-out samples\' simulated TY points; '
+      'of its accuracy (slightly pessimistic: it is trained on more data). MAPE = mean absolute percentage error of '
+      'MPSP over the held-out samples\' simulated TY points; '
       '"fit MAPE" is the irreducible error of the per-sample 4-coefficient fit on the same points.\n')
+    v1 = checks.get('v1') or {}
+    P('> **Second use of the frozen test split.** This is the second run of the pipeline that evaluates on the '
+      'frozen test split (`split.json`, unchanged). The first run (v1) is commit fd3f386; its report and headline '
+      'tables are kept in `results/v1/`. Between the two runs the pipeline was changed on development-set '
+      'evidence only (DESIGN.md section 6, "Development-set diagnostics, round 4"; summary in the section '
+      '"Changes since v1" below). The v1 test results motivated looking for causes, but no test sample was used to '
+      'choose, tune or calibrate anything; the v1 release intervals had been calibrated partly on the test '
+      'configurations, which v2 no longer does.\n')
     # summary
     head, fh = cv['headline'], fin['headline']
     P('## Summary\n')
@@ -1741,11 +2312,16 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           + (f' (± {100 * se:.1f} s.e.)' if np.isfinite(se) else ' (single fold)')
           + f' vs. best baseline {METHOD_LABEL[bm]} '
           f'{100 * base[bm]:.1f} %; irreducible fit MAPE {100 * _m(sch, "pinn", "fit_mape"):.1f} %.')
-    for sch in ABLATION_SCHEMES:
-        d = {m: _m(sch, m) - _m(sch, 'pinn') for m in ABLATIONS if (head['method'] == m).any()}
-        if d:
-            P(f'* Ablations ({_slabel(sch)}), change in MAPE vs. full PI-NN: '
-              + ', '.join(f'{METHOD_LABEL[m].replace("PI-NN ", "")} {100 * v:+.1f} pp' for m, v in d.items()) + '.')
+    lm = checks.get('loco_matched')
+    if lm is not None and len(lm) and (lm['method'] == 'pinn').any():
+        r = lm[lm['method'] == 'pinn'].iloc[0]
+        P(f'* LOCO restricted to the {", ".join(OOD_FAMILIES)} configurations (matched CV estimate of the OOD '
+          f'test, family-balanced): PI-NN {100 * r["family_mean"]:.1f} % over {int(r["n_configs"])} '
+          'configurations.')
+    for sch, d in ablation_deltas(cv['results']).items():
+        P(f'* Ablations ({_slabel(sch)}; paired over the {d["n_folds"]} folds where they ran), change in MAPE vs. '
+          'full PI-NN: ' + ', '.join(f'{METHOD_LABEL[m].replace("PI-NN ", "")} {100 * v:+.1f} pp'
+                                     for m, v in d['delta'].items()) + '.')
     if len(fh):
         for st, lab in (('test_ood', 'held-out configurations'), ('test_id', 'in-distribution samples')):
             r = fh[(fh['set'] == st) & (fh['method'] == 'pinn')]
@@ -1753,7 +2329,18 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
                 P(f'* Final test, {lab} (PI-NN trained on dev): MPSP MAPE {100 * r["mpsp_mape"].iloc[0]:.1f} % '
                   f'(median {100 * r["mpsp_mape_median"].iloc[0]:.1f} %; fit MAPE {100 * r["fit_mape"].iloc[0]:.1f} %; '
                   f'n = {int(r["n_test"].iloc[0])} samples).')
+    iv = fin.get('intervals')
+    if iv is not None and len(iv):
+        r = iv[(iv['method'] == 'pinn') & (iv['key'] == 'mpsp')]
+        if len(r):
+            cov = {st: float(r[r['set'] == st]['coverage'].iloc[0]) for st in ('test_ood', 'test_id')
+                   if (r['set'] == st).any()}
+            P(f'* PI-NN MPSP intervals (nominal {1 - ALPHA:.0%}, calibrated on dev LOCO out-of-fold scores; '
+              f'cross-fitted estimate {float(r["crossfit_mean"].iloc[0]):.2f}): realized sample-simultaneous '
+              'coverage ' + ', '.join(f'{k} {v:.2f}' for k, v in cov.items()) + '.')
     P('')
+    P(v1_comparison(fh, head, v1))
+    P(changes_since_v1(ctx))
     # data
     ds = checks['data_summary']
     rep = D['report']
@@ -1790,12 +2377,45 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       + (f'Biorefineries with too few configurations for a held-out one: '
          f'{", ".join(sp["biorefineries_without_held_out_config"])}. ' if sp['biorefineries_without_held_out_config']
          else '') + '`split.json`.\n')
+    # protocol
+    P('## 3. Training protocol\n')
+    if protocol['name'] == 'v2':
+        P('Every network fit of this report -- HPO, every CV scheme (PI-NN, plain MLP, ablations), '
+          '`models/final_dev` and `models/release` -- uses the same procedure (`experiments.PROTOCOL`): no '
+          'calibration hold-out; each ensemble member early-stops on its own random 15 % sample-level hold-out '
+          '(the hold-outs differ between members, so the ensemble sees every sample; patience '
+          f'{plan["patience"]}, at least {plan["min_epochs"]} and at most {plan["epochs"]} epochs); no refit. '
+          'The baselines fit exactly the rows the members train on. So the CV numbers estimate the procedure that '
+          'made the final models. Intervals: section 6.\n')
+    else:
+        P('**v1 protocol** (`--v1-protocol`, `experiments.PROTOCOL_V1`): CV calibration (15 %) and early-stopping '
+          f'hold-outs grouped per scheme by {INNER_GROUP_V1}; `final_dev` with a 15 % configuration-grouped '
+          'calibration hold-out; HPO and release without one, members early-stopping on held-out configurations.\n')
+    P(f'Ensemble members: CV {plan["cv_members"]}, final_dev {plan["final_members"]}, release '
+      f'{plan["release_members"]} (equal: the conformal scores divide by the member spread); HPO '
+      f'{plan.get("hpo_members", 1)}.\n')
+    pt = checks.get('protocol')
+    if pt is not None and len(pt):
+        P('Best epochs (the restored early-stopping state) and epochs run per stage, network members:\n')
+        P(md_table(pt) + '\n')
+        P('(`members_at_max_epochs`: members that ran into the epoch limit; `members_best_le_20`: members whose '
+          'best epoch was <= 20.) `tables/protocol_epochs.csv`.\n')
+    tf1 = (checks.get('v1') or {}).get('timings_fits')
+    tf2 = checks.get('timings_fits')
+    if tf1 is not None and tf2 is not None and len(tf2):
+        cmp = tf2.merge(tf1, on=['stage', 'method'], how='left', suffixes=('', '_v1'))
+        cmp = cmp[cmp['method'].isin(list(NN_BASES) + list(ABLATIONS))]
+        cols = [c for c in ('stage', 'method', 'fits', 'mean_seconds', 'fits_v1', 'mean_seconds_v1',
+                            'mean_member_epochs', 'mean_member_epochs_v1') if c in cmp]
+        P('Cost per network fit, v2 vs v1 (`results/v1/tables/timings_fits.csv`; seconds per fit, member epochs '
+          'summed over the members):\n')
+        P(md_table(cmp[cols]) + '\n')
     # hpo
     t = hpo['table']
-    P('## 3. Hyperparameter selection (development set only)\n')
+    P('## 4. Hyperparameter selection (development set only)\n')
     P(f'Random search over {len(t)} candidates (candidate 0 = package defaults) with {plan["hpo_k"]}-fold '
       f'leave-configurations-out CV (folds stratified by biorefinery; {plan.get("hpo_members", 1)} network(s) per '
-      'fit, early stopping on held-out configurations), criterion = fold mean of the configuration-balanced '
+      'fit, trained with the protocol of section 3), criterion = fold mean of the configuration-balanced '
       'held-out MPSP MAPE (`criterion`; each held-out configuration counts once). '
       + (f'Search size from the measured cost of candidate 0 and the {a.budget_hours} h budget '
          f'(estimate {plan["estimate"]["total_hours"]:.2f} h for the whole run on {a.threads} workers). '
@@ -1809,21 +2429,47 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       + '. `tables/hpo_candidates.csv`, `figures/hpo_search.png`.\n')
     # cv
     head = cv['headline']
-    P('## 4. Generalization CV estimates (development set)\n')
-    P(f'Selected hyperparameters; inner calibration / early-stopping hold-outs grouped by {INNER_GROUP}. '
+    P('## 5. Generalization CV estimates (development set)\n')
+    P('Selected hyperparameters; the same training procedure as the final models (section 3'
+      + ('' if protocol['name'] == 'v2' else f'; v1 inner hold-outs grouped by {INNER_GROUP_V1}') + '). '
       f'Random K = {plan["random_k"]}; leave-one-configuration-out over '
-      + (f'a stratified subset of {plan["loco_folds"]} configurations (budget); ' if plan.get('loco_folds') else
-         'all development configurations; ')
+      + (f'a stratified subset of {plan["loco_folds"]} configurations; ' if plan.get('loco_folds') else
+         'all development configurations (PI-NN, plain MLP, baselines'
+         + (f'; the PI-NN ablations on a stratified subset of {len(cv["ablation_folds"])}: '
+            + ', '.join(f'`{c}`' for c in cv['ablation_folds']) if cv.get('ablation_folds') else '') + '); ')
       + 'productivity: train on the central 20-80 % quantile range of log(r / baseline r), test both tails. '
       'MAPE = mean over folds (± s.e.); pooled = over all out-of-fold samples; R² pooled out-of-fold.\n')
     cols = ['scheme', 'method', 'n_folds_common', 'mpsp_mape', 'mpsp_mape_se', 'mpsp_mape_median', 'mpsp_mape_pooled',
             'fit_mape'] + [f'R2_{k}' for k in TARGETS]
     P(md_table(head[cols], pct_cols=('mpsp_mape', 'mpsp_mape_se', 'mpsp_mape_median', 'mpsp_mape_pooled',
                                      'fit_mape')) + '\n\n(MAPE columns in %.)\n')
-    P('Per-coefficient MAE (pooled out-of-fold, natural units) and constraint-violation / coverage rates:\n')
+    P('Per-coefficient MAE (pooled out-of-fold, natural units) and constraint-violation rates:\n')
     vcols = ['scheme', 'method'] + [f'MAE_{k}' for k in TARGETS] + ['viol_mono_y', 'viol_mono_t', 'viol_positive',
-                                                                     'viol_mono_r', 'viol_g_le_gmax', 'coverage_MPSP']
+                                                                     'viol_mono_r', 'viol_g_le_gmax']
+    vcols += [c for c in ('coverage_MPSP',) if c in head and head[c].notna().any()]
+    vcols += [c for c in ('crossfit_cov_mpsp', 'crossfit_cov_g') if c in head]
     P(md_table(head[vcols]) + '\n')
+    lm = checks.get('loco_matched')
+    if lm is not None and len(lm):
+        P(f'**LOCO restricted to the {", ".join(OOD_FAMILIES)} configurations** -- the families of the held-out '
+          'test configurations, so this is the matched CV estimate of the OOD test (fold MAPE; `family_mean` = '
+          'mean over the families of the mean over their configurations, as the OOD test holds out one '
+          'configuration of each; `tables/cv_loco_ood_families.csv`):\n')
+        P(md_table(lm, pct_cols=tuple(c for c in lm.columns if c not in ('method', 'n_configs'))) + '\n\n(%.)\n')
+    cfx = cv.get('crossfit')
+    if cfx is not None and len(cfx):
+        sub = cfx[(cfx['weighting'] == 'sample') & cfx['method'].isin(NN_BASES)
+                  & cfx['scheme'].isin(['config', 'random'])]
+        if len(sub):
+            P(f'**Cross-fitted interval coverage** (nominal {1 - ALPHA:.2f}): for every CV fold, the conformal '
+              'quantile of the out-of-fold scores of all OTHER folds and the fraction of the fold\'s own samples '
+              'covered (`train.crossfit_coverage`; a sample counts as covered for MPSP only if all its TY points '
+              'are). `mean` = fold-balanced, `min` / `q10` = worst / 10 % quantile over folds, `frac_ok` = '
+              'fraction of folds with coverage >= nominal. The final intervals use the LOCO (`config`) PI-NN '
+              'scores; `tables/cv_coverage_crossfit.csv` (also with configuration weighting), out-of-fold scores '
+              '`tables/cv_oof_scores.csv.gz`.\n')
+            P(md_table(sub[['scheme', 'method', 'key', 'mean', 'pooled', 'min', 'q10', 'frac_ok', 'n_folds']])
+              + '\n')
     lp = checks.get('lopo_per_product')
     if lp is not None and len(lp):
         P('Leave-one-product-out, per held-out product (MAPE %):\n')
@@ -1832,26 +2478,22 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       '`tables/cv_oof_predictions.csv.gz`.\n')
     # final
     fh = fin['headline']
-    P('## 5. Final test estimate (models trained on the development set, evaluated once)\n')
+    P('## 6. Final test estimate (models trained on the development set, evaluated once)\n')
     if len(fh):
         cols = ['set', 'method', 'n_train', 'n_test', 'mpsp_mape', 'mpsp_mape_median', 'fit_mape'] + \
-               [f'R2_{k}' for k in TARGETS] + ['coverage_MPSP', 'viol_mono_y', 'viol_mono_t']
+               [f'R2_{k}' for k in TARGETS] + ['coverage_MPSP', 'viol_mono_y', 'viol_mono_t', 'viol_mono_r']
         P(md_table(fh[fh['set'] != 'train_all'][cols], pct_cols=('mpsp_mape', 'mpsp_mape_median', 'fit_mape'))
-          + '\n\n(test_ood = held-out configurations, test_id = in-distribution samples; MAPE in %.)\n')
-        conf = (fin['final'].get('pinn') or {}).get('conformal') or {}
-        if conf:
-            P(f'PI-NN conformal calibration: {conf.get("n")} samples / {conf.get("n_calib_groups")} held-out '
-              f'configurations, level {1 - conf.get("alpha", 0.1):.2f}, finite-sample valid: '
-              f'{conf.get("finite_sample_valid")}, coverage guaranteed (>= 10 groups): '
-              f'{conf.get("coverage_guaranteed")}.\n')
+          + '\n\n(test_ood = held-out configurations, test_id = in-distribution samples; MAPE in %; '
+          '`coverage_MPSP` = pointwise coverage of the MPSP intervals.)\n')
         pc = checks.get('test_per_config')
         if pc is not None and len(pc):
             P('PI-NN per held-out test configuration:\n')
             P(md_table(pc, pct_cols=('mpsp_mape', 'mpsp_mape_median', 'fit_mape')) + '\n')
+        P(intervals_section(fin, protocol))
     else:
         P('Final models failed (see log).\n')
     # release
-    P('## 6. Release model\n')
+    P('## 7. Release model\n')
     rel = fin['release']
     if rel['error']:
         P(f'Release training FAILED: {rel["error"]}\n')
@@ -1861,24 +2503,24 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         ins = fh[(fh['set'] == 'train_all')]
         ins_txt = f'{100 * ins["mpsp_mape"].iloc[0]:.1f} %' if len(ins) else 'n/a'
         P(f'`{os.path.relpath(rel["saved_model"], PKG_DIR)}`: {plan["release_members"]} members trained on all '
-          f'{len(D["samples"])} samples (development + test; each member early-stops on its own held-out '
-          f'configurations), epochs {rel["epochs"]}. In-sample MPSP MAPE (NOT a generalization estimate): '
-          f'{ins_txt}.\n')
+          f'{len(D["samples"])} samples (development + test) with the protocol of section 3; epochs run '
+          f'{rel["epochs"]}, best epochs {rel.get("best_epochs")}. In-sample MPSP MAPE (NOT a generalization '
+          f'estimate): {ins_txt}.\n')
         if conf:
-            P(f'Intervals: split-conformal quantiles transferred from the dev-trained ensemble, scored on '
-              f'{conf.get("n")} samples of {conf.get("n_calib_groups")} configurations it never saw (its calibration '
-              f'configurations + the test configurations); level {1 - conf.get("alpha", 0.1):.2f} '
-              f'(finite-sample level reached for MPSP: {_fmt(conf.get("mpsp_level", float("nan")))}). Valid for the dev '
-              'ensemble; for the release ensemble (more training data) an approximation, flagged '
+            P(f'Intervals: split-conformal quantiles from {conf.get("source")} ({conf.get("n")} samples of '
+              f'{conf.get("n_calib_groups")} configurations, weighting `{conf.get("weighting")}`, cross-fitted MPSP '
+              f'coverage {_fmt(conf.get("mpsp_coverage_cv", float("nan")))}): the same scores as `final_dev`, '
+              'none of them from a test sample. The release ensemble trains on more data than the CV fold '
+              'ensembles, so these intervals are expected to be slightly conservative for it; flagged '
               '`coverage_guaranteed = False` in its checkpoint.\n')
         else:
-            P('Intervals: none (conformal transfer failed; see log).\n')
+            P('Intervals: none (no usable out-of-fold scores; see log).\n')
         P(f'Loads with `CoefficientPredictor.load`: {rc.get("ok")} '
           + (f'(e.g. {rc.get("example_config")} baseline: ' + ', '.join(f'{k}={v:.4g}' for k, v in
                                                                          rc.get('example', {}).items())
              + f'; intervals reported: {rc.get("intervals")}).' if rc.get('ok') else f'({rc.get("error")}).') + '\n')
     # checks
-    P('## 7. Physical-consistency and interpretability checks\n')
+    P('## 8. Physical-consistency and interpretability checks\n')
     pub = checks['pub']
     P('**(i) Baseline coefficients vs. publication** (data only, no model; `sample_kind == baseline` of each '
       'configuration vs. `results/data/<config>_coefficients.npy`; differences are expected from the newer '
@@ -1911,9 +2553,9 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         P('Agreement over (configuration × channel) pairs:\n')
         P(md_table(pd.DataFrame(agg)) + '\n')
     # figures & timings
-    P('## 8. Figures\n')
+    P('## 9. Figures\n')
     P('\n'.join(f'* `{os.path.relpath(f, a.out)}`' for f in figs) + '\n')
-    P('## 9. Reproduction and timings\n')
+    P('## 10. Reproduction and timings\n')
     P(f'`{" ".join(ctx["argv"])}` (PYTHONPATH=/home/user/fermentation_insights). Python {platform.python_version()}, '
       f'{ctx["versions"]}. Every fit is cached under `cache/` (keyed by data hash, split, job and code version).\n')
     P(md_table(timings) + '\n')
@@ -1938,7 +2580,12 @@ def parse_args(argv=None):
     ap.add_argument('--budget-hours', type=float, default=2.5, help='full mode: wall-time budget of the whole run')
     ap.add_argument('--hpo-candidates', type=int, default=0, help='override the budget-derived search size')
     ap.add_argument('--loco-folds', type=int, default=0, help='override: number of LOCO folds (0 = budget / all)')
-    ap.add_argument('--members', type=int, default=3, help='full mode: ensemble members in CV (3-5)')
+    ap.add_argument('--members', type=int, default=5,
+                    help='full mode: ensemble members of the CV, final_dev and release ensembles (equal, so that '
+                         'the CV out-of-fold scores calibrate the final intervals)')
+    ap.add_argument('--ablation-loco-folds', type=int, default=12,
+                    help='full mode: LOCO folds (stratified subset of configurations) of the PI-NN ablations '
+                         '(0 = all; the PI-NN and the plain MLP always run on every LOCO fold)')
     ap.add_argument('--hpo-members', type=int, default=2, help='full mode: ensemble members per HPO fit')
     ap.add_argument('--split-file', default=SPLIT_FILE,
                     help='frozen final test split (created from PLANNED_CONFIGS if missing, then never changed)')
@@ -1957,15 +2604,22 @@ def parse_args(argv=None):
     ap.add_argument('--no-masking', action='store_true',
                     help="PI-NN with one shared encoder instead of the channel-wise input masking "
                          "(ModelConfig.channel_inputs='physics_v2')")
-    # opt-in (2026-10-17 round 4 development CV, DESIGN.md section 3)
-    ap.add_argument('--r-structure', action='store_true',
-                    help="PI-NN with the hard productivity structure (ModelConfig.r_structure='physics': "
-                         "fermentation capital and electricity intensity = theta0(x) + theta1(x) r_ref/r)")
-    # on by default since the round-4 extrapolation CV (DESIGN.md section 6)
+    # round 4 (v2; DESIGN.md section 6): each flag restores the v1 behaviour of one component
+    ap.add_argument('--v1-g-inputs', action='store_true',
+                    help="masking preset 'physics' (v1: the recovery g also sees the reagent prices) instead of "
+                         "'physics_v2'")
+    ap.add_argument('--no-r-structure', action='store_true',
+                    help="PI-NN without the hard productivity structure (ModelConfig.r_structure='physics': "
+                         "fermentation capital and electricity intensity = theta0(x) + theta1(x) r_ref/r, "
+                         "theta1 >= 0, so dMPSP/dr <= 0 by construction)")
     ap.add_argument('--no-extrapolation-safeguards', action='store_true',
                     help='PI-NN without the sugar-availability prior of the feedstock intensity '
                          '(ModelConfig.fs_prior), the neutralization gate (ModelConfig.neutralization_gate) '
                          "and the clipping of the feedstock inputs (ModelConfig.clip_groups)")
+    ap.add_argument('--v1-protocol', action='store_true',
+                    help='v1 training protocol (PROTOCOL_V1): configuration-grouped calibration and '
+                         'early-stopping hold-outs in CV (per scheme INNER_GROUP_V1) and final_dev, instead '
+                         'of sample-level early stopping without a calibration hold-out everywhere')
     ap.add_argument('--split-seed', type=int, default=None, help='only when the split is created (default 2026)')
     ap.add_argument('--replan', action='store_true', help='recompute plan.json from the pilot timings')
     ap.add_argument('--fresh', action='store_true', help='delete the fit cache first')
@@ -2020,11 +2674,12 @@ def main(argv=None):
         if not a.no_extrapolation_safeguards:
             mk_extra.update(EXTRAPOLATION_SAFEGUARDS)
     if not a.no_masking:
-        mk_extra['channel_inputs'] = 'physics_v2'
-    if getattr(a, 'r_structure', False):
-        mk_extra['r_structure'] = 'physics'
+        mk_extra['channel_inputs'] = 'physics' if a.v1_g_inputs else MASKING_PRESET
+    if not a.no_r_structure:
+        mk_extra['r_structure'] = R_STRUCTURE
     if mk_extra:
         ctx['mk_extra'] = mk_extra
+    ctx['protocol'] = dict(PROTOCOL_V1 if a.v1_protocol else PROTOCOL)
     T = lambda name, t0: stage_t.__setitem__(name, time.time() - t0)
 
     t0 = time.time()
@@ -2035,7 +2690,7 @@ def main(argv=None):
     sp, dev = stage_split(a, D)
     ctx['split_hash'] = sp['hash']
     T('split', t0)
-    plan = base_plan(a)
+    plan = check_plan(base_plan(a))
     if a.hpo_candidates:
         plan['hpo_candidates'] = a.hpo_candidates
     if a.loco_folds:
@@ -2046,6 +2701,7 @@ def main(argv=None):
         hpo = stage_hpo(a, plan, runner, dev, ctx, sp['n_test_ood'] + sp['n_test_id'], len(D['samples']))
         T('hpo', t0)
         _dump_json(dict(plan, data_hash=ctx['data_hash'], split_hash=ctx['split_hash'], threads=a.threads,
+                        code_version=CODE_VERSION, protocol=ctx['protocol']['name'],
                         selected=hpo['selected'] if hpo else None), os.path.join(a.out, 'plan.json'))
         if hpo is None:
             log(f'plan-only: plan written to {os.path.join(a.out, "plan.json")}; stopping')
@@ -2054,7 +2710,8 @@ def main(argv=None):
         cv = stage_cv(a, plan, runner, dev, ctx, hpo['selected'], D)
         T('cv', t0)
         t0 = time.time()
-        fin = stage_final(a, plan, runner, dev, ctx, hpo['selected'], sp, D, a.models)
+        # final after CV: the final intervals are calibrated from the CV out-of-fold scores
+        fin = stage_final(a, plan, runner, dev, ctx, hpo['selected'], sp, D, a.models, cv)
         T('final+release', t0)
     finally:
         runner.close()
@@ -2078,12 +2735,31 @@ def main(argv=None):
     _dump_json(nf_summ, os.path.join(tdir, 'noise_floor_summary.json'))
     checks['noise_floor'] = nf_summ
     cv['headline'] = headline(cv['results'], METHOD_ORDER)
+    cf = cv['crossfit']
+    if len(cf):
+        # the CV ensembles have no intervals of their own (no calibration hold-out): cross-fitted coverage
+        m = cf[(cf['weighting'] == 'sample') & cf['key'].isin(['mpsp', 'g'])].pivot_table(
+            index=['scheme', 'method'], columns='key', values='mean').add_prefix('crossfit_cov_').reset_index()
+        cv['headline'] = cv['headline'].merge(m, on=['scheme', 'method'], how='left')
+    cv['headline'] = cv['headline'].drop(columns=[c for c in cv['headline'] if c.startswith('coverage_')
+                                                  and cv['headline'][c].isna().all()])
     cv['headline'].to_csv(os.path.join(tdir, 'cv_headline.csv'), index=False)
     if len(cv['oof']):
         cv['oof'].to_csv(os.path.join(tdir, 'cv_oof_predictions.csv.gz'), index=False)
+    if len(cv['oof_scores']):
+        cv['oof_scores'].to_csv(os.path.join(tdir, 'cv_oof_scores.csv.gz'), index=False)
+    cv['crossfit'].to_csv(os.path.join(tdir, 'cv_coverage_crossfit.csv'), index=False)
+    checks['loco_matched'] = loco_matched(cv['results'], S)
+    checks['loco_matched'].to_csv(os.path.join(tdir, 'cv_loco_ood_families.csv'), index=False)
+    checks['protocol'] = protocol_table(cv, fin, hpo, plan)
+    checks['protocol'].to_csv(os.path.join(tdir, 'protocol_epochs.csv'), index=False)
     fin['table'].to_csv(os.path.join(tdir, 'final_test_results.csv'), index=False)
     fin['headline'] = final_headline(fin['table'])
     fin['headline'].to_csv(os.path.join(tdir, 'final_test_headline.csv'), index=False)
+    fin['intervals'], fin['intervals_per_config'] = final_intervals(fin, S)
+    fin['intervals'].to_csv(os.path.join(tdir, 'final_intervals.csv'), index=False)
+    fin['intervals_per_config'].to_csv(os.path.join(tdir, 'final_intervals_per_config.csv'), index=False)
+    checks['v1'] = load_v1_tables(a.out)
     res = cv['results']
     lp = res[(res['scheme'] == 'product') & (res['fold'] >= 0) & (res['metric'] == 'mpsp_mape')]
     if len(lp):
@@ -2148,7 +2824,9 @@ def main(argv=None):
         _fig('mpsp_parity.png', fig_mpsp_parity, panels)
     if len(cv['headline']):
         _fig('cv_mape_by_scheme.png', fig_cv_bars, cv['headline'])
-        _fig('ablations.png', fig_ablation, cv['headline'])
+        # ablations vs the PI-NN / plain MLP on the same folds (the ablations may skip LOCO folds)
+        _fig('ablations.png', fig_ablation, headline(ablation_results(cv['results'], cv.get('ablation_folds')),
+                                                     METHOD_ORDER))
     if fp and not fp['error'] and 'test_ood' in fp['evals']:
         ev = fp['evals']['test_ood']
         st = S.loc[ev['ids']].reset_index(drop=True)
@@ -2195,6 +2873,7 @@ def main(argv=None):
     tim_fit = tj.groupby(['stage', 'method']).agg(fits=('seconds', 'size'), mean_seconds=('seconds', 'mean'),
                                                   mean_member_epochs=('member_epochs', 'mean')).reset_index()
     tim_fit.to_csv(os.path.join(tdir, 'timings_fits.csv'), index=False)
+    checks['timings_fits'] = tim_fit
     timings['note'] = ''
     timings.loc[len(timings)] = dict(stage='median s per (member-epoch x training sample)', minutes=np.nan,
                                      note=f'{sec_per:.3g}')
