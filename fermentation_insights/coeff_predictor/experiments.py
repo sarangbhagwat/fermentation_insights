@@ -161,6 +161,34 @@ MASKING_PRESET = 'physics_v2'
 #: configuration (the frozen test holds out one configuration of each):
 #: LOCO restricted to them is the matched CV estimate of the OOD test
 OOD_FAMILIES = ('HP', 'TAL', 'succinic', 'lactic')
+#: one-line captions of the report figures (section 9)
+FIGURE_CAPTIONS = {
+    'cv_mape_by_scheme.png': 'MPSP MAPE of every method per CV scheme (mean over folds ± s.e.; dashed: '
+                             'irreducible fit MAPE).',
+    'ablations.png': 'Paired fold differences (variant - full PI-NN fold MAPE, pp; dots = folds, bar = mean ± '
+                     '1.96 s.e.) on the folds where the ablations ran (LOCO: the stratified subset of folds).',
+    'mpsp_parity.png': 'Predicted vs. simulated MPSP at the simulated TY points: final test (models/final_dev) '
+                       'and leave-one-product-out out-of-fold.',
+    'parity_test.png': 'Predicted vs. fitted coefficients a′, b′, c′, d′, g on the final test set.',
+    'parity_lopo.png': 'Predicted vs. fitted coefficients, leave-one-product-out out-of-fold (colour = held-out '
+                       'product family).',
+    'mpsp_contours_test.png': 'MPSP over yield and titer for held-out test configurations: simulation vs. '
+                              'prediction.',
+    'price_sensitivity.png': 'Predicted price derivatives of the coefficients (central secants) vs. the simulated '
+                             'price intensities, final dev-trained models on the test set.',
+    'channels_test.png': 'Per-channel coefficient breakdown on the held-out test configurations: prediction vs. '
+                         'decomposed simulation data.',
+    'publication_comparison.png': 'Baseline coefficients of this work (current BioSTEAM, harness v2/v3, '
+                                  'D3-patched) vs. the publication.',
+    'hpo_search.png': 'HPO candidates ranked by the criterion (configuration-balanced held-out MPSP MAPE, fold '
+                      'mean); the selected one in blue.',
+}
+#: samples per configuration planned by data_generation/scripts/run_all.sh
+#: (1 baseline + N_PROD productivity + N_RANDOM random samples)
+PLANNED_SAMPLES = dict(oxalic=211, isobutanol=109, ethanol=109, HP=29, TAL=29, lactic=36, succinic=18)
+#: modules whose edits change the processed tables (their hash is part of the
+#: processed-data fingerprint)
+PROCESSING_SOURCES = ('dataset.py', 'physics.py', 'data_patches.py', 'downstream.py')
 #: nominal miscoverage of the conformal intervals
 ALPHA = 0.1
 
@@ -248,6 +276,19 @@ def _set_thread_env():
 
 # %% Stage 1: data
 
+def processing_source_hash():
+    """Hash of the modules that build the processed tables
+    (:data:`PROCESSING_SOURCES`): editing one rebuilds the tables on the
+    next run. (The fit cache is keyed by ``CODE_VERSION`` instead, which must
+    be bumped by hand when model.py, train.py, features.py or evaluate.py
+    change what a fit computes.)"""
+    h = hashlib.sha256()
+    for f in PROCESSING_SOURCES:
+        with open(os.path.join(PKG_DIR, f), 'rb') as fh:
+            h.update(f.encode() + b'\0' + fh.read())
+    return h.hexdigest()[:16]
+
+
 def raw_fingerprint(raw_dirs):
     files = []
     for d in raw_dirs:
@@ -268,21 +309,32 @@ def stage_data(a):
     proc = a.processed
     fp_path = os.path.join(proc, 'experiments_fingerprint.json')
     fp, files = raw_fingerprint(a.raw)
+    src = processing_source_hash()
     have = all(os.path.exists(os.path.join(proc, f'{n}.csv.gz')) for n in ('samples', 'points', 'configs'))
     old = {}
     if os.path.exists(fp_path):
         with open(fp_path) as fh:
             old = json.load(fh)
-    if have and (a.no_rebuild or (old.get('raw_fingerprint') == fp and not a.rebuild)):
+    src_changed = old.get('processing_sources') not in (None, src)
+    if have and (a.no_rebuild or (old.get('raw_fingerprint') == fp and not a.rebuild and not src_changed)):
         log(f'data: cached processed tables in {proc} '
-            f'({"--no-rebuild" if a.no_rebuild else "raw files unchanged"})')
+            f'({"--no-rebuild" if a.no_rebuild else "raw files and processing sources unchanged"})')
+        if old.get('processing_sources') is None and not a.no_rebuild:
+            # tables built before the source hash was recorded: adopted as built
+            # by the current sources (run with --rebuild if they are not)
+            log('data: NOTE the cached tables predate the processing-source hash '
+                f'({", ".join(PROCESSING_SOURCES)}); recorded now -- use --rebuild if these modules changed '
+                'since the tables were built')
+            _dump_json(dict(old, processing_sources=src), fp_path)
     else:
+        if src_changed:
+            log('data: data-processing sources changed since the tables were built: rebuilding')
         if not files:
             raise SystemExit(f'no raw *.jsonl files under {a.raw}')
         t0 = time.time()
         log(f'data: building processed tables from {len(files)} raw files ...')
         dataset.build(a.raw, out_dir=proc)
-        _dump_json(dict(raw_fingerprint=fp, raw_dirs=a.raw, files=files,
+        _dump_json(dict(raw_fingerprint=fp, raw_dirs=a.raw, files=files, processing_sources=src,
                         built=time.strftime('%Y-%m-%d %H:%M:%S')), fp_path)
         log(f'data: built in {time.time() - t0:.0f}s -> {proc}')
     # processed tables built before the downstream specification (patch S1):
@@ -770,6 +822,7 @@ class Runner:
     def __init__(self, workers, processed_dir, dhash, cache_dir, force_pool=False):
         self.workers, self.processed, self.dhash, self.cache = int(workers), processed_dir, dhash, cache_dir
         self.force_pool = bool(force_pool)
+        self.n_run = 0          # fits computed (not cached) in this run
         self.pool = None
         self.M = None
 
@@ -815,6 +868,7 @@ class Runner:
             f'{self.workers} worker(s))')
         if not todo:
             return out
+        self.n_run += len(todo)
         todo.sort(key=lambda j: -j['cost'])        # longest first
         total = sum(j['cost'] for j in todo)
         done_cost, t0 = 0., time.time()
@@ -1506,6 +1560,71 @@ def refresh_registries(jobs, results, samples):
             log(f'final: WARNING spec registry of {path} not refreshed: {e}')
 
 
+def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
+    """Report-only statistics from the saved outputs (``report_checks``;
+    none is used to fit, tune, select or calibrate anything): paired
+    fold-level ablation statistics, final-test comparison with
+    configuration-cluster bootstrap CIs, coverage of the shipped interval
+    quantiles on each CV scheme's out-of-fold scores, applicability-domain
+    validation on the test sets, per-configuration sample coverage, and the
+    random-CV error on random samples per method."""
+    import warnings
+    from fermentation_insights.coeff_predictor import report_checks as RC, dataset
+    checks['ablation_stats'], checks['ablation_per_fold'] = RC.ablation_stats(cv['results'], ABLATION_SCHEMES,
+                                                                              ABLATIONS)
+    checks['ablation_stats'].to_csv(os.path.join(tdir, 'cv_ablation_paired.csv'), index=False)
+    checks['ablation_per_fold'].to_csv(os.path.join(tdir, 'cv_ablation_per_fold.csv'), index=False)
+    checks['test_paired'] = RC.paired_test_comparison(fin.get('final'), S, Pts, seed=a.seed)
+    checks['test_paired'].to_csv(os.path.join(tdir, 'final_test_paired.csv'), index=False)
+    conf = fin.get('release_conformal') or {}
+    sc = cv.get('oof_scores')
+    checks['shipped_coverage'] = (RC.shipped_quantile_coverage(sc, conf) if conf and sc is not None and len(sc)
+                                  else None)
+    if checks['shipped_coverage'] is not None:
+        checks['shipped_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_by_scheme.csv'), index=False)
+    checks['ad'] = checks['ad_per_config'] = None
+    path = (fp or {}).get('saved_model') or os.path.join(a.models, 'final_dev')
+    if fp and not fp.get('error') and os.path.isdir(path):
+        try:
+            from fermentation_insights.coeff_predictor.predict import CoefficientPredictor
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                Pfd = CoefficientPredictor.load(path)
+                checks['ad'], checks['ad_per_config'] = RC.ad_validation(
+                    Pfd, {st: fp['evals'][st] for st in ('test_ood', 'test_id') if st in fp['evals']}, S, Pts)
+            checks['ad'].to_csv(os.path.join(tdir, 'applicability_domain_test.csv'), index=False)
+            checks['ad_per_config'].to_csv(os.path.join(tdir, 'applicability_domain_test_per_config.csv'),
+                                           index=False)
+        except Exception as e:
+            log(f'tables: WARNING applicability-domain validation failed: {type(e).__name__}: {e}')
+    try:
+        checks['data_coverage'] = RC.raw_sample_coverage(dataset._find_files(a.raw), D['samples'],
+                                                         PLANNED_SAMPLES)
+        checks['data_coverage'].to_csv(os.path.join(tdir, 'data_coverage.csv'), index=False)
+    except Exception as e:
+        checks['data_coverage'] = None
+        log(f'tables: WARNING raw sample coverage failed: {type(e).__name__}: {e}')
+    checks['price_response'] = {}
+    for name, path_, rows in (('models/release, in-sample (all training rows)', os.path.join(a.models, 'release'),
+                               D['samples']),
+                              ('models/final_dev, test set', path,
+                               S.loc[(fp or {}).get('evals', {}).get('test_all', {}).get('ids', [])])):
+        if not os.path.isdir(path_) or not len(rows):
+            continue
+        try:
+            from fermentation_insights.coeff_predictor.predict import CoefficientPredictor
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                t = RC.price_response_error(CoefficientPredictor.load(path_), rows)
+            checks['price_response'][name] = t
+            t.to_csv(os.path.join(tdir, f'price_response_{os.path.basename(path_)}.csv'), index=False)
+        except Exception as e:
+            log(f'tables: WARNING price response of {path_} failed: {type(e).__name__}: {e}')
+    r = cv['results']
+    r = r[(r['scheme'] == 'random') & (r['fold'] >= 0) & (r['metric'] == 'mpsp_mape_cfg_gmean_random')]
+    checks['random_cv_random_samples'] = r.groupby('method')['value'].mean().to_dict()
+
+
 def final_intervals(fin, samples_by_id, alpha=ALPHA):
     """Realized test coverage of the final models' intervals (report only;
     never used for any choice): per model x test set x key, the
@@ -1956,41 +2075,43 @@ def fig_cv_bars(path, head, made):
     _save(fig, path, made)
 
 
-def fig_ablation(path, head, made):
+def fig_ablation(path, stats, per, made):
+    """Paired fold differences (variant - full PI-NN fold MPSP MAPE, pp) of
+    the ablations and the plain MLP, on the folds where the ablations ran."""
     import numpy as np
     plt = _style()
-    meths = ['pinn'] + list(ABLATIONS) + ['plain']
-    schemes = [s for s in ABLATION_SCHEMES if (head['scheme'] == s).any()]
-    fig, axs = plt.subplots(1, max(len(schemes), 1), figsize=(5.6 * max(len(schemes), 1), 3.8), squeeze=False)
-    for ax, s in zip(axs[0], schemes):
-        vals, errs, cols, labs = [], [], [], []
-        for m in meths:
-            r = head[(head['scheme'] == s) & (head['method'] == m)]
-            if not len(r):
-                continue
-            vals.append(100 * r['mpsp_mape'].iloc[0])
-            errs.append(100 * r['mpsp_mape_se'].iloc[0])
-            cols.append(METHOD_COLOR[m])
-            labs.append(METHOD_LABEL[m].replace('PI-NN ', 'PI-NN\n').replace('Plain MLP', 'Plain\nMLP'))
-        y = np.arange(len(vals))[::-1]
-        ax.barh(y, vals, 0.7, color=cols, zorder=3)
-        e = np.nan_to_num(errs)
-        ax.errorbar(vals, y, xerr=e, fmt='none', ecolor=INK2, elinewidth=0.8, capsize=2, zorder=4)
-        for yy, v, ee in zip(y, vals, e):
-            if np.isfinite(v):
-                ax.text(v + ee, yy, f'  {v:.1f} %', va='center', fontsize=8, color=INK)
-        r = head[(head['scheme'] == s) & (head['method'] == 'pinn')]
-        if len(r) and np.isfinite(r['fit_mape'].iloc[0]):
-            ax.axvline(100 * r['fit_mape'].iloc[0], color=INK, ls='--', lw=1.2, label='irreducible fit MAPE')
-            ax.legend(loc='lower left', bbox_to_anchor=(0, 1.06))
+    schemes = [x for x in ABLATION_SCHEMES if (stats['scheme'] == x).any()]
+    fig, axs = plt.subplots(1, max(len(schemes), 1), figsize=(5.6 * max(len(schemes), 1), 3.6), squeeze=False)
+    for ax, sch in zip(axs[0], schemes):
+        st = stats[stats['scheme'] == sch]
+        abl = st[st['variant'].isin(ABLATIONS)]
+        n = int(abl['n_folds'].max()) if len(abl) else 0
+        sub = 'ablation folds' if (st['subset'] == 'ablation folds').any() else 'all folds of the variant'
+        rows = [(m, 'all folds of the variant') for m in ABLATIONS if (abl['variant'] == m).any()] + \
+            [('plain', sub)] * bool(((st['variant'] == 'plain') & (st['subset'] == sub)).any())
+        y = np.arange(len(rows))[::-1]
+        for yy, (m, ss) in zip(y, rows):
+            d = 100 * per[(per['scheme'] == sch) & (per['variant'] == m) & (per['subset'] == ss)]['delta'].to_numpy()
+            x = st[(st['variant'] == m) & (st['subset'] == ss)].iloc[0]
+            jit = np.linspace(-0.18, 0.18, len(d)) if len(d) > 1 else np.zeros(len(d))
+            ax.scatter(d, yy + jit, s=12, color=METHOD_COLOR[m], alpha=0.75, edgecolors='white', linewidths=0.3,
+                       zorder=3)
+            ax.errorbar([100 * x['mean']], [yy], xerr=[1.96 * 100 * np.nan_to_num(x['se'])], fmt='D', ms=5,
+                        color=INK, ecolor=INK, elinewidth=1.2, capsize=3, zorder=4)
+            ax.text(1.0, yy, f"  {100 * x['mean']:+.1f} ± {100 * np.nan_to_num(x['se']):.1f} pp; better on "
+                    f"{int(x['n_variant_better'])}/{int(x['n_folds'])}", transform=ax.get_yaxis_transform(),
+                    va='center', fontsize=7.5, color=INK2, clip_on=False)
+        ax.axvline(0, color=INK, lw=1)
         ax.set_yticks(y)
-        ax.set_yticklabels(labs)
-        ax.set_xlabel('MPSP MAPE on held-out TY points [%] (mean over folds ± s.e.)')
-        ax.set_title(_slabel(s), loc='right')
-        top = max([v + ee for v, ee in zip(vals, e) if np.isfinite(v)] or [1])
-        ax.set_xlim(0, top * 1.25)
+        ax.set_yticklabels([METHOD_LABEL[m].replace('PI-NN ', 'PI-NN\n').replace('Plain MLP', 'Plain\nMLP')
+                            for m, _ in rows])
+        ax.set_xlabel('variant - full PI-NN fold MPSP MAPE [pp]\n(dots = folds; diamond = mean ± 1.96 s.e.)')
+        lab = _slabel(sch).replace('\n', '')
+        ax.set_title(f'{lab}: {n} ' + ('stratified LOCO folds' if sch == 'config' else 'folds'), loc='left')
+        ax.set_xscale('symlog', linthresh=5)
         ax.grid(axis='y', visible=False)
     fig.tight_layout()
+    fig.subplots_adjust(right=0.80 if len(schemes) == 1 else 0.86, wspace=0.75)
     _save(fig, path, made)
 
 
@@ -2066,7 +2187,7 @@ def fig_pub(path, pub, made):
         ax.set_ylabel(f'this work {TARGET_LABEL[k]}')
     h, l = axs[0].get_legend_handles_labels()
     fig.legend(h, l, loc='lower center', ncol=len(l), bbox_to_anchor=(0.5, -0.06))
-    fig.suptitle('Baseline coefficients: this work (current BioSTEAM, harness v2) vs. publication',
+    fig.suptitle('Baseline coefficients: this work (current BioSTEAM, harness v2/v3, D3-patched) vs. publication',
                  x=0.01, ha='left', fontsize=11)
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
     _save(fig, path, made)
@@ -2187,6 +2308,70 @@ def ablation_results(res, ablation_folds):
         keep = set(map(str, ablation_folds))
         r = r[(r['scheme'] != 'config') | r['label'].astype(str).isin(keep)]
     return r.reset_index(drop=True)
+
+
+def _abl_label(m):
+    return METHOD_LABEL[m].replace('PI-NN ', '')
+
+
+def ablation_summary(st):
+    """Summary bullets of the paired fold-level ablation statistics
+    (``report_checks.ablation_stats``)."""
+    import numpy as np
+    if st is None or not len(st):
+        return ''
+    L = []
+    own = st[st['subset'] == 'all folds of the variant']
+    for sch in ABLATION_SCHEMES:
+        r = own[(own['scheme'] == sch) & own['variant'].isin(ABLATIONS)]
+        if not len(r):
+            continue
+        n = int(r['n_folds'].max())
+        L.append(f'* Ablations ({_slabel(sch)}; paired over the {n} folds where they ran; ablation - full PI-NN '
+                 'fold MAPE: mean ± s.e., median, folds where the ablation is better, the fold with the largest '
+                 'difference): ' + '; '.join(
+                     f'{_abl_label(x.variant)} {100 * x.mean:+.1f} ± {100 * x.se:.1f} pp (median '
+                     f'{100 * x.median:+.1f}; better on {x.n_variant_better}/{x.n_folds}; {x.dominant_fold} '
+                     f'{100 * x.dominant_delta:+.1f})' for x in r.itertuples()) + '.')
+    a = own[own['variant'].isin(ABLATIONS)]
+    sig = a[(a['t'].abs() >= 2) & (a['p_wilcoxon'] < 0.05)]
+    if len(a) and not len(sig):
+        L.append(f'* No ablation effect is established at the fold level (|t| <= {np.nanmax(a["t"].abs()):.1f}, '
+                 f'Wilcoxon p >= {np.nanmin(a["p_wilcoxon"]):.2f}; the means are driven by single folds). The '
+                 'channel (intermediate-data) supervision, the price-explicit structure and the physics residuals / '
+                 'collocation are kept for what they guarantee by construction -- exact linearity in the prices, '
+                 'dMPSP/dr <= 0, coefficient bounds, an additive channel breakdown -- not for a measured accuracy '
+                 'gain.')
+    elif len(sig):
+        L.append('* Ablation effects established at the fold level (|t| >= 2, Wilcoxon p < 0.05): '
+                 + ', '.join(f'{_abl_label(x.variant)} ({_slabel(x.scheme)})' for x in sig.itertuples()) + '.')
+    pl = own[(own['variant'] == 'plain') & (own['scheme'] == 'config')]
+    if len(pl):
+        x = pl.iloc[0]
+        L.append('* Fold-level evidence for the physics-informed model as a whole: PI-NN vs. the plain MLP (same '
+                 'inputs and training protocol; it reuses the hyperparameters selected for the PI-NN) on '
+                 f'leave-one-configuration-out, plain - PI-NN {100 * x["mean"]:+.1f} ± {100 * x["se"]:.1f} pp, '
+                 f'PI-NN better on {int(x["n_variant_worse"])}/{int(x["n_folds"])} folds (Wilcoxon p '
+                 f'{x["p_wilcoxon"]:.2g}).')
+    return '\n'.join(L)
+
+
+def _test_vs_baseline(tp, st):
+    """' vs. best baseline ...' clause of a final-test summary bullet
+    (``report_checks.paired_test_comparison``)."""
+    if tp is None or not len(tp):
+        return ''
+    r = tp[(tp['set'] == st) & (tp['method'] != 'pinn')]
+    if not len(r):
+        return ''
+    b = r.loc[r['mpsp_mape'].idxmin()]
+    n, lab = int(b['n_configs']), METHOD_LABEL.get(b['method'], b['method'])
+    txt = (f' vs. best baseline {lab} {100 * b["mpsp_mape"]:.1f} % (PI-NN - {lab} '
+           f'{100 * b["diff_reference_minus_method"]:+.1f} pp, 95 % configuration-cluster bootstrap CI '
+           f'[{100 * b["ci_lo"]:+.1f}, {100 * b["ci_hi"]:+.1f}] over {n} configurations)')
+    if n < 10:
+        txt += f'; with {n} held-out configurations this test cannot rank the methods'
+    return txt
 
 
 def ablation_deltas(res):
@@ -2409,6 +2594,61 @@ def intervals_section(fin, protocol):
     return '\n'.join(L)
 
 
+def interval_extrapolation_section(shc, cfx):
+    """Markdown: per-key cross-fitted coverage (new configurations) and the
+    coverage of the shipped quantiles on the leave-one-feedstock-out /
+    leave-one-product-out out-of-fold scores (new feedstocks / products)."""
+    L = []
+    if cfx is not None and len(cfx):
+        c = cfx[(cfx['scheme'] == 'config') & (cfx['method'] == 'pinn') & (cfx['weighting'] == 'sample')]
+        if len(c):
+            L.append('**Coverage per interval key for a new configuration** (cross-fitted LOCO estimate, PI-NN, '
+                     'nominal 0.90; pooled over samples = the quantity the intervals target, mean / 10 % quantile '
+                     'over configurations): ' + '; '.join(
+                         f'{x.key} {x.pooled:.2f} / {x.mean:.2f} / {x.q10:.2f}' for x in c.itertuples())
+                     + '. The recovery (g) intervals under-cover (pooled well below nominal, and far below it '
+                     'for the TAL and lactic recoveries); MPSP is below nominal when pooled over samples and above '
+                     'it averaged over configurations.\n')
+    if shc is not None and len(shc):
+        t = shc[shc['scheme'] != 'config']
+        if len(t):
+            L.append('**The intervals are not calibrated for a new feedstock or a new product.** Coverage of the '
+                     'shipped quantiles (`models/release`, calibrated on the LOCO scores) on the out-of-fold scores '
+                     'of leave-one-feedstock-out (`feedstock`) and leave-one-product-out (`product`), re-scored '
+                     'with the release spread floors (`report_checks.shipped_quantile_coverage`, '
+                     '`tables/interval_coverage_by_scheme.csv`; nominal 0.90; `group_*` over the held-out '
+                     'feedstocks / products):\n')
+            L.append(md_table(t[['scheme', 'key', 'q', 'n', 'n_groups', 'pooled', 'group_mean', 'group_min',
+                                 'worst_group']]) + '\n')
+            L.append('`CoefficientPredictor.predict` / `mpsp` flag rows whose feedstock, fermentation product or '
+                     'product pair is not in training (`intervals_calibrated = False`, with an '
+                     'ApplicabilityWarning).\n')
+    return '\n'.join(L)
+
+
+def ad_section(ad, per):
+    """Markdown: applicability-domain validation on the test sets."""
+    if ad is None or not len(ad):
+        return ''
+    L = ['**Applicability domain on the test sets** (`models/final_dev`, features as in training; '
+         '`in_domain` = kNN distance <= training threshold and no input outside the training range; report '
+         'only; `tables/applicability_domain_test.csv`). Fold models of the CV are not saved, so the domain '
+         'is validated on the test sets only:\n']
+    t = ad.copy()
+    for c in ('mape_in_domain', 'mape_out_of_domain'):
+        t[c] = 100 * t[c]
+    L.append(md_table(t) + '\n\n(MAPE in %.)\n')
+    if per is not None and len(per):
+        q = per[per['set'] == 'test_ood'].copy()
+        q['mpsp_mape'] = 100 * q['mpsp_mape']
+        L.append('Per held-out test configuration:\n')
+        L.append(md_table(q) + '\n')
+    L.append('The flag is informative (higher errors out of the domain, positive rank correlation of `ad_ratio` '
+             'with the error on the OOD test) but not a guarantee: in-domain samples of a new configuration can '
+             'still have large errors, and every training-like query is in the domain.\n')
+    return '\n'.join(L)
+
+
 def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
     import numpy as np
     import pandas as pd
@@ -2488,17 +2728,15 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         P(f'* LOCO restricted to the {", ".join(OOD_FAMILIES)} configurations (matched CV estimate of the OOD '
           f'test, family-balanced): PI-NN {100 * r["family_mean"]:.1f} % over {int(r["n_configs"])} '
           'configurations.')
-    for sch, d in ablation_deltas(cv['results']).items():
-        P(f'* Ablations ({_slabel(sch)}; paired over the {d["n_folds"]} folds where they ran), change in MAPE vs. '
-          'full PI-NN: ' + ', '.join(f'{METHOD_LABEL[m].replace("PI-NN ", "")} {100 * v:+.1f} pp'
-                                     for m, v in d['delta'].items()) + '.')
+    P(ablation_summary(checks.get('ablation_stats')))
     if len(fh):
+        tp = checks.get('test_paired')
         for st, lab in (('test_ood', 'held-out configurations'), ('test_id', 'in-distribution samples')):
             r = fh[(fh['set'] == st) & (fh['method'] == 'pinn')]
             if len(r):
                 P(f'* Final test, {lab} (PI-NN trained on dev): MPSP MAPE {100 * r["mpsp_mape"].iloc[0]:.1f} % '
                   f'(median {100 * r["mpsp_mape_median"].iloc[0]:.1f} %; fit MAPE {100 * r["fit_mape"].iloc[0]:.1f} %; '
-                  f'n = {int(r["n_test"].iloc[0])} samples).')
+                  f'n = {int(r["n_test"].iloc[0])} samples)' + _test_vs_baseline(tp, st) + '.')
     iv = fin.get('intervals')
     if iv is not None and len(iv):
         r = iv[(iv['method'] == 'pinn') & (iv['key'] == 'mpsp') & iv['calibration'].isin(['loco', 'holdout'])]
@@ -2512,6 +2750,27 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
               + ', '.join(f'{st} {g(st, "coverage"):.2f} / {g(st, "coverage_cfg_mean"):.2f}' for st in sets)
               + f'; cross-fitted estimate pooled {g(sets[0], "crossfit_pooled"):.2f} / mean over configurations '
               f'{g(sets[0], "crossfit_mean"):.2f}.')
+        rg = iv[(iv['method'] == 'pinn') & (iv['key'] == 'g') & iv['calibration'].isin(['loco', 'holdout'])]
+        if len(rg):
+            gg = lambda st, c: float(rg[rg['set'] == st][c].iloc[0])
+            sets = [st for st in ('test_ood', 'test_id') if (rg['set'] == st).any()]
+            P(f'* PI-NN recovery (g) intervals UNDER-cover new configurations: realized coverage pooled / mean over '
+              'configurations ' + ', '.join(f'{st} {gg(st, "coverage"):.2f} / {gg(st, "coverage_cfg_mean"):.2f}'
+                                            for st in sets)
+              + f'; cross-fitted estimate pooled {gg(sets[0], "crossfit_pooled"):.2f} / mean '
+              f'{gg(sets[0], "crossfit_mean"):.2f}, 10 % quantile over configurations '
+              f'{gg(sets[0], "crossfit_q10"):.2f} (section 6).')
+    shc = checks.get('shipped_coverage')
+    if shc is not None and len(shc):
+        cv_ = lambda sch, k: shc[(shc['scheme'] == sch) & (shc['key'] == k)]
+        parts = [f'{lab} MPSP {float(cv_(sch, "mpsp")["pooled"].iloc[0]):.2f}, g {float(cv_(sch, "g")["pooled"].iloc[0]):.2f}'
+                 for sch, lab in (('feedstock', 'new feedstock'), ('product', 'new product'))
+                 if len(cv_(sch, 'mpsp')) and len(cv_(sch, 'g'))]
+        if parts:
+            P('* The intervals are calibrated for new configurations of KNOWN feedstocks and products only: '
+              'coverage of the shipped (release) quantiles on the leave-one-feedstock-out / leave-one-product-out '
+              'out-of-fold scores (pooled over samples; nominal 0.90): ' + '; '.join(parts)
+              + ' (section 6; `predict()` flags such rows `intervals_calibrated = False`).')
     P('')
     P(v1_comparison(fh, head, v1))
     P(changes_since_v1(ctx))
@@ -2530,14 +2789,38 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
     P(md_table(bio.reset_index(), pct_cols=('median_fit_mape',)) + '\n\n(median_fit_mape in %)\n')
     nf = checks.get('noise_floor') or {}
     if nf.get('n_configs'):
-        P(f'Noise floor of random samples (unobserved biorefinery-specific `bp_*` draws; '
-          f'`evaluate.noise_floor`, within-configuration 5-fold ridge on the observable inputs, '
-          f'{nf["n_configs"]} development configurations with >= 10 random samples): MPSP MAPE '
-          f'{100 * nf["floor_mape_cfg_gmean"]:.1f} % (configuration geo-mean; mean '
+        rr = checks.get('random_cv_random_samples') or {}
+        rtxt = ', '.join(f'{METHOD_LABEL[m]} {100 * rr[m]:.1f} %' for m in BASE_METHODS if m in rr)
+        P(f'Within-configuration linear baseline for random samples (`evaluate.noise_floor`: per development '
+          f'configuration with >= 10 random samples, {nf["n_configs"]} configurations, a 5-fold ridge on the '
+          f'observable inputs): MPSP MAPE {100 * nf["floor_mape_cfg_gmean"]:.1f} % (configuration geo-mean; mean '
           f'{100 * nf["floor_mape_cfg_mean"]:.1f} %), vs. {100 * nf["const_mape_cfg_gmean"]:.1f} % for the '
-          f'configuration mean and {100 * nf["fit_mape_cfg_gmean"]:.1f} % for the 4-coefficient fit itself. '
-          'Spec-determined samples (baseline / productivity: every `bp_*` at baseline) have no such noise; '
-          'the CV tables report both kinds separately (`*_spec`, `*_random`). `tables/noise_floor.csv`.\n')
+          f'configuration mean and {100 * nf["fit_mape_cfg_gmean"]:.1f} % for the 4-coefficient fit itself. It is '
+          'NOT a noise floor: it is the model-form error of a linear model fitted on 20-60 samples per '
+          'configuration. Adding the unobserved biorefinery-specific `bp_*` draws to its inputs makes it worse '
+          f'({100 * nf.get("with_bp_mape_cfg_gmean", float("nan")):.1f} %), and the networks predict random '
+          'samples better in random CV (random samples, configuration geo-mean, mean over folds: '
+          f'{rtxt}). The CV tables report spec-determined (baseline / productivity: every `bp_*` at baseline) and '
+          'random samples separately (`*_spec`, `*_random`). `tables/noise_floor.csv`.\n')
+    cov = checks.get('data_coverage')
+    if cov is not None and len(cov):
+        short = cov[(cov['retained'] < cov['planned'].fillna(0)) | (cov['empty_reset_failed'] > 0)]
+        P(f'Sample coverage per configuration (`tables/data_coverage.csv`; planned = 1 baseline + productivity + '
+          'random samples of `data_generation/scripts/run_all.sh`, completed = `sample_end` written, '
+          '`empty_reset_failed` = completed without any simulated point because the system state could not be '
+          'restored after a convergence failure -- a harness defect fixed after this run (such samples are now '
+          'retried); retained = after the quality filters). '
+          + (f'{len(short)} of {len(cov)} configurations keep fewer samples than planned:\n' if len(short)
+             else 'Every configuration keeps its planned samples.\n'))
+        if len(short):
+            P(md_table(short) + '\n')
+            one = short[short['retained'] <= 1]['config_id'].tolist()
+            P((f'{", ".join(f"`{c}`" for c in one)} ' + ('keeps' if len(one) == 1 else 'keep') + ' only one '
+               'sample (a LOCO fold with a single held-out sample). ' if one else '')
+              + 'Samples rejected by the quality filters are not missing at random where a feasibility limit '
+              'interacts with the sampled parameters (e.g. the lactic SSCF configurations lose the random samples '
+              'of low feedstock carbohydrate content, which reach the 40 g/L minimum titer at too few yields). '
+              'Known data defects and their effects: DESIGN.md section 1 ("Known data defects").\n')
     flags = checks.get('data_flags')
     if flags is not None and len(flags):
         P('Data-consistency flags (configurations to inspect; they are kept): '
@@ -2603,6 +2886,11 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
                                                         'mpsp_mape_cfg_gmean', 'fit_mape'))
       + '\n\n(MAPE columns in %.) **Selected:** ' + ', '.join(f'{k}={v}' for k, v in hpo['selected'].items())
       + '. `tables/hpo_candidates.csv`, `figures/hpo_search.png`.\n')
+    P('**Only the PI-NN is tuned.** The plain MLP reuses the width, depth, learning rate, weight decay and '
+      'dropout selected for the PI-NN; gradient boosting and kNN use fixed settings (`evaluate.py`), ridge its '
+      'internal generalized-CV choice of the penalty. The PI-NN also profits from the non-nested selection on '
+      'the development folds (section 5). Comparisons with the baselines are therefore tilted toward the '
+      'PI-NN by an unknown amount.\n')
     # cv
     head = cv['headline']
     P('## 5. Generalization CV estimates (development set)\n')
@@ -2625,6 +2913,20 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
             'fit_mape'] + [f'R2_{k}' for k in TARGETS]
     P(md_table(head[cols], pct_cols=('mpsp_mape', 'mpsp_mape_se', 'mpsp_mape_median', 'mpsp_mape_pooled',
                                      'fit_mape')) + '\n\n(MAPE columns in %.)\n')
+    ab = checks.get('ablation_stats')
+    if ab is not None and len(ab):
+        P('**Ablations, paired over folds** (variant - full PI-NN fold MPSP MAPE, in percentage points; '
+          '`n_variant_better` = folds where the variant has the lower error; `dominant_fold` = the fold with the '
+          'largest |difference| and `mean_without_dominant` the mean without it; Wilcoxon signed-rank p; '
+          '`tables/cv_ablation_paired.csv`, per fold `tables/cv_ablation_per_fold.csv`). The ablations ran on '
+          'a stratified subset of the LOCO folds; the plain MLP is shown on all folds and on that subset:\n')
+        t = ab.copy()
+        for c in ('mean', 'median', 'se', 'dominant_delta', 'mean_without_dominant'):
+            t[c] = 100 * t[c]
+        P(md_table(t[['scheme', 'variant', 'subset', 'n_folds', 'mean', 'se', 't', 'median', 'n_variant_better',
+                      'n_variant_worse', 'p_wilcoxon', 'dominant_fold', 'dominant_delta',
+                      'mean_without_dominant']]) + '\n')
+        P(ablation_summary(ab).replace('* ', '') + '\n')
     P('Per-coefficient MAE (pooled out-of-fold, natural units) and constraint-violation rates:\n')
     vcols = ['scheme', 'method'] + [f'MAE_{k}' for k in TARGETS] + ['viol_mono_y', 'viol_mono_t', 'viol_positive',
                                                                      'viol_mono_r', 'viol_g_le_gmax']
@@ -2671,7 +2973,21 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         if pc is not None and len(pc):
             P('PI-NN per held-out test configuration:\n')
             P(md_table(pc, pct_cols=('mpsp_mape', 'mpsp_mape_median', 'fit_mape')) + '\n')
+        tp = checks.get('test_paired')
+        if tp is not None and len(tp):
+            t = tp.drop(columns=['n_samples']).copy()
+            for c in ('mpsp_mape', 'diff_reference_minus_method', 'ci_lo', 'ci_hi'):
+                t[c] = 100 * t[c]
+            P('**Paired comparison on the test sets** (MPSP MAPE pooled over the TY points, %; '
+              '`diff_reference_minus_method` = PI-NN - method in percentage points with a 95 % percentile bootstrap '
+              'CI that resamples the test configurations, the same draws for every method; '
+              '`frac_boot_reference_better` = fraction of draws in which the PI-NN has the lower error; '
+              '`tables/final_test_paired.csv`). With 4 held-out configurations the OOD test cannot rank the '
+              'methods: its CIs are those of 4 clusters.\n')
+            P(md_table(t) + '\n')
         P(intervals_section(fin, protocol))
+        P(interval_extrapolation_section(checks.get('shipped_coverage'), cv.get('crossfit')))
+        P(ad_section(checks.get('ad'), checks.get('ad_per_config')))
     else:
         P('Final models failed (see log).\n')
     # release
@@ -2689,9 +3005,12 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           f'{rel["epochs"]}, best epochs {rel.get("best_epochs")}. In-sample MPSP MAPE (NOT a generalization '
           f'estimate): {ins_txt}.\n')
         if conf:
+            cfm = (conf.get('crossfit') or {}).get('mpsp') or {}
             P(f'Intervals: split-conformal quantiles from {conf.get("source")} ({conf.get("n")} samples of '
               f'{conf.get("n_calib_groups")} configurations, weighting `{conf.get("weighting")}`, cross-fitted MPSP '
-              f'coverage {_fmt(conf.get("mpsp_coverage_cv", float("nan")))}): the same scores as `final_dev`, '
+              f'coverage {_fmt(cfm.get("pooled", float("nan")))} pooled over samples (the quantity the intervals '
+              f'target), {_fmt(conf.get("mpsp_coverage_cv", float("nan")))} averaged over configurations '
+              '(`conformal["mpsp_coverage_cv"]` of the checkpoint)): the same scores as `final_dev`, '
               'none of them from a test sample. The release ensemble trains on more data than the CV fold '
               'ensembles; both its errors and its member spread shrink with more data, so the direction of the '
               'resulting coverage error is unknown; flagged `coverage_guaranteed = False` in its checkpoint.\n')
@@ -2701,6 +3020,14 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           + (f'(e.g. {rc.get("example_config")} baseline: ' + ', '.join(f'{k}={v:.4g}' for k, v in
                                                                          rc.get('example', {}).items())
              + f'; intervals reported: {rc.get("intervals")}).' if rc.get('ok') else f'({rc.get("error")}).') + '\n')
+        if rc.get('ok') and 'rows_max_rel' in rc:
+            P(f'User API vs. the validated path (`experiments.api_consistency`): `CoefficientPredictor.predict` on all '
+              f'{rc["n_rows"]} training rows reproduces `Ensemble.predict_samples` (behind every CV and test number '
+              f'of this report) to a max relative difference of {rc["rows_max_rel"]:.1g}; the by-name query '
+              '(`config_id`, names, productivity and prices only) of each of the '
+              f'{rc["n_configs"]} configurations reproduces the MPSP of its baseline sample at its baseline yield '
+              f'and titer to {rc["by_name_max_rel_mpsp"]:.1g} (e.g. {rc.get("example_config")} by name: '
+              + ', '.join(f'{k}={v:.4g}' for k, v in rc.get('example_by_name', {}).items()) + ').\n')
     # checks
     P('## 8. Physical-consistency and interpretability checks\n')
     pub = checks['pub']
@@ -2722,6 +3049,24 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           'float32 round-off of the total coefficient = exactly linear in price, as designed.\n')
         P(md_table(sens[sens['coefficient'].isin(['a', 'b', 'c'])].reset_index(drop=True)) + '\n')
     ch = checks['channels']
+    pre = checks.get('price_response')
+    if pre:
+        P('**(ii-b) Price response per configuration**: error of the predicted MPSP response to a 100 % change '
+          'of each price, (dMPSP/dp predicted - simulated) x p / MPSP, in % of MPSP, at the configuration\'s '
+          'baseline yield and titer (median over its samples; simulated = decomposed simulation intensities with '
+          'the fitted g; `report_checks.price_response_error`, `tables/price_response_<model>.csv`). The '
+          'predictions are exactly linear in the prices, but the intensities they multiply are learned, and are '
+          'biased for some configurations even in-sample:\n')
+        for name, t in pre.items():
+            q = t.set_index('config_id')
+            big = q[(q.abs() > 0.10).any(axis=1)]
+            P(f'*{name}*: median |error| over configurations ' + ', '.join(
+                f'{c.replace("_response_err", "").replace("_sensitivity_rel_err", " dMPSP/dp (relative)")} '
+                f'{100 * q[c].abs().median():.1f} %' for c in q.columns)
+              + (f'; configurations with an error above 10 % ({len(big)}):\n' if len(big) else '.\n'))
+            if len(big):
+                b = (100 * big).round(1).reset_index()
+                P(md_table(b) + '\n')
     P('**(iii) Channel breakdown** of the held-out test configurations (final PI-NN; mean over each configuration\'s '
       'test samples): `tables/channel_breakdown.csv`, `figures/channels_test.png`.\n')
     if len(ch):
@@ -2736,11 +3081,19 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         P(md_table(pd.DataFrame(agg)) + '\n')
     # figures & timings
     P('## 9. Figures\n')
-    P('\n'.join(f'* `{os.path.relpath(f, a.out)}`' for f in figs) + '\n')
+    P('\n'.join(f'* `{os.path.relpath(f, a.out)}`' + (f' -- {FIGURE_CAPTIONS[os.path.basename(f)]}'
+                                                        if os.path.basename(f) in FIGURE_CAPTIONS else '')
+                 for f in figs) + '\n')
     P('## 10. Reproduction and timings\n')
     P(f'`{" ".join(ctx["argv"])}` (PYTHONPATH=/home/user/fermentation_insights). Python {platform.python_version()}, '
       f'{ctx["versions"]}. Every fit is cached under `cache/` (keyed by data hash, split, job and code version).\n')
     P(md_table(timings) + '\n')
+    tc = checks.get('timings_compute_run')
+    if tc is not None and len(tc):
+        tot = tc[tc['stage'].astype(str).str.startswith('total')]['minutes']
+        P('Every fit of this run was cached (the report was regenerated from the cached fits); the stage '
+          'timings of the run that computed them are in `tables/timings_compute_run.csv`'
+          + (f' (total {float(tot.iloc[0]):.1f} min).' if len(tot) else '.') + '\n')
     path = os.path.join(a.out, 'REPORT.md')
     with open(path, 'w') as fh_:
         fh_.write('\n'.join(L))
@@ -2968,6 +3321,7 @@ def main(argv=None):
     checks['sens'].to_csv(os.path.join(tdir, 'price_sensitivity.csv'), index=False)
     checks['channels'] = channel_table(fp, S, test_cfgs)
     checks['channels'].to_csv(os.path.join(tdir, 'channel_breakdown.csv'), index=False)
+    report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp)
     T('tables', t0)
 
     # ---- figures
@@ -3013,8 +3367,8 @@ def main(argv=None):
     if len(cv['headline']):
         _fig('cv_mape_by_scheme.png', fig_cv_bars, cv['headline'])
         # ablations vs the PI-NN / plain MLP on the same folds (the ablations may skip LOCO folds)
-        _fig('ablations.png', fig_ablation, headline(ablation_results(cv['results'], cv.get('ablation_folds')),
-                                                     METHOD_ORDER))
+        if checks.get('ablation_per_fold') is not None and len(checks['ablation_per_fold']):
+            _fig('ablations.png', fig_ablation, checks['ablation_stats'], checks['ablation_per_fold'])
     if fp and not fp['error'] and 'test_ood' in fp['evals']:
         ev = fp['evals']['test_ood']
         st = S.loc[ev['ids']].reset_index(drop=True)
@@ -3065,7 +3419,21 @@ def main(argv=None):
     timings['note'] = ''
     timings.loc[len(timings)] = dict(stage='median s per (member-epoch x training sample)', minutes=np.nan,
                                      note=f'{sec_per:.3g}')
-    timings.to_csv(os.path.join(tdir, 'timings.csv'), index=False)
+    # a run whose fits were all cached (e.g. a report regenerated after a text
+    # change) keeps the stage timings of the run that computed them
+    tpath, cpath = os.path.join(tdir, 'timings.csv'), os.path.join(tdir, 'timings_compute_run.csv')
+    checks['timings_compute_run'] = None
+    if runner is not None and getattr(runner, 'n_run', 1) == 0:
+        if not os.path.exists(cpath) and os.path.exists(tpath):
+            old = pd.read_csv(tpath)
+            tot = old[old['stage'].astype(str).str.startswith('total')]['minutes']
+            if len(tot) and float(tot.iloc[0]) > float(timings.iloc[-2]['minutes']):
+                old.to_csv(cpath, index=False)
+        if os.path.exists(cpath):
+            checks['timings_compute_run'] = pd.read_csv(cpath)
+    elif os.path.exists(cpath):
+        os.remove(cpath)
+    timings.to_csv(tpath, index=False)
 
     rpath = write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, made, timings)
     log(f'figures: {len(made)} written{"; errors: " + str(figure_errors) if figure_errors else ""}')
