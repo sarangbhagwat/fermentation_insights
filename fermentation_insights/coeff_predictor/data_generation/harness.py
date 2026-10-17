@@ -635,6 +635,13 @@ def run_campaign(adapter: BiorefineryAdapter, out_dir: str, *,
             if sample_limit is not None and n_run >= sample_limit:
                 return path
             cid = config['config_id']
+            # sample ids are deterministic (index 0 .. n_total-1), so a fully
+            # completed configuration can be skipped without loading it
+            n_total = 1 + n_productivity + n_random
+            if all(f'{adapter.name}|{cid}|s{seed}|{i}' in done for i in range(n_total)):
+                if verbose:
+                    print(f'=== {adapter.name}: {cid} already complete', flush=True)
+                continue
             if verbose:
                 print(f'\n=== {adapter.name}: loading {cid}', flush=True)
             t0 = time.time()
