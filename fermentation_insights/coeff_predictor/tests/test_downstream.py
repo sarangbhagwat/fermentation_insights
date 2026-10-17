@@ -127,14 +127,16 @@ def test_features_downstream_switch(broth_tables):
     assert not any(c.startswith('separation_principle==') for c in dsp.columns)
     assert any(c.startswith('water_removal_route==') for c in dsp.columns)
     assert 'ds_sep__crystallization' in dsp.columns and 'phys_base_per_product' in dsp.columns
-    assert dsp.columns[-1] == STRUCTURAL[0] and dsp.structural_index(STRUCTURAL[0]) == dsp.n_features - 1
-    assert dsp.encoder_index() == list(range(dsp.n_features - 1))
+    ns = len(STRUCTURAL)
+    assert dsp.columns[-ns:] == list(STRUCTURAL)
+    assert dsp.structural_index(STRUCTURAL[0]) == dsp.n_features - ns
+    assert dsp.encoder_index() == list(range(dsp.n_features - ns))
     assert base.encoder_index() == list(range(base.n_features))
     b = dsp.transform(samples)
     gate = b.X[:, dsp.structural_index(STRUCTURAL[0])]
     broth = samples['fermentation_product'].eq('BrothAcid').to_numpy()
     assert (gate[broth] == 0).all() and (gate[~broth] == 1).all()
-    assert not dsp.continuous_mask()[-1]
+    assert not dsp.continuous_mask()[-ns:].any()
     # derived values
     df = dsp._prepare(samples)
     r = df[broth].iloc[0]
@@ -150,7 +152,7 @@ def test_features_downstream_switch(broth_tables):
     np.testing.assert_allclose(re.transform(samples).X, b.X)
     q = samples.drop(columns=list(ds.FIELDS)).iloc[:1]
     bq = dsp.transform(q, strict=False, missing_categorical='other')
-    assert STRUCTURAL[0] in bq.imputed_rows[0] and bq.X[0, -1] == 1.
+    assert STRUCTURAL[0] in bq.imputed_rows[0] and bq.X[0, dsp.structural_index(STRUCTURAL[0])] == 1.
     # old specs (no 'downstream' key) load with it off
     d = base.to_dict()
     d.pop('downstream'), d.pop('structural')

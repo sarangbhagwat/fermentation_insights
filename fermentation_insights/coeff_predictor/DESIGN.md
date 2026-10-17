@@ -446,6 +446,51 @@ productivity scheme holds out ~30 % of the configurations from every member
 (calibration + early-stopping groups by configuration), so its error is
 mostly that of unseen configurations (5 % with sample-level hold-outs vs 15
 %); r-extrapolation is measured by the sample-level variant.
+**Extrapolation safeguards** (2026-10-17, round 4; library defaults off,
+`experiments.py` default on, CLI `--no-extrapolation-safeguards`,
+`experiments.EXTRAPOLATION_SAFEGUARDS`; all need `FeatureSpec(downstream=True)`,
+which appends the raw structural inputs below after `struct_water_removal`;
+physics model only, the plain MLP is unchanged; the sklearn baselines see the
+two new structural columns in their design matrix: their development fold
+means change by ≤ 0.6 (ridge), 2.4 (HGB) and 0.0 (kNN) points under LOFO, LOPO
+and 5-fold LOCO):
+
+* *Sugar-availability prior* (`ModelConfig.fs_prior`): the structured
+  feedstock intensity becomes `b'_fs = exp(z)/w_sugar` with
+  `z = log(1/s_avail) + Δz`, where `s_avail = struct_sugar_availability =
+  (free sugars + starch + s · structural polysaccharides)/w_sugar`
+  (glucose-eq., `features.sugar_availability`; `s` = `p_saccharification_yield`,
+  default 0.9, for a lignocellulosic feedstock, 0 otherwise: sugarcane bagasse
+  is burned) and the network predicts only the residual `Δz` (centered on
+  its training median `fs_prior_center`; `fs_eta_bound` does not apply). On
+  the development set the prior is 1 (corn, glucose), 1/0.90 (corn stover)
+  and 1/0.59 (sugarcane) against configuration medians of `b'_fs·w_sugar` of
+  0.93–1.01, 1.04–1.19 and 1.71–1.80; the residual's spread (sd 0.12, range
+  −0.8 … +0.07, the low end lactic's b′/d′ split) is 40 % of that of `z` (0.29).
+  Without it, `z` of a new feedstock is whatever the feedstock sub-network
+  extrapolates (corn: 1/η = 1.50 for every corn sample, truth 0.93–1.01).
+* *Feedstock-input clipping* (`ModelConfig.clip_groups`, here `('feedstock',
+  'pretreatment')`): those groups' continuous columns are clipped to their
+  training range (margin `max(clip_inputs, 0)`), independently of the HPO
+  dimension `clip_inputs`. Minor mass fractions have a tiny training spread
+  (`fs_w_other` ∈ {0, 0.0145, 0.015}, sd 0.006), so corn (0.10–0.13) enters
+  at +18 sd (+9.5 sd beyond the training maximum after the 10-sd clip of the
+  FeatureSpec) and saturates every sub-network that sees the feedstock group
+  (11 of the 15 outputs). Clipping alone does not fix the feedstock intensity
+  (corn 1/η̂ 1.30 vs truth 0.98, sugarcane 0.97 vs 1.76–1.80; 3 seeds), the prior alone neither (one seed: the saturated residual gives
+  1/η̂ 0.77); together corn gets 1.03 and sugarcane 1.63 (§6, round 4).
+* *Neutralization gate* (`ModelConfig.neutralization_gate`): the whole
+  neutralization channel is multiplied by `struct_neutralization` (0 when the
+  fermentation product has no acid group and no neutralizing / pH-control
+  agent or neutralization degree is given: nothing to neutralize or
+  acidulate; `features.neutralization_factor`; unknown → 1). Data check
+  (`check_constraints` row `neutralization_gate`, the gate is disabled when
+  the data violate it): the channel is exactly 0 for all 399 gate-0
+  development samples (ethanol, isobutanol) and nonzero for TAL (NaOH pH
+  control, no acid group), HP low-pH and neutralized lactic (low-pH lactic, an
+  acid without agent, is 0 but ungated). Without it, a held-out
+  alcohol inherits TAL's or HP's neutralization cost (ethanol LOPO: +13–18 %
+  of the true numerator).
 
 ## 4. Loss
 
@@ -590,7 +635,12 @@ price, so prices outside the training range are reported separately.
   spread; intervals calibrated by split-conformal scaling on a held-out
   calibration set of whole groups (configurations by default; in CV the
   inner calibration / early-stopping splits group like the outer scheme:
-  feedstock, fermentation product or configuration). One score per
+  feedstock, fermentation product or configuration in the library
+  (`train.SCHEME_GROUP`), whereas `experiments.INNER_GROUP` holds out whole
+  configurations for leave-one-feedstock-out and, since round 4, also for
+  leave-one-product-out: product-grouped early stopping on a single unseen
+  product stops the members within the first ~25 epochs, nearly untrained;
+  intervals are then calibrated for new configurations). One score per
   calibration sample (MPSP: max over its points); if there are too few
   samples for the level the quantile is +inf (no interval is reported);
   `ens.conformal` stores n, the guaranteed level, the grouping actually used
@@ -944,6 +994,156 @@ mean ± sd over seeds, paired Δ (t over 3 seeds):
   opt-in titer-domain feature (`FeatureSpec(domain_features=True)`, group
   'titer_domain', `phys_log10_t_ref` = log10 sqrt(t_min·t_max)) is kept for
   reproducibility only.
+### Development-set diagnostics, round 4: catastrophic extrapolation (2026-10-17; never on test data)
+
+Development set 1306 samples / 37 configurations (`experiments.development_set`);
+pipeline settings (downstream features, water gate, masking 'physics' with
+masked width/depth = width/2, depth − 1), HPO-selected hyperparameters
+(width 64, depth 4, w_ch 1, w_phys 0.03, ...), `calib_frac` 0.15 and the v1
+`INNER_GROUP` unless stated; one member per fit (two for the reproduction);
+the same folds, inner splits and seeds for every variant (paired);
+leave-configurations-out as the 5-fold biorefinery-stratified split of rounds
+1–3 (the pipeline's 37-fold LOCO was too expensive to repeat per variant).
+
+*Reproduction* (2 members, seeds 0–2): leave-one-feedstock-out corn 145 ± 41 %
+(v1 150), leave-one-product-out ethanol 154 ± 65 % (v1 177), isobutanol
+210 ± 81 % (v1 148). Per-channel error of the held-out numerator (% of the
+true numerator, mean over the configuration's samples and seeds):
+
+| held out | configuration | MAPE | ĝ / g | 1/η̂ / 1/η | feedstock | electricity | nat. gas | neutral. | materials | capex ferm. | capex util. | coproducts |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| corn | HP / TAL / succinic (7 cfgs) | 23–47 | ≈ g (TAL +4–7 %) | 1.50 / 0.93–1.01 | +26…+40 | −6…−12 | ≈ 0 | ≈ 0 | −2…+11 | +1…+7 | +3…+7 | ≈ 0 |
+| corn | ethanol_corn | 147 | 0.98 / 0.99 | 1.50 / 1.00 | +77 | −50 | −10 | +4 | +13 | +10 | +41 | +61 |
+| corn | IBO_EtOH_corn | 287 | 0.92 / 0.98 | 1.50 / 0.98 | +136 | −93 | −43 | +3 | +34 | +12 | +17 | +181 |
+| product | ethanol (corn / stover / cane) | 202 / 183 / 87 | 0.81 / 1.00 | 1.06 / 1.18 / 1.16 vs 1.00 / 1.18 / 1.80 | +12 / +6 / −20 | −29 / +18 / +14 | −3 / +17 / +9 | +18 / +18 / +13 | +43 / +25 / +32 | +21 / +21 / +17 | +31 / +11 / −14 | +56 / 0 / −2 |
+| product | IBO_EtOH_corn | 210 | 0.92 / 0.98 | 1.09 / 0.98 | +35 | −49 | −34 | +13 | +17 | +18 | +3 | +164 |
+
+Causes. (i) *Leave-one-feedstock-out corn*: corn's minor mass fraction
+`fs_w_other` (0.10–0.13) lies +9.5 training sd beyond the other feedstocks'
+(0–0.015, sd 0.006; standardized +18, cut at the FeatureSpec's 10-sd clip);
+`fs_w_starch`/`fs_w_fiber` are constant in training and dropped, the
+`feedstock_type` level is unseen. The feedstock sub-network saturates and
+returns one constant 1/η = 1.50 for every corn sample (truth 0.93–1.01): +26
+to +40 % of the numerator for HP/TAL/succinic and +77 / +136 % for ethanol /
+IBO, whose costs are feedstock-dominated. It is not an unbounded-`z`
+blow-up: 1.50 lies inside the training range of 1/η (0.52–1.80), so a
+data-derived bound on `z` would not bind. The rest of the corn error is
+corn-specific process structure no other feedstock shows: the DDGS / ethanol
+coproduct credits (−60 / −173 % of the numerator, predicted ≈ 0) and corn
+ethanol's purchased electricity and missing boiler (electricity −50 %,
+capital of utilities +41 %). (ii) *Leave-one-product-out*: with the inner
+calibration and early-stopping hold-outs grouped by product, every member
+trains on 4 of the 6 remaining products and early-stops on one unseen product
+whose validation loss is lowest in the first ~25 epochs (stops at 41–66 of
+300 with patience 40): the members are nearly untrained, e.g. the
+product-blind feedstock intensity of a held-out sugarcane product is 1/η =
+1.0–1.2 instead of 1.80. On top come g (ethanol ĝ 0.81 vs 1.00), the
+neutralization cost a held-out alcohol inherits from TAL / HP (+13–18 %),
+materials, fermentation capital and IBO's ethanol coproduct credit (no other
+product has it). The HPO-selected hyperparameters are not the cause (below).
+Channel outputs stay inside the training range: 0–0.5 % of the predicted
+(sample, channel, coefficient) entries of these folds lie outside the
+training range ± 5 %, so bounding channel outputs would not bind either.
+
+*The `fs_eta_le_1` check* (`b'_fs·w_sugar ≥ 1`, disabled by
+`apply_constraint_report` because it fails for 33 % of the development
+samples): lactic (3 configurations; 0.52–0.85, but the effective
+1/η(y, t) = y·w_sugar·I_fs(y, t) ≥ 1.02 at every point: its feedstock sits
+partly in d′ = 44–56, a basis split, not a physical violation); TAL corn,
+glucose, SA-corn and SA-glucose (0.86–1.06; the effective 1/η falls to
+0.68–0.72 at y = 0.267, t = 10 g/L and is < 1 at 76–80 % of their points:
+the data imply less sugar than the product needs, the substrate-basis defect
+D8, c′ = −17 … −22); HP on corn and glucose (8 configurations, 0.93–0.99,
+effective ≥ 0.97, d′ 0.8–2.2: ≤ 3 %); IBO 0.98 and ethanol corn 0.999
+(rounding). 13 % of all development points have an effective 1/η < 1.
+
+*Safeguards* (§3, *Extrapolation safeguards*; `pnc` = sugar-availability
+prior + neutralization gate + feedstock-input clipping), point MAPE %, mean ±
+sd over seeds; paired difference to the baseline (the pipeline model without them) with t.
+
+Leave-one-feedstock-out, leave-configurations-out and random: seeds 0–4;
+leave-one-product-out: seeds 0–2 with the v1 product-grouped inner hold-outs
+(`sel`, `pnc`) and seeds 0–4 with configuration-grouped ones (`pgrp`,
+`pncg`):
+
+| scheme (folds) | held out | baseline | `pnc` | `pnc` − baseline (t) |
+|---|---|---|---|---|
+| leave-one-feedstock-out | fold mean | 63.4 ± 14.5 | 34.4 ± 8.7 | −28.9 ± 12.2 (−5.3) |
+| | corn | 127.5 ± 48.1 | 42.6 ± 5.1 | −84.8 (−4.1) |
+| | corn stover | 40.0 ± 14.7 | 36.6 ± 6.0 | −3.3 (−0.5) |
+| | glucose | 35.9 ± 13.1 | 7.7 ± 2.7 | −28.2 (−4.7) |
+| | sugarcane | 50.2 ± 27.4 | 50.8 ± 29.4 | +0.7 (+0.1) |
+| | configuration geo-mean | 28.6 ± 3.4 | 17.0 ± 0.4 | −11.7 ± 3.4 (−7.8) |
+| leave-one-product-out, v1 inner grouping | fold mean | 81.9 ± 8.8 | 78.2 ± 8.2 | −3.7 ± 0.7 (−9.6) |
+| | ethanol | 161.4 ± 84.1 | 148.0 ± 64.2 | −13.5 (−1.2) |
+| | HP | 21.5 ± 0.5 | 20.1 ± 1.5 | −1.4 (−1.7) |
+| | isobutanol | 193.3 ± 132.2 | 170.8 ± 115.0 | −22.5 (−2.2) |
+| | lactic | 58.2 ± 5.3 | 56.8 ± 6.7 | −1.4 (−1.7) |
+| | oxalic | 49.0 ± 33.8 | 61.5 ± 34.6 | +12.5 (+2.1) |
+| | succinic | 36.9 ± 14.8 | 37.1 ± 13.3 | +0.3 (+0.2) |
+| | TAL | 53.2 ± 4.8 | 53.1 ± 5.8 | −0.1 (−0.2) |
+| leave-one-product-out, configuration-grouped | fold mean | 48.3 ± 7.7 | 47.1 ± 9.4 | −1.2 ± 3.2 (−0.8) |
+| | ethanol | 65.2 ± 49.5 | 62.3 ± 41.6 | −2.9 (−0.7) |
+| | HP | 20.1 ± 4.6 | 21.0 ± 8.2 | +0.9 (+0.4) |
+| | isobutanol | 59.3 ± 8.6 | 53.9 ± 2.8 | −5.4 (−1.4) |
+| | lactic | 51.1 ± 8.9 | 48.3 ± 8.6 | −2.9 (−2.2) |
+| | oxalic | 51.2 ± 23.0 | 53.0 ± 27.3 | +1.7 (+0.8) |
+| | succinic | 42.5 ± 15.8 | 43.2 ± 16.2 | +0.7 (+0.3) |
+| | TAL | 48.9 ± 2.6 | 48.2 ± 3.7 | −0.7 (−1.0) |
+| leave-configurations-out (5) | fold mean | 32.7 ± 4.7 | 29.6 ± 4.7 | −3.1 ± 2.2 (−3.1) |
+| | configuration mean | 16.3 ± 1.8 | 15.7 ± 2.0 | −0.5 ± 1.0 (−1.2) |
+| | configuration geo-mean | 9.2 ± 1.1 | 9.3 ± 1.1 | +0.0 ± 0.7 (+0.1) |
+| random (5) | fold mean | 4.30 ± 0.09 | 4.24 ± 0.16 | −0.06 ± 0.15 (−0.9) |
+| | configuration geo-mean | 3.56 ± 0.14 | 3.45 ± 0.22 | −0.12 ± 0.20 (−1.3) |
+
+Mean |error| of the held-out feedstock channel (% of the true numerator,
+configuration-balanced, seeds 0–2), baseline / clipping only / neutralization
+gate only / `pnc`: leave-one-feedstock-out 23.2 / 12.2 / 23.4 / 3.5 (corn 46.8
+/ 21.1 / 46.6 / 7.5, sugarcane 16.3 / 19.8 / 16.3 / 4.1, glucose 25.4 / 3.9 /
+25.6 / 1.5), |log(1/η̂ ÷ 1/η)| 33 / 29 / 33 / 8 %; leave-one-product-out
+12.1 (v1 grouping) and 6.5 (configuration-grouped) → 5.7 and 2.8 with `pnc`.
+Neutralization channel, leave-one-product-out (configuration-grouped): 6.9 →
+4.5 (gate only) and 4.4 (`pnc`). Clipping alone reaches the same
+leave-one-feedstock-out MAPE (38.8 ± 9.6 %, −28.9 ± 9.5, t = −5.3; corn 51.8
+± 25.1, sugarcane 53.5) but for partly wrong reasons: corn 1/η̂ 1.30 (truth
+0.98) and sugarcane 0.97 (truth 1.76–1.80, −20 to −29 % of the numerator,
+offsetting overpredicted electricity and materials); only with the prior is
+the feedstock channel right (corn spread over seeds 3.8 vs 25.1 points). The
+gate alone: leave-one-product-out (configuration-grouped) −1.2 ± 0.9 (t =
+−2.3), ethanol −8.3; leave-one-feedstock-out −2.8 ± 2.7 (t = −1.8).
+
+With two members (seeds 0–2): corn 145 → 60 % (−85, t = −3.1), ethanol 154
+→ 145 (−10, t = −0.7), isobutanol 210 → 191 (−19, t = −2.1). The corrected
+feedstock channel is visible per configuration (leave-one-feedstock-out
+corn, 3 seeds): 1/η̂ 1.29 → 1.03, feedstock error of HP/TAL/succinic corn
++25…+38 → +4…+8 % of the numerator, their MAPE 25–49 → 6–15 %; corn stover
+1.30 → 1.11 (truth 1.04–1.19), glucose 0.98, sugarcane 1.63 (truth
+1.71–1.80); the neutralization error of held-out alcohols +13–18 → 0 %.
+Oxalic (leave-one-product-out) gets worse because the baseline was right
+for the wrong reason: its nearly untrained feedstock intensity (1/η̂ 1.00
+vs 1.79, −20 % of the numerator) offset the overpredicted electricity,
+materials and recovery (+24, +22 %, ĝ 0.87); with the prior the feedstock
+error is −1 % and the offset is gone. Remaining failures are product- or
+feedstock-specific process structure no training configuration shows
+(coproduct credits of IBO / corn ethanol, corn ethanol's missing boiler, g
+of new products), which no safeguard can supply.
+
+Hyperparameters (default vs HPO-selected, paired, seeds 0–2, one member):
+leave-one-product-out fold mean 81.3 ± 12.8 vs 81.9 ± 8.8 % (−0.7 ± 7.3,
+t = −0.2; ethanol 141 vs 161, IBO 189 vs 193); with two members ethanol
++0.3 (t 0.0) and IBO +3.4 (t 0.8); leave-one-feedstock-out the defaults are
+worse (+13.6, t = 6.8; corn 190 vs 129). The selected hyperparameters do
+not explain the gap to round 3 (masked LOPO ethanol 83 ± 10 %): the inner
+grouping does. With configuration-grouped inner hold-outs (`pgrp`, as in
+round 3) the leave-one-product-out fold mean falls from 81.9 ± 8.8 to 49.7 ±
+10.0 % (−32.2 ± 5.4, t = −10.3; ethanol 161 → 77, IBO 193 → 62, oxalic 49 →
+35, succinic 37 → 50; seeds 0–2), hence
+`experiments.INNER_GROUP['product'] = 'config_id'` (like feedstock). Under
+that grouping the safeguards change leave-one-product-out by −2.9 ± 1.9
+(t = −2.7, seeds 0–2) and −1.2 ± 3.2 (t = −0.8, seeds 0–4): neutral to
+slightly better in MAPE, with the feedstock and neutralization channels
+right (above). Seeds 3–4 of `sel` / `pnc` ran after that change, so their
+leave-one-product-out folds count as `pgrp` / `pncg`.
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 

@@ -55,7 +55,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .features import FeatureSpec, ApplicabilityDomain, PRICE_COLUMNS, W_SUGAR, G_MAX
+from .features import FeatureSpec, ApplicabilityDomain, PRICE_COLUMNS, W_SUGAR, G_MAX, neutralization_factor
 from .model import (CoefficientNet, ModelConfig, make_layout, mpsp_equation_np,
                     COEFF_KEYS, INTENSITY_CHANNEL, INTENSITY_KEYS)
 
@@ -275,11 +275,22 @@ def _robust_std(x, floor):
     return max(s, floor)
 
 
-def fit_target_scales(samples, points, layout, batch, cont_mask=None):
+def fs_prior_z(spec, batch):
+    """log(1/s_avail) per row of ``batch`` (``ModelConfig.fs_prior``), or None
+    when the FeatureSpec has no ``struct_sugar_availability`` input."""
+    j = spec.structural_index('struct_sugar_availability') if hasattr(spec, 'structural_index') else None
+    if j is None:
+        return None
+    return -np.log(np.clip(np.asarray(batch.X, float)[:, j], 0.05, 1.))
+
+
+def fit_target_scales(samples, points, layout, batch, cont_mask=None, fs_prior=None):
     """Per-target means/standard deviations and physics-residual scales
     computed on the training rows only. ``batch`` is the FeatureBatch of
     ``samples`` (for prices, w_sugar and g_max); ``cont_mask`` marks its
-    continuous columns (training range ``x_lo``/``x_hi`` for input clipping)."""
+    continuous columns (training range ``x_lo``/``x_hi`` for input clipping);
+    ``fs_prior`` = :func:`fs_prior_z` (centering of the feedstock-efficiency
+    residual of ``ModelConfig.fs_prior``)."""
     coef, g, ch, q = _targets(samples, layout)
     sc = {}
     cm = np.nanmean(coef, 0)
@@ -313,10 +324,15 @@ def fit_target_scales(samples, points, layout, batch, cont_mask=None):
     sc['rest_std'] = [_robust_std(rest[:, k], 1e-6 * max(1., abs(rm[k]))) for k in range(4)]
     # structured feedstock intensity: z = log(b'_fs * w_sugar) = log(1/eta)
     if 'fs' in layout['price_keys']:
-        z = np.log(np.clip(q[:, layout['price_keys'].index('fs'), 1] * batch.w_sugar, 1e-6, None))
-        z = z[np.isfinite(z)]
+        z_all = np.log(np.clip(q[:, layout['price_keys'].index('fs'), 1] * batch.w_sugar, 1e-6, None))
+        z = z_all[np.isfinite(z_all)]
         sc['fs_logb_center'] = float(np.median(z)) if len(z) else 0.1
         sc['fs_logb_scale'] = float(max(z.std() if len(z) > 1 else 0., 0.02))
+        if fs_prior is not None:
+            dz = z_all - np.asarray(fs_prior, float)
+            dz = dz[np.isfinite(dz)]
+            sc['fs_prior_center'] = float(np.median(dz)) if len(dz) else 0.
+            sc['fs_prior_scale'] = float(max(dz.std() if len(dz) > 1 else 0., 0.02))
     ratio = g / batch.g_max
     ratio = ratio[np.isfinite(ratio)]
     rmed = float(np.clip(np.median(ratio) if len(ratio) else 0.9, 0.05, 0.995))
@@ -648,7 +664,12 @@ def build_model(spec, layout, scales, mcfg, dtype=torch.float32):
                        enc_index=spec.encoder_index() if hasattr(spec, 'encoder_index') else None,
                        gate_index=spec.structural_index('struct_water_removal')
                        if hasattr(spec, 'structural_index') else None,
-                       input_groups=spec.column_groups() if mcfg.masked else None).to(dtype)
+                       input_groups=spec.column_groups()
+                       if (mcfg.masked or getattr(mcfg, 'clip_groups', None) is not None) else None,
+                       neut_index=spec.structural_index('struct_neutralization')
+                       if hasattr(spec, 'structural_index') else None,
+                       avail_index=spec.structural_index('struct_sugar_availability')
+                       if hasattr(spec, 'structural_index') else None).to(dtype)
     m.scales_np = scales
     return m
 
@@ -694,7 +715,8 @@ def train_model(spec, samples, points, mcfg=None, lcfg=None, tcfg=None, val=None
     layout = layout or make_layout(mcfg, samples.columns)
     if scales is None or tensors is None:
         batch = spec.transform(samples) if batch is None else batch
-    scales = scales or fit_target_scales(samples, points, layout, batch, spec.continuous_mask())
+    scales = scales or fit_target_scales(samples, points, layout, batch, spec.continuous_mask(),
+                                         fs_prior_z(spec, batch))
     tb = tensors if tensors is not None else make_tensors(spec, samples, points, layout, batch,
                                                           tcfg.max_points, dt)
     vb = val_tensors
@@ -1016,6 +1038,15 @@ def check_constraints(samples, points, threshold=0.99, tol=1e-3):
         v = q_fs[:, 1] * w
         add('fs_eta_le_1', 'structural', np.where(np.isfinite(v), (v >= 1 - tol).astype(float), np.nan),
             "b'_fs * w_sugar >= 1")
+    if all(f'ch__neutralization__{k}' in samples for k in COEFF_KEYS):
+        # ModelConfig.neutralization_gate: no neutralization / acidulation cost
+        # where there is nothing to neutralize (struct_neutralization = 0)
+        nf = neutralization_factor(samples)
+        Cn = np.column_stack([col(f'ch__neutralization__{k}') for k in COEFF_KEYS])
+        en0 = (np.abs(Cn) / (np.nanstd(coef, 0) + 1e-12)).max(1) <= 1e-4
+        add('neutralization_gate', 'structural', np.where((nf == 0) & np.isfinite(Cn).all(1), en0.astype(float),
+                                                          np.nan),
+            'neutralization channel = 0 where struct_neutralization = 0', default=True)
     chs = sorted({c.split('__')[1] for c in samples.columns if c.startswith('ch__') and c.count('__') == 2})
     if chs:
         S = np.column_stack([np.nansum(np.column_stack([col(f'ch__{c}__{k}') for c in chs]), 1) for k in COEFF_KEYS])
@@ -1056,6 +1087,8 @@ def apply_constraint_report(report, mcfg, lcfg, max_g_margin=0.02):
             mcfg.g_bound = False
     if 'fs_eta_le_1' in en and not en['fs_eta_le_1']:
         mcfg.fs_eta_bound = False
+    if 'neutralization_gate' in en and not en['neutralization_gate']:
+        mcfg.neutralization_gate = False
     return mcfg, lcfg
 
 
@@ -1221,7 +1254,7 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
     spec = FeatureSpec(price_explicit=mcfg.price_explicit, **(spec_kwargs or {})).fit(s_fit)
     batch = spec.transform(s_fit)
     layout = make_layout(mcfg, samples.columns)
-    scales = fit_target_scales(s_fit, points, layout, batch, spec.continuous_mask())
+    scales = fit_target_scales(s_fit, points, layout, batch, spec.continuous_mask(), fs_prior_z(spec, batch))
     dt = _dtype(tcfg.dtype)
     tb_fit = make_tensors(spec, s_fit, points, layout, batch, tcfg.max_points, dt)
     members, hists, pass1, refit_hists, info = [], [], [], [], []

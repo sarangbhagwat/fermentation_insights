@@ -34,6 +34,15 @@ Architecture
   network's extrapolation to descriptors outside the training products
   (productivity is never clipped, nor are the prices of the price-explicit
   channels, which do not enter the encoder; the plain MLP's price features are);
+  ``clip_groups`` clips only (or also) the columns of the given feature groups,
+  e.g. the feedstock composition, whatever ``clip_inputs``;
+* optional extrapolation safeguards (off by default; need a FeatureSpec with
+  ``downstream=True``): ``fs_prior`` writes the feedstock efficiency as
+  ``z = log(1/s_avail) + dz`` with the composition's sugar availability
+  ``s_avail`` (structural input ``struct_sugar_availability``), so the network
+  predicts only the residual ``dz``; ``neutralization_gate`` multiplies the
+  neutralization channel by ``struct_neutralization`` (0 when there is
+  nothing to neutralize: no acid group, no neutralizing agent);
 * optional water-removal gate (``water_gate``; needs a FeatureSpec with
   ``downstream=True``): the c' and d' coefficients of the channels that scale
   with the broth water processed downstream (``GATED_CHANNELS``: downstream,
@@ -248,10 +257,36 @@ class ModelConfig:
     #: applicability-domain report still flags such queries. Productivity and
     #: the price-explicit prices (not encoder inputs) are never clipped.
     clip_inputs: float = -1.0
+    #: feature groups (``features.FEATURE_GROUPS``) whose continuous columns
+    #: are always clipped to their training range (margin
+    #: ``max(clip_inputs, 0)``), also when ``clip_inputs < 0`` leaves the other
+    #: columns unclipped; None = no group-specific clipping. E.g.
+    #: ('feedstock', 'pretreatment'): a new feedstock's composition is held at
+    #: the edge of the training feedstocks' range (minor mass fractions such
+    #: as 'other' or ash have a tiny training spread, so a new feedstock
+    #: lies many standard deviations outside it and saturates the feedstock
+    #: sub-networks), while the product descriptors keep their linear
+    #: extrapolation.
+    clip_groups: object = None
     #: multiply c', d' of GATED_CHANNELS / GATED_INTENSITIES by the structural
     #: input ``struct_water_removal`` (needs FeatureSpec(downstream=True);
     #: without that column it has no effect)
     water_gate: bool = False
+    #: multiply the whole neutralization channel by the structural input
+    #: ``struct_neutralization`` (0 when the fermentation product has no
+    #: acid group and no neutralizing / pH-control agent is used: nothing to
+    #: neutralize or acidulate; needs FeatureSpec(downstream=True))
+    neutralization_gate: bool = False
+    #: structured feedstock intensity with a physics prior of the sugar
+    #: availability (needs FeatureSpec(downstream=True)):
+    #: z = log(1/eta) = log(1/s_avail) + dz, s_avail = structural input
+    #: ``struct_sugar_availability`` (free sugars and starch fully, structural
+    #: polysaccharides by the saccharification yield, none without
+    #: pretreatment); the network predicts only the residual dz (centered on
+    #: its training median; ``fs_eta_bound`` does not apply), so a new
+    #: feedstock's efficiency follows its composition instead of the
+    #: network's extrapolation
+    fs_prior: bool = False
     #: channel-wise input masking (physics model only; None = one shared
     #: encoder): a preset name of CHANNEL_INPUT_PRESETS or a dict output ->
     #: feature groups. Each distinct group set gets its own sub-network fed
@@ -293,6 +328,9 @@ class ModelConfig:
             self.fs_eta_bound = self.g_bound = False
             self.channel_inputs = None
             self.r_structure = None
+            # physics-model structures (the pipeline merges them into every NN method)
+            self.fs_prior = self.neutralization_gate = False
+            self.clip_groups = None
         if not self.price_explicit:
             self.structured_fs = False
         if isinstance(self.channel_inputs, dict):
@@ -309,6 +347,15 @@ class ModelConfig:
             raise ValueError(f'r_beta must be > 0 (dMPSP/dr <= 0), got {self.r_beta}')
         if self.r_beta_learn and not lo <= self.r_beta <= hi:
             raise ValueError(f'r_beta {self.r_beta} outside r_beta_bounds {self.r_beta_bounds}')
+        if self.clip_groups in ((), [], ''):
+            self.clip_groups = None
+        if self.clip_groups is not None:
+            if isinstance(self.clip_groups, str):
+                self.clip_groups = [self.clip_groups]
+            self.clip_groups = [str(g) for g in self.clip_groups]
+            unknown = [g for g in self.clip_groups if not _known_group(g)]
+            if unknown:
+                raise ValueError(f'clip_groups: unknown feature group(s) {unknown}')
 
     @property
     def masked(self):
@@ -332,6 +379,10 @@ class ModelConfig:
         d.setdefault('channel_inputs', None)
         # ... and before the hard productivity structure: off
         d.setdefault('r_structure', None)
+        # ... and before group-restricted clipping / the neutralization gate
+        d.setdefault('clip_groups', None)
+        d.setdefault('neutralization_gate', False)
+        d.setdefault('fs_prior', False)
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
@@ -387,11 +438,18 @@ class CoefficientNet(nn.Module):
         ``cfg.water_gate``).
     input_groups : dict
         {feature group: [columns of X]} (``FeatureSpec.column_groups``);
-        needed by the channel-wise input masking (``cfg.channel_inputs``).
+        needed by the channel-wise input masking (``cfg.channel_inputs``)
+        and by ``cfg.clip_groups``.
+    neut_index : int
+        Column of ``X`` holding ``struct_neutralization`` (used if
+        ``cfg.neutralization_gate``).
+    avail_index : int
+        Column of ``X`` holding ``struct_sugar_availability`` (used if
+        ``cfg.fs_prior``).
     """
 
     def __init__(self, n_features, cfg, layout, scales, r_stats, price_index=None, enc_index=None,
-                 gate_index=None, input_groups=None):
+                 gate_index=None, input_groups=None, neut_index=None, avail_index=None):
         super().__init__()
         self.cfg = cfg
         self.layout = {k: list(v) for k, v in layout.items()}
@@ -406,6 +464,11 @@ class CoefficientNet(nn.Module):
         self.register_buffer('enc_index', torch.as_tensor(enc, dtype=torch.long), persistent=False)
         self.gate_index = None if (gate_index is None or not cfg.water_gate or cfg.kind == 'plain') \
             else int(gate_index)
+        self.neut_index = None if (neut_index is None or not cfg.neutralization_gate or cfg.kind == 'plain'
+                                   or 'neutralization' not in layout['channels']) else int(neut_index)
+        self.j_neut = layout['channels'].index('neutralization') if self.neut_index is not None else -1
+        self.avail_index = None if (avail_index is None or not cfg.fs_prior or not cfg.structured_fs
+                                    or cfg.kind == 'plain') else int(avail_index)
         self.masked = cfg.masked
         self._setup_r_structure(layout)
         if self.masked:
@@ -441,11 +504,21 @@ class CoefficientNet(nn.Module):
             self.register_buffer('gate_ch', torch.as_tensor(gc, dtype=torch.float32), persistent=False)
             self.register_buffer('gate_int', torch.as_tensor(gi, dtype=torch.float32), persistent=False)
         rs = r_stats
-        if cfg.clip_inputs >= 0:
+        self.clip_on = cfg.clip_inputs >= 0 or cfg.clip_groups is not None
+        if self.clip_on:
             lo = np.asarray(scales.get('x_lo', np.full(self.n_features, -np.inf)), float)
             hi = np.asarray(scales.get('x_hi', np.full(self.n_features, np.inf)), float)
-            buf('x_lo', np.where(np.isfinite(lo), lo - cfg.clip_inputs, -1e30))
-            buf('x_hi', np.where(np.isfinite(hi), hi + cfg.clip_inputs, 1e30))
+            margin = max(float(cfg.clip_inputs), 0.)
+            if cfg.clip_inputs < 0:
+                # only the columns of clip_groups
+                if input_groups is None:
+                    raise ValueError('clip_groups needs input_groups (FeatureSpec.column_groups)')
+                sel = np.zeros(self.n_features, bool)
+                for g in cfg.clip_groups:
+                    sel[[int(i) for i in input_groups.get(g, [])]] = True
+                lo, hi = np.where(sel, lo, -np.inf), np.where(sel, hi, np.inf)
+            buf('x_lo', np.where(np.isfinite(lo), lo - margin, -1e30))
+            buf('x_hi', np.where(np.isfinite(hi), hi + margin, 1e30))
         buf('r_mu', [rs['log_r_mean'], rs['inv_r_mean']])
         buf('r_sd', [rs['log_r_std'], rs['inv_r_std']])
         if cfg.kind == 'plain':
@@ -460,7 +533,11 @@ class CoefficientNet(nn.Module):
                 buf('int_std', scales['int_std'], (J, 4))
                 self.j_fs = layout['price_keys'].index('fs') if 'fs' in layout['price_keys'] else -1
                 c, s = float(scales.get('fs_logb_center', 0.)), float(scales.get('fs_logb_scale', 0.1))
-                if cfg.fs_eta_bound:
+                if self.avail_index is not None:
+                    # residual dz = z - log(1/s_avail), unbounded
+                    c = float(scales.get('fs_prior_center', 0.))
+                    s = float(scales.get('fs_prior_scale', 0.1))
+                elif cfg.fs_eta_bound:
                     # u -> softplus(u) = z; linearize scale at the center
                     c = _inv_softplus(c)
                     s = s / max(1. - math.exp(-max(float(scales.get('fs_logb_center', 0.)), 1e-4)), 1e-2)
@@ -666,7 +743,7 @@ class CoefficientNet(nn.Module):
         ``_output_names`` but the last, (n,) for the recovery and, with the
         hard productivity structure, (n, n_rs, 4) raw theta1 heads (else None)."""
         n = X.shape[0]
-        if self.cfg.clip_inputs >= 0:
+        if self.clip_on:
             X = torch.maximum(torch.minimum(X, self.x_hi.to(X.dtype)), self.x_lo.to(X.dtype))
         rf = self.r_features(log_r)
         out, zg = [None] * self.n_slots, None
@@ -696,7 +773,7 @@ class CoefficientNet(nn.Module):
         return (torch.stack([log_r, torch.exp(-log_r)], -1) - self.r_mu) / self.r_sd
 
     def encode(self, X, log_r):
-        if self.cfg.clip_inputs >= 0:
+        if self.clip_on:
             X = torch.maximum(torch.minimum(X, self.x_hi.to(X.dtype)), self.x_lo.to(X.dtype))
         if not self.enc_all:
             X = X[:, self.enc_index]
@@ -745,7 +822,10 @@ class CoefficientNet(nn.Module):
                 q = q + torch.einsum('js,nsk->njk', self.rs_E_int, radd)
             if self.cfg.structured_fs and self.j_fs >= 0:
                 u = self.fs_u_center + self.fs_u_scale * raw[:, self.j_fs, 1]
-                z = F.softplus(u) if self.cfg.fs_eta_bound else u
+                if self.avail_index is not None:
+                    z = u - torch.log(X[:, self.avail_index].clamp(0.05, 1.))
+                else:
+                    z = F.softplus(u) if self.cfg.fs_eta_bound else u
                 qb = torch.exp(z) / w_sugar
                 qfs = torch.stack([q[:, self.j_fs, 0], qb, q[:, self.j_fs, 2], q[:, self.j_fs, 3]], -1)
                 q = torch.cat([q[:, :self.j_fs], qfs[:, None], q[:, self.j_fs + 1:]], 1)
@@ -764,6 +844,10 @@ class CoefficientNet(nn.Module):
                 ch = ch + torch.einsum('cs,nsk->nck', self.rs_E_ch, radd)
             if self.gate_index is not None:
                 ch = ch * self._gate(X, self.gate_ch)
+            if self.neut_index is not None:
+                nv = X[:, self.neut_index].clamp(0., 1.)
+                ch = torch.cat([ch[:, :self.j_neut], (ch[:, self.j_neut] * nv[:, None])[:, None],
+                                ch[:, self.j_neut + 1:]], 1)
             out['channels'] = ch
             total = total + ch.sum(1)
         else:

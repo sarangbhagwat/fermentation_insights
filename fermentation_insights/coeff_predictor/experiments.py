@@ -101,6 +101,12 @@ ABLATIONS = ('pinn-no_channels', 'pinn-no_price', 'pinn-no_phys')
 ABLATION_SCHEMES = ('config', 'product')
 NN_BASES = ('pinn', 'plain')
 
+#: PI-NN extrapolation safeguards of the pipeline (need the downstream
+#: FeatureSpec; DESIGN.md sections 3 and 6, round 4): the sugar-availability
+#: prior of the structured feedstock intensity, the neutralization gate, and
+#: clipping of the feedstock-composition inputs to the training range
+EXTRAPOLATION_SAFEGUARDS = dict(fs_prior=True, neutralization_gate=True, clip_groups=['feedstock', 'pretreatment'])
+
 HP_DEFAULT = dict(width=128, depth=3, dropout=0.05, weight_decay=1e-4, lr=2e-3,
                   w_mpsp=1.0, w_ch=0.5, w_phys=0.1, colloc_ratio=1.0, early_stop='data', clip_inputs=-1.0)
 #: HPO selection criterion: fold mean of the configuration-balanced held-out
@@ -640,7 +646,8 @@ def make_job(stage, tag, method, train_ids, evals, members, mk, lk, tk, group_co
     (e.g. ``{'downstream': True}``; default ``ctx['spec_kw']``, off with CLI
     ``--no-downstream``; part of the cache key only when non-empty).
     ``ctx['mk_extra']`` (water gate, off with CLI ``--no-water-gate``; channel-wise
-    input masking, off with ``--no-masking``) is merged into ``mk``. A masked
+    input masking, off with ``--no-masking``; EXTRAPOLATION_SAFEGUARDS, off with
+    ``--no-extrapolation-safeguards``) is merged into ``mk``. A masked
     PI-NN without explicit sub-network sizes gets ``masked_width = width // 2``
     and ``masked_depth = depth - 1`` (64 / 2 for the defaults, as in the
     development CV), so that the HPO dimensions width and depth still apply."""
@@ -1701,7 +1708,9 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
          if ctx.get('mk_extra', {}).get('channel_inputs') else '')
       + ('; PI-NN with the hard productivity structure (`ModelConfig.r_structure='
          f"{ctx['mk_extra']['r_structure']!r}`, DESIGN.md section 3)"
-         if ctx.get('mk_extra', {}).get('r_structure') else '') + '.\n')
+         if ctx.get('mk_extra', {}).get('r_structure') else '')
+      + ('; extrapolation safeguards (sugar-availability prior `fs_prior`, neutralization gate, '
+         'feedstock-input clipping `clip_groups`)' if ctx.get('mk_extra', {}).get('fs_prior') else '') + '.\n')
     if D['recent_raw_files']:
         P(f'> **Partial data:** {len(D["recent_raw_files"])} raw file(s) were still being written when the tables '
           'were built; the numbers describe the data available at that time.\n')
@@ -1952,6 +1961,11 @@ def parse_args(argv=None):
     ap.add_argument('--r-structure', action='store_true',
                     help="PI-NN with the hard productivity structure (ModelConfig.r_structure='physics': "
                          "fermentation capital and electricity intensity = theta0(x) + theta1(x) r_ref/r)")
+    # on by default since the round-4 extrapolation CV (DESIGN.md section 6)
+    ap.add_argument('--no-extrapolation-safeguards', action='store_true',
+                    help='PI-NN without the sugar-availability prior of the feedstock intensity '
+                         '(ModelConfig.fs_prior), the neutralization gate (ModelConfig.neutralization_gate) '
+                         "and the clipping of the feedstock inputs (ModelConfig.clip_groups)")
     ap.add_argument('--split-seed', type=int, default=None, help='only when the split is created (default 2026)')
     ap.add_argument('--replan', action='store_true', help='recompute plan.json from the pilot timings')
     ap.add_argument('--fresh', action='store_true', help='delete the fit cache first')
@@ -2003,6 +2017,8 @@ def main(argv=None):
         ctx['spec_kw'] = {'downstream': True}
         if not a.no_water_gate:
             mk_extra['water_gate'] = True
+        if not a.no_extrapolation_safeguards:
+            mk_extra.update(EXTRAPOLATION_SAFEGUARDS)
     if not a.no_masking:
         mk_extra['channel_inputs'] = 'physics_v2'
     if getattr(a, 'r_structure', False):

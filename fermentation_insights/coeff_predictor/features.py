@@ -63,6 +63,12 @@ Feature groups
     removed, 0 for route 'none'; unknown -> 1, reported): appended raw (not
     standardized) after the categoricals, never fed to the network encoder
     (``encoder_index``) but used by ``ModelConfig.water_gate``;
+  - the structural input ``struct_neutralization`` (0 if the fermentation
+    product has no acid group and no neutralizing / pH-control agent is
+    used, else 1; unknown -> 1): used by ``ModelConfig.neutralization_gate``;
+  - the structural input ``struct_sugar_availability`` (physics prior of the
+    fraction of the glucose-eq. sugar that reaches fermentation,
+    :func:`sugar_availability`; unknown -> 1): used by ``ModelConfig.fs_prior``;
 * productivity enters the network through ``log r`` and ``1/r``, which the
   model computes itself from ``log_r`` (so that ``dMPSP/dr`` is available by
   autograd); their standardization statistics are stored here.
@@ -210,7 +216,7 @@ DS_PHYS = ('phys_log10_w_final', 'phys_water_removal_c', 'phys_water_removal_a',
 #: on titer). NaN (training fill + missing indicator) without t_min / t_max.
 DOMAIN_PHYS = ('phys_log10_t_ref',)
 #: raw structural inputs (not standardized, not seen by the encoder)
-STRUCTURAL = ('struct_water_removal',)
+STRUCTURAL = ('struct_water_removal', 'struct_neutralization', 'struct_sugar_availability')
 #: fallback titer for the mass fraction of a broth product [g/L]
 _T_REF_BROTH = 30.
 
@@ -539,7 +545,78 @@ def downstream_features(df):
     out['phys_n_separation_ops'] = counts['separation_ops']
     out['phys_n_upgrading_ops'] = counts['upgrading_ops']
     out['struct_water_removal'] = gate
+    out['struct_neutralization'] = neutralization_factor(df)
+    out['struct_sugar_availability'] = sugar_availability(df)
     return out
+
+
+#: glucose-eq. mass gain on hydrolysis (data_generation.harness: fs_w_fermentable_sugar_eq)
+SUGAR_GAIN = {'glucose': 1., 'fructose': 1., 'xylose': 1., 'arabinose': 1., 'galactose': 1., 'mannose': 1.,
+              'sucrose': 2 * 180.156 / 342.297, 'starch': 180.156 / 162.141, 'glucan': 180.156 / 162.141,
+              'xylan': 150.13 / 132.115, 'arabinan': 150.13 / 132.115, 'galactan': 180.156 / 162.141,
+              'mannan': 180.156 / 162.141}
+#: sugars every process ferments (free sugars; starch, which starch processes
+#: liquefy and saccharify almost completely)
+FREE_SUGARS = ('glucose', 'fructose', 'xylose', 'arabinose', 'galactose', 'mannose', 'sucrose', 'starch')
+#: structural polysaccharides: released only by pretreatment + enzymatic
+#: saccharification of a lignocellulosic feedstock (fraction
+#: ``p_saccharification_yield``, default SACCHARIFICATION_DEFAULT); not
+#: fermented otherwise (e.g. sugarcane bagasse goes to the boiler)
+STRUCTURAL_SUGARS = ('glucan', 'xylan', 'arabinan', 'galactan', 'mannan')
+#: overall pretreatment + enzymatic saccharification yield of the structural
+#: polysaccharides when the specification does not give one (NREL corn-stover
+#: design, Humbird et al. 2011: ~90 % glucan and xylan to monomers)
+SACCHARIFICATION_DEFAULT = 0.9
+
+
+def sugar_availability(df):
+    """Physics prior of the fraction of the feedstock's glucose-eq. sugar
+    (``fs_w_fermentable_sugar_eq``) that reaches fermentation:
+    (free sugars + starch + s x structural polysaccharides, glucose-eq.) /
+    fs_w_fermentable_sugar_eq in (0, 1], with s = ``p_saccharification_yield``
+    (default SACCHARIFICATION_DEFAULT) for a lignocellulosic feedstock
+    (``feedstock_type`` 'lignocellulose', or a saccharification parameter
+    given) and s = 0 otherwise; NaN when the composition is unknown or the
+    feedstock type is unknown while structural polysaccharides are present.
+    Used by ``ModelConfig.fs_prior`` (structural input
+    ``struct_sugar_availability``)."""
+    n = len(df)
+    if not n:
+        return np.zeros(0)
+    w = _col(df, W_SUGAR).to_numpy()
+    known = np.zeros(n, bool)
+    for k in FREE_SUGARS + STRUCTURAL_SUGARS:
+        known |= np.isfinite(_col(df, f'fs_w_{k}').to_numpy())
+    free = sum(np.nan_to_num(_col(df, f'fs_w_{k}').to_numpy()) * SUGAR_GAIN[k] for k in FREE_SUGARS)
+    struct = sum(np.nan_to_num(_col(df, f'fs_w_{k}').to_numpy()) * SUGAR_GAIN[k] for k in STRUCTURAL_SUGARS)
+    sy_given = _col(df, 'p_saccharification_yield').to_numpy()
+    ftype = [None if v is None else str(v) for v in _strings(df, 'feedstock_type')]
+    ligno = np.array([t == 'lignocellulose' for t in ftype]) | np.isfinite(sy_given) \
+        | np.isfinite(_col(df, 'p_enzyme_loading').to_numpy())
+    type_known = np.array([t is not None for t in ftype]) | ligno
+    sy = np.where(ligno, np.clip(np.where(np.isfinite(sy_given), sy_given, SACCHARIFICATION_DEFAULT), 0., 1.), 0.)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        a = (free + sy * struct) / w
+    ok = known & np.isfinite(a) & (w > 0) & (type_known | (struct <= 1e-9))
+    return np.where(ok, np.clip(a, 0.05, 1.), np.nan)
+
+
+def neutralization_factor(df):
+    """Structural input of ``ModelConfig.neutralization_gate``: 0 when there
+    is nothing to neutralize or acidulate (the fermentation product has no
+    acid group, ``n_acid_groups == 0``, and neither a neutralizing /
+    pH-control agent nor a neutralization degree > 0 is specified), 1
+    otherwise, NaN when ``n_acid_groups`` is unknown."""
+    n = len(df)
+    nag = _col(df, 'n_acid_groups').to_numpy()
+    deg = _col(df, 'neutralization_degree').to_numpy()
+    agent = _strings(df, 'neutralizing_agent')
+    neut = _strings(df, 'neutralization')
+    has_agent = np.array([a is not None and str(a).strip().lower() not in ('', 'none', 'nan') for a in agent])
+    neut_on = np.array([v is not None and str(v).strip().lower() in ('true', '1', '1.0') for v in neut])
+    with np.errstate(invalid='ignore'):
+        f = np.where((nag > 0) | has_agent | neut_on | (np.nan_to_num(deg) > 0), 1., 0.)
+    return np.where(np.isfinite(nag) | has_agent | neut_on, f, np.nan) if n else np.zeros(0)
 
 
 # %% Spec-level registry (fill omitted fields by name)
