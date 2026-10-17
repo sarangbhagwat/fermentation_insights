@@ -2190,7 +2190,9 @@ def v1_comparison(fh, head, v1):
                     g = lambda d: float(d['mpsp_mape'].iloc[0]) if len(d) else float('nan')
                     rows.append(dict(scheme=sch, method=m, v1_mpsp_mape=g(a), v2_mpsp_mape=g(b)))
         L.append('**Development CV** (fold-mean MPSP MAPE, %; v1 used the v1 protocol and settings, so the CV '
-                 'estimates changed as well):\n')
+                 'estimates changed as well; the v2 changes were designed and chosen on these development folds, so '
+                 'the v2 numbers are post-selection estimates and the v1 -> v2 differences, above all LOFO and LOPO '
+                 'with only 4 and 7 held-out groups, are likely optimistic -- see "Changes since v1"):\n')
         L.append(md_table(pd.DataFrame(rows), pct_cols=('v1_mpsp_mape', 'v2_mpsp_mape')) + '\n')
     return '\n'.join(L)
 
@@ -2239,7 +2241,8 @@ def changes_since_v1(ctx):
          '(dg/dprice = 0 exactly; within-configuration correlation -0.05 / -0.02). Adopted as a hard physical '
          'constraint, not for accuracy: dev CV in-family g unchanged, LOPO -10.5 points (seed t = -1.2; g error '
          'seed t = -2.9; per held-out product 3 better / 4 worse, median +0.1), LOFO configuration-balanced -2.5 '
-         'points (seed t = -2.4), LOCO neutral. Feedstock, fermentation, scale or titer-domain inputs for g, and '
+         'points (seed t = -2.4; per held-out feedstock 2 better / 2 worse, median -1.0, t over folds -0.7), '
+         'LOCO neutral. Feedstock, fermentation, scale or titer-domain inputs for g, and '
          'a larger g loss weight, did not help and are not used.' + on(mk.get('channel_inputs') == 'physics_v2', '--v1-g-inputs'),
          '5. **Extrapolation safeguards** (`EXTRAPOLATION_SAFEGUARDS`): a sugar-availability prior of the '
          'feedstock intensity (free sugars and starch fully available, structural polysaccharides by the '
