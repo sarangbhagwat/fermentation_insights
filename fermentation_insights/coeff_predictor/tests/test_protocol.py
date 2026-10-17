@@ -116,6 +116,37 @@ def test_conformal_scores_match_calibrate_conformal(tables):
         assert q[k] == ref[k] and q[f'{k}_n'] == ref[f'{k}_n']
 
 
+def test_oof_scores_rescored_with_the_final_ensembles_eps(tables):
+    samples, points, _ = tables
+    cfgs = sorted(samples['config_id'].unique())
+    held = samples['config_id'] == cfgs[0]
+    fold = T.train_ensemble(samples[~held], points, 2, ModelConfig(**MC), tcfg=_tc(), calib_frac=0.0, seed=0)
+    sc = T.conformal_scores(fold, samples, points)
+    e_f = T.conformal_eps(fold)
+    for k in T.EPS_KEYS:
+        ok = ~sc['invalid'].to_numpy()
+        np.testing.assert_allclose(sc[k][ok], (sc[f'{k}_abserr'] / (sc[f'{k}_sd'] + e_f[k]))[ok], rtol=1e-12)
+    # the final ensemble has other target scales -> other eps; its quantiles use its own eps
+    final = T.train_ensemble(samples.iloc[::2], points, 2, ModelConfig(**MC), tcfg=_tc(), calib_frac=0.0, seed=1)
+    e_fin = T.conformal_eps(final)
+    assert any(not np.isclose(e_fin[k], e_f[k]) for k in T.EPS_KEYS)
+    conf = dict(T.calibrate_conformal_oof(final, sc, 0.1, group_col='config_id'))
+    assert conf['eps_rescored'] == list(T.EPS_KEYS) and 'nominal' in conf['level_kind']
+    for k in T.EPS_KEYS:
+        assert conf[k] == T._conf_q(sc[f'{k}_abserr'] / (sc[f'{k}_sd'] + e_fin[k]), 0.1, warn=False)
+        assert conf[f'{k}_eps'] == e_fin[k]
+    assert conf['mpsp'] == T._conf_q(sc['mpsp'], 0.1, warn=False)      # relative floor: unchanged
+    # without the raw columns (older tables): the stored scores are used as they are
+    old = sc[[c for c in sc.columns if not c.endswith(('_abserr', '_sd'))]]
+    c0 = dict(T.calibrate_conformal_oof(final, old, 0.1, group_col='config_id'))
+    assert c0['eps_rescored'] == [] and c0['a'] == T._conf_q(sc['a'], 0.1, warn=False)
+    # rescore keeps rows whose raw values are missing
+    part = sc.copy()
+    part.loc[:2, 'a_abserr'] = np.nan
+    r, keys = T.rescore_conformal(part, e_fin)
+    assert 'a' in keys and np.allclose(r['a'][:3], sc['a'][:3], equal_nan=True)
+
+
 def _fake_scores(n_groups=12, per=10, seed=0, scale=None):
     rng = np.random.RandomState(seed)
     rows = []

@@ -641,8 +641,10 @@ price, so prices outside the training range are reported separately.
 * **Training protocol of the pipeline (v2, `experiments.PROTOCOL`; round 4
   below):** every network fit -- HPO, every CV scheme (PI-NN, plain MLP,
   ablations), `models/final_dev`, `models/release` -- uses the same
-  procedure, so the CV estimates the procedure that makes the final models:
-  no calibration hold-out (`calib_frac` 0); every member early-stops on its
+  procedure, so the CV estimates the training procedure of the final models
+  with the selected hyperparameters (the HPO chose them on the same
+  development set and is not nested in the CV, so the CV is slightly
+  optimistic for HPO + fit): no calibration hold-out (`calib_frac` 0); every member early-stops on its
   own random 15 % *sample-level* hold-out (`group_col` None; the hold-outs
   differ between members, so the ensemble sees every sample; patience 40,
   20–300 epochs); no refit (`TrainConfig.refit` 'none'). The baselines fit
@@ -655,14 +657,27 @@ price, so prices outside the training range are reported separately.
   `train.calibrate_conformal_oof`): one score per development sample, from
   the fold ensemble that did not see its configuration; `experiments.
   oof_calibration_scores` refuses a score table that misses or repeats a
-  development sample or contains a test sample. The release ensemble (dev +
-  test samples) uses the same development scores. `ens.conformal` records the
-  source, n, the number of configurations, the weighting ('sample'; 'group'
-  = every configuration weighted equally, pooled-CDF quantile of Dunn et al.
-  2022, available), `coverage_guaranteed = False` (the fold ensembles are not
-  the final ensemble) and a cross-fitted coverage estimate (`crossfit`:
-  quantile of all other LOCO folds applied to each fold; mean, pooled, min,
-  q10). The random-CV calibration is stored for reporting only
+  development sample or contains a test sample (for the PI-NN this stops a
+  full run; an unusable plain-MLP table only leaves the plain `final_dev`
+  without intervals). The release ensemble (dev + test samples) uses the
+  same development scores. The scores of a′–d′ and g divide by (member
+  spread + eps), eps = 0.1 × the training target sd; the score tables keep
+  the raw |error| and spread (`<key>_abserr`, `<key>_sd`), and
+  `calibrate_conformal_oof` re-scores them with the final ensemble's own eps
+  (`train.rescore_conformal`; `conformal['eps_rescored']`), so that the
+  quantile and the interval use the same floor (the LOCO-fold / full-dev
+  target-sd ratio is 0.74–1.08; MPSP has a fixed 1 % relative floor).
+  `ens.conformal` records the source, n, the number of configurations, the
+  weighting ('sample': the plain quantile over all scores, configurations
+  count by their numbers of samples, so the coverage is marginal over the
+  samples of new configurations; 'group' = every configuration weighted
+  equally, pooled-CDF quantile of Dunn et al. 2022, available),
+  `coverage_guaranteed = False` (the fold ensembles are not the final
+  ensemble; `<key>_level` is then only nominal, `level_kind`) and a
+  cross-fitted coverage estimate (`crossfit`: quantile of all other LOCO
+  folds applied to each fold; mean = fold-balanced, pooled = over samples,
+  min, q10; compare pooled with the realized pooled test coverage and mean
+  with the realized mean over test configurations). The random-CV calibration is stored for reporting only
   (`meta['conformal_random_cv']`). The test split is never used to calibrate.
 * v1 protocol (`--v1-protocol`, `experiments.PROTOCOL_V1`, commit fd3f386):
   calibration on a held-out 15 % of whole groups and early stopping on
@@ -680,8 +695,15 @@ price, so prices outside the training range are reported separately.
   - leave-one-feedstock-out;
   - leave-one-product-out (hardest; generalization to new products);
   - productivity extrapolation (train on the central productivity range).
-* Hyperparameters chosen on inner validation only; a final test set
-  (untouched until the end) reported once. It is **frozen** in
+* Hyperparameters chosen on inner validation only; a final test set that is
+  never used to fit, tune, select or calibrate, reported once per pipeline
+  run. Its first use was the v1 run (fd3f386); the v1 test failures then
+  directed which failure modes round 4 investigated (development data
+  only), so the v2 run re-uses it adaptively: the v2 test numbers and the
+  v1 → v2 test change are likely optimistic, not an independent
+  confirmation (the development CV is the primary evidence; v2 was fixed
+  before its test evaluation and is released whatever that comparison
+  shows). It is **frozen** in
   `results/split.json` (committed 2026-10-16, before any modelling) from the
   41 *planned* configurations (`experiments.PLANNED_CONFIGS`, = the adapters'
   `configurations()`) and the seed 2026 only, never from the data that
@@ -909,7 +931,13 @@ LOPO 75 % against kNN 36 / 60 %; productivity extrapolation 12.7 % vs HGB 6.8 %.
 Round 4 looked for the causes on the development set only (every diagnostic
 loads the samples and keeps `experiments.development_set(samples,
 path=results/split.json)`; no decision used a test sample) and changed the
-pipeline in four places (4a–4d). 4e validates all changes together; 4f lists
+pipeline in four places (4a–4d). The agenda itself came from those v1 test
+numbers, so the v2 run is an adaptive second use of the test split: its test
+numbers are likely optimistic and do not independently confirm round 4 (§6).
+Equally, the v2 development CV falls on the folds (LOCO, LOFO, LOPO,
+productivity are deterministic; random CV seed 0) and the proxy draws 0–5 on
+which round 4 was diagnosed and selected, so those figures are post-selection
+estimates (4e gives fold-level statistics and a confirmation on fresh draws). 4e validates all changes together; 4f lists
 what was adopted, what was not, and the open issues. Each change has a CLI
 flag that restores v1 (`--v1-protocol`, `--v1-g-inputs`, `--no-r-structure`,
 `--no-extrapolation-safeguards`). The v2 run uses the frozen test split a
@@ -1306,6 +1334,36 @@ mean ± sd over seeds; diff = v2 − v1, paired, t over seeds:
 | productivity | 1 | 18.30 ± 5.76 | **4.30 ± 0.07** | −13.99 ± 5.71 (−4.2) | 6.86 | 8.92 | 7.26 | 10.64 |
 | LOCO, HP / TAL / succinic / lactic, family-balanced (matched OOD estimate) | 32 | 13.25 ± 1.27 | **6.23 ± 0.02** | −7.02 ± 1.28 (−9.5) | 9.79 | 11.65 | 8.85 | 13.93 |
 
+Fold-level statistics (seeds averaged per fold, then paired over folds; the
+seed t of the table measures training-seed noise on fixed folds only, not
+whether a new configuration, feedstock or product benefits; script
+`review_fix/foldstats.py` in the round-4 scratch directory), v2 − v1 in MAPE
+points:
+
+| scheme | units | mean | median | better / worse | t over units | Wilcoxon p | largest unit's share of Σ\|Δ\| |
+|---|---|---|---|---|---|---|---|
+| random | 5 folds | −0.20 | −0.19 | 5 / 0 | −5.7 | 0.06 | 0.28 |
+| leave-one-configuration-out | 37 folds | −6.35 | −3.70 | 35 / 2 | −4.4 | 6·10⁻⁸ | 0.13 |
+| … four OOD families | 32 configurations | −5.20 | −3.26 | 31 / 1 | −4.9 | 3·10⁻⁹ | 0.16 |
+| leave-one-feedstock-out | 4 folds | −29.25 | −14.89 | 3 / 1 | −1.3 | (sign p 0.63) | 0.72 (corn) |
+| … configuration-balanced | 4 folds | −17.03 | −13.31 | 3 / 1 | −1.2 | (sign p 0.63) | 0.58 (corn) |
+| leave-one-product-out | 7 folds | −36.03 | −5.58 | 6 / 1 | −1.5 | 0.16 | 0.48 (isobutanol) |
+| productivity (1 fold) | 36 held-out configurations | −10.43 | −8.04 | 36 / 0 | −9.2 | 3·10⁻¹¹ | 0.08 |
+| proxy OOD | 6 draws | −4.73 | −1.50 | 6 / 0 | −1.9 | 0.03 | 0.53 (draw 0) |
+| proxy ID | 6 draws | −10.50 | −10.72 | 6 / 0 | −4.3 | 0.03 | 0.31 |
+
+The LOCO and productivity gains hold at the configuration level. The LOFO
+(4 folds) and LOPO (7 folds) gains are **not statistically established at
+the fold level**: one fold dominates each (corn, isobutanol), the LOPO
+median is only −5.6 points, and cornstover (LOFO, +8.2) and succinic (LOPO,
++23) got worse. The proxy draws overlap (24 picks, 16 distinct
+configurations; TAL_glucose and lactic_lowpH_SSCF_cornstover in 3 draws
+each), so a t over draws overstates their independence. The same holds for
+the single changes: 4d's LOFO −28.9 (seed t −5.3) is 3 of 4 feedstocks
+better, median −15.8, t over folds −1.5 (corn 72 % of Σ|Δ|); 4b's LOPO
+−10.5 is 3 better / 4 worse over the products, median +0.1; 4c's
+productivity −0.9 is 28 of 36 configurations better (t −2.9).
+
 Per held-out group (v1 → v2; plain / ridge / HGB / kNN): LOFO corn 145.6 →
 50.2 (t −9.0; 165 / 351 / 83 / 52), glucose 29.9 → 5.1 (t −4.4), sugarcane
 46.2 → 41.2 (t −0.6), cornstover 34.9 → 43.1 (t +1.0); LOPO ethanol 157.7 →
@@ -1353,15 +1411,60 @@ v2 − v1: OOD −4.73 ± 6.16 (t −1.9), ID −10.50 ± 5.99 (t −4.3); v2 �
 Configuration-balanced OOD per draw, v1 / v2: 20.7 / 6.4, 7.7 / 6.8, 15.2 /
 7.2, 7.7 / 6.6, 6.8 / 6.7, 8.0 / 5.7: v2 is never worse and its draw-to-draw
 spread is 12× smaller. On the proxy (unlike the v1 test) v2 beats every
-baseline on both OOD and ID.
+baseline on both OOD and ID. Draws 0–5 also chose the protocol (4a), so this
+table is not out-of-sample for it.
+
+Confirmation on draws and folds that played no role in any round-4 decision
+(after the review; script `review_fix/confirm.py`, tables
+`review_fix/confirm_tables.txt`; same settings as above, development set
+only). Dev proxy draws 6–11 (one training seed per draw, 100 + draw) and the
+random 5-fold CV with fold seed 1 (the pipeline uses seed 0), v1 settings vs
+v2 paired over 3 training seeds (1000 s + 500 + fold). No fresh LOCO, LOFO,
+LOPO or productivity folds exist (they are deterministic) and every
+development configuration was in the round-4 LOCO, so the fresh draws are
+new combinations of held-out configurations, new ID samples and new seeds,
+not unseen configurations (24 picks, 13 distinct;
+lactic_lowpH_SHF_cornstover in 5 draws). MAPE %, mean ± sd over draws:
+
+| variant | OOD | OOD cfg | ID | ID cfg | g R² OOD |
+|---|---|---|---|---|---|
+| PI-NN v1 settings (v1 final protocol) | 13.29 ± 6.44 | 13.02 ± 5.94 | 13.86 ± 6.47 | 11.15 ± 6.53 | 0.46 ± 0.63 |
+| **PI-NN v2** | **6.88 ± 1.41** | **6.40 ± 0.87** | **3.99 ± 0.33** | **3.94 ± 0.55** | 0.88 ± 0.02 |
+| plain MLP (v2 protocol) | 8.92 ± 1.80 | 8.61 ± 1.32 | 5.69 ± 0.56 | 5.45 ± 0.55 | 0.85 ± 0.03 |
+| ridge | 9.76 ± 1.70 | 9.98 ± 1.72 | 8.00 ± 0.60 | 8.29 ± 0.68 | 0.86 ± 0.02 |
+| HGB | 8.54 ± 1.11 | 8.53 ± 1.77 | 4.92 ± 0.28 | 5.32 ± 0.63 | 0.83 ± 0.06 |
+| kNN | 16.57 ± 2.37 | 15.09 ± 1.84 | 7.77 ± 0.51 | 8.70 ± 0.24 | 0.81 ± 0.04 |
+
+Paired over the fresh draws (better / worse draws, t over draws): v2 − v1
+OOD −6.41 (6 / 0, t −2.6), ID −9.87 (6 / 0, t −3.7); v2 − HGB OOD −1.66
+(5 / 1, t −2.8), ID −0.93 (6 / 0, t −10.0); v2 − plain OOD −2.04 (6 / 0, t
+−5.1), ID −1.70 (6 / 0); v2 − ridge OOD −2.88, ID −4.01 (6 / 0 each).
+Configuration-balanced OOD per draw, v1 / v2: 14.7 / 7.7, 7.6 / 6.4, 9.4 /
+5.0, 7.2 / 6.3, 21.9 / 6.3, 17.3 / 6.6. LOCO-calibrated MPSP intervals (the
+v2 LOCO scores of seed 0 without each draw's OOD configurations, q ≈ 12.2)
+cover the fresh OOD proxy at 0.88–0.99 (mean 0.95; TAL_glucose 0.70 in one
+draw) and the ID proxy at 0.97–1.00. Random CV, fold seed 1: v1 4.12 ±
+0.10, v2 3.95 ± 0.03 % (−0.16, seed t −4.4; 4 of 5 folds better, t over
+folds −2.9); plain 5.50, ridge 8.11, HGB 4.77, kNN 8.10. No ∂MPSP/∂r > 0
+violation for v2 (v1 up to 6.1 %). So the proxy and random-CV conclusions of
+4a / 4e hold on fresh draws and folds, with similar effect sizes.
 
 #### 4f. Decisions and open issues
 
-Together (4e) the changes improve every CV scheme (t −4.2 to −24) and the
-dev proxy of the frozen test (OOD 11.8 → 7.1 %, ID 14.3 → 3.8 %); the one
-held-out group that got clearly worse is succinic in leave-one-product-out.
-Adopted (each is a protocol correction or a hard physical guarantee, or has a
-paired development benefit beyond the seed noise):
+Together (4e) the changes improve LOCO at the configuration level (35 of 37
+folds, t over folds −4.4), the productivity extrapolation (36 of 36
+configurations) and the dev proxy of the frozen test (6 of 6 draws, OOD
+11.8 → 7.1 %, ID 14.3 → 3.8 %; confirmed on fresh draws, 4e). The LOFO and
+LOPO fold means fall a lot (64 → 35 %, 86 → 50 %), but the seed t-values
+(−24, −7.5) measure seed noise only: over folds the gains are driven by one
+fold each and are not statistically established (t −1.3 / −1.5). Held-out
+groups that got worse: succinic in leave-one-product-out (28 → 51 %) and
+cornstover in leave-one-feedstock-out (35 → 43 %). All v2 CV and proxy
+figures are post-selection estimates on the folds and draws used to design
+the changes (intro), so they are optimistic, most of all LOFO (designed from
+the corn failure). Adopted (each is a protocol correction or a hard
+physical guarantee; the accuracy benefit is stated with its fold-level
+strength):
 
 * the training protocol V3 for every fit and the out-of-fold LOCO calibration
   of the final intervals (4a; protocol corrections; the test split is never
@@ -1370,10 +1473,11 @@ paired development benefit beyond the seed noise):
   constraint dg/dprice = 0, CV benefit in the right direction but within the
   noise);
 * the hard productivity structure (4c; dMPSP/dr ≤ 0 by construction,
-  productivity CV −0.9 pp, t −4.5);
-* the sugar-availability prior with feedstock-input clipping (4d; LOFO −29
-  points, t −5.3) and the neutralization gate (4d; hard constraint, verified on
-  the data);
+  productivity CV −0.9 pp, seed t −4.5, 28 of 36 configurations better);
+* the sugar-availability prior with feedstock-input clipping (4d; the held-out
+  feedstock channel 23 → 3.5 % of the numerator; LOFO −29 points, seed t
+  −5.3, over the 4 folds t −1.5, corn-driven) and the neutralization gate
+  (4d; hard constraint, verified on the data);
 * equal ensemble sizes for CV / final / release (the scores divide by the
   member spread), LOCO of the PI-NN and plain MLP on every configuration, the
   ablations on 12 stratified configurations.
@@ -1394,12 +1498,20 @@ decide when a query is in distribution).
 
 Open issues:
 
-1. The LOCO-calibrated MPSP intervals under-covered the OOD proxy (0.78–0.81
-   vs nominal 0.90) while the cross-fitted estimate said 0.90–0.92: coverage per
-   configuration is uneven (TAL under-covered in every draw). Untested remedies:
-   scores without the member spread (eps only, relative errors) and Mondrian
-   (per-family) calibration; `conformal_scores` would also need to return the
-   spread and the raw relative error.
+1. Interval coverage per configuration is uneven. The adopted calibration
+   (LOCO out-of-fold scores of the same procedure, sample weighting) applied
+   to the 4e v2 proxy models (draws 0–5, calibration = the v2 LOCO scores of
+   seed 0 without each draw's OOD configurations, q ≈ 12.2) covers the OOD
+   proxy at 0.86–0.99 per draw (mean 0.93) and the ID proxy at 0.95–0.99
+   (conservative), but TAL_glucose / TAL_corn at 0.70 in 2 of 6 draws and
+   lactic_lowpH_SHF_cornstover at 0.58 in one. (The 0.78–0.81 OOD-proxy
+   coverage of 4a belongs to the 8-fold configuration-grouped calibration of
+   each draw's training rows, q ≈ 8.6, not to the LOCO calibration.) The
+   cross-fit restricted to the four OOD families, family-balanced, varies by
+   seed: 0.96 / 0.97 / 0.83 (seeds 0 / 1 / 2; TAL 0.87 / 0.95 / 0.75, lactic
+   0.98 / 0.91 / 0.64). Untested remedies: scores without the member spread
+   (eps only, relative errors; the score tables now keep the raw |error| and
+   spread) and Mondrian (per-family) calibration.
 2. The final hyperparameters are re-selected under the new protocol in the v2
    run; the round-4 diagnostics (and 4e) used the v1-selected ones.
 3. The 300-epoch limit binds for a few members under sample-level early
@@ -1420,6 +1532,64 @@ Open issues:
 8. The recovery of a new separation train is not predictable from the present
    descriptors (LOPO g errors −23 to +44 % for every input set): a
    user-supplied recovery or a richer separation vocabulary is needed.
+9. Sugar-availability prior (4d): s = `p_saccharification_yield` is the
+   glucan conversion in the data (adapters: enzymatic glucan-to-glucose,
+   saccharification reactor R303; xylan is converted in pretreatment), but
+   the prior applies it to every structural polysaccharide. Within
+   configurations the data z = log(b′_fs w_sugar) follow the prior's
+   log(1/s_avail) with slope 0.57 (ethanol corn stover, n 98), 0.72 / 0.53
+   (lactic low-pH / neutral SHF), 1.08 (lactic low-pH SSCF), not 1; the
+   level is right (median Δz +0.03…+0.07 for corn stover). Inside the
+   training range of s (0.77–0.94) the residual, which sees s, absorbs it;
+   s is clipped as a 'pretreatment' input but the prior uses the raw value,
+   so far below the range the prior's full 1/s slope applies (corn stover at
+   s = 0.6: b′_fs about +10 %). Fix (needs a paired dev check): s on the
+   hexosans only, a separate pentosan conversion (default 0.9). Not
+   relevant to the CV or the frozen test (s in range).
+10. Reagent prices still reach the fermentation and downstream capital
+   sub-networks (preset 'physics_v2' removed them from g only; a v1 legacy:
+   the old 'neutralization' group held the prices). Review measurements
+   (round-4 scratch `review_physics/`): the data show no capital
+   response (within-configuration correlation of the capital a′ with the
+   price −0.01 / +0.03 over 26 / 21 configurations), but a trained model
+   moves MPSP through capital by a median 0.66 % of the numerator from the
+   q05 to the q95 acid price (4× the change through the neutralization
+   channel that buys the acid). Small for accuracy, spurious for price
+   sweeps. Follow-up: 'reagent_prices' for the neutralization (and
+   materials_other, which holds the pretreatment acid) channels only, with a
+   paired LOCO / LOPO check (≥ 3 seeds) before adoption.
+
+Review of round 4 (fixes that change no trained model; the evidence above
+is unchanged):
+
+* Statistics and wording: fold-level statistics next to every seed t (4e);
+  the post-selection caveat (intro, 4e, 4f) and the confirmation on fresh
+  proxy draws 6–11 and random-CV fold seed 1 (4e); the report and READMEs
+  call the v2 test an adaptive second use of the split (likely optimistic,
+  v2 released whatever the v1 / v2 test comparison shows), qualify "the CV
+  estimates the procedure" (HPO not nested), describe the coverage as
+  marginal over the samples of new configurations (sample weighting),
+  compare realized pooled / configuration-mean test coverage with the
+  cross-fitted pooled / mean estimate, drop the unsupported "slightly
+  conservative" claim for the release intervals, and note that the v1
+  final-test baselines were fit without the 6 v1 calibration configurations.
+* Intervals: the out-of-fold score tables keep the raw |error| and member
+  spread, and `calibrate_conformal_oof` re-scores a′–d′ and g with the final
+  ensemble's eps (§6); `<key>_level` of an out-of-fold calibration is
+  labelled nominal (`level_kind`).
+* Pipeline: an unusable plain-MLP out-of-fold table leaves the plain
+  `final_dev` without intervals instead of stopping the run (the PI-NN's
+  stays strict); plan.json is reused only while the requested budget, search
+  size, HPO members and ablation folds are unchanged; `--ablation-loco-folds`
+  is honoured in quick mode (default 4 there, 12 in full mode); the
+  `--v1-protocol` report labels final_dev's hold-out calibration 'holdout';
+  a quick report no longer compares itself with the real v1 tables; a
+  full-mode smoke test (spawned pool, resume, re-plan) joins the suite.
+* Features: a feedstock type outside the vocabulary (e.g. 'lignocellulosic')
+  used to count as a known non-lignocellulosic type (s_avail = 0.05 floor, a
+  20× feedstock-intensity prior); it is now unknown (prior not applied,
+  imputed 1 and reported), after case / blank normalization. The prior is
+  identical on all development rows.
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 

@@ -132,8 +132,10 @@ configuration of known feedstocks / products. ``conformal['coverage_guaranteed']
 is False (the scores come from the CV fold ensembles), and
 ``conformal['crossfit']`` holds a cross-fitted coverage estimate per key
 (mean, pooled, min, q10 over the held-out configurations). Coverage is
-marginal over configurations and varies between them; queries close to the
-training configurations get conservative intervals.
+marginal over the samples of new configurations (configurations weighted by
+their numbers of samples) and varies between configurations; queries close
+to the training configurations get conservative intervals.
+``conformal['<k>_level']`` is then nominal (``conformal['level_kind']``).
 ``ensemble.meta['conformal_random_cv']`` (when present) holds, for
 information only, the quantiles calibrated on the random-CV scores.
 """

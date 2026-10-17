@@ -33,8 +33,9 @@ interrupted run resumes where it stopped)
    Every network fit of stages 3-5 uses the same training procedure
    (``PROTOCOL``; v1 behaviour with ``--v1-protocol``): no calibration
    hold-out, every ensemble member early-stops on its own random 15 %
-   sample-level hold-out, no refit -- so the CV estimates the procedure that
-   makes the final models;
+   sample-level hold-out, no refit -- so the CV estimates the training
+   procedure of the final models with the selected hyperparameters (the HPO
+   is not nested in the CV, so slightly optimistic for HPO + fit);
 3. ``hpo``     random search (candidate 0 = package defaults) of width, depth,
                dropout, weight decay, learning rate, w_mpsp, w_ch, w_phys,
                collocation ratio, early-stopping criterion and input clipping by
@@ -105,8 +106,9 @@ TARGETS = ('a', 'b', 'c', 'd', 'g')
 SCHEMES = ('random', 'config', 'feedstock', 'product', 'productivity')
 #: Training protocol of EVERY network fit of the pipeline -- HPO, all CV
 #: schemes (PI-NN, plain MLP, ablations), ``models/final_dev`` and
-#: ``models/release`` -- so that the CV estimates the procedure that makes the
-#: final models (round 4, DESIGN.md section 6): no calibration hold-out
+#: ``models/release`` -- so that the CV estimates the training procedure of the
+#: final models with the selected hyperparameters (the HPO is not nested in
+#: the CV; round 4, DESIGN.md section 6): no calibration hold-out
 #: (``calib_frac`` 0); every member early-stops on its own random 15 %
 #: SAMPLE-level hold-out (``es_group`` None; the hold-outs differ between
 #: members, so the ensemble sees every sample); no refit. Intervals of the
@@ -873,17 +875,34 @@ def base_plan(a):
     development configuration for the PI-NN and the plain MLP; the ablations
     run on a stratified subset of ``ablation_loco_folds`` configurations
     (None = all)."""
+    # --ablation-loco-folds: None = the mode's default (full 12, quick 4), 0 = every LOCO fold
+    abl = getattr(a, 'ablation_loco_folds', None)
     if a.quick:
         return dict(mode='quick', hpo_k=3, hpo_candidates=3, hpo_members=1, cv_members=2, final_members=2,
-                    release_members=2, random_k=3, loco_folds=None, ablation_loco_folds=4, epochs=12, patience=6,
+                    release_members=2, random_k=3, loco_folds=None,
+                    ablation_loco_folds=(4 if abl is None else abl or None), epochs=12, patience=6,
                     min_epochs=4, batch_size=128)
+    abl = ABLATION_LOCO_FOLDS if abl is None else abl
     # hpo_members: single-member fits differ between seeds by up to ~50 % (relative)
     # in held-out MAPE on the development folds, so one member per candidate
     # and fold mostly ranks seeds, not hyperparameters
     return dict(mode='full', hpo_k=5, hpo_candidates=None, hpo_members=a.hpo_members, cv_members=a.members,
                 final_members=a.members, release_members=a.members, random_k=5, loco_folds=None,
-                ablation_loco_folds=(a.ablation_loco_folds or None), epochs=300, patience=40, min_epochs=20,
-                batch_size=128)
+                ablation_loco_folds=(abl or None), epochs=300, patience=40, min_epochs=20,
+                batch_size=128, request=plan_request(a))
+
+
+#: default number of stratified LOCO folds of the PI-NN ablations (full mode)
+ABLATION_LOCO_FOLDS = 12
+
+
+def plan_request(a):
+    """The CLI settings a full-mode plan is sized from; plan.json is reused
+    only when they are unchanged (``stage_hpo``)."""
+    abl = getattr(a, 'ablation_loco_folds', None)
+    return dict(budget_hours=float(a.budget_hours), hpo_candidates=int(a.hpo_candidates or 0),
+                hpo_members=int(a.hpo_members),
+                ablation_loco_folds=int(ABLATION_LOCO_FOLDS if abl is None else abl))
 
 
 def check_plan(plan):
@@ -1125,13 +1144,19 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
         if os.path.exists(pl_path) and not a.replan:
             with open(pl_path) as fh:
                 old = json.load(fh)
-        if old.get('data_hash') == ctx['data_hash'] and old.get('split_hash') == ctx['split_hash'] \
-                and old.get('mode') == 'full' and old.get('threads') == a.threads \
-                and old.get('code_version') == CODE_VERSION and old.get('protocol') == protocol['name'] \
-                and old.get('cv_members') == plan['cv_members']:
+        same = dict(data_hash=old.get('data_hash') == ctx['data_hash'],
+                    split_hash=old.get('split_hash') == ctx['split_hash'], mode=old.get('mode') == 'full',
+                    threads=old.get('threads') == a.threads, code_version=old.get('code_version') == CODE_VERSION,
+                    protocol=old.get('protocol') == protocol['name'],
+                    cv_members=old.get('cv_members') == plan['cv_members'],
+                    request=old.get('request') == plan.get('request'))
+        if old and all(same.values()):
             plan.update({k: old[k] for k in ('hpo_candidates', 'ablation_loco_folds', 'estimate') if k in old})
             log(f'plan: reusing {pl_path}')
         else:
+            if old:
+                log(f'plan: not reusing {pl_path} (changed: {", ".join(k for k, v in same.items() if not v)}); '
+                    'recomputing it from the pilot')
             ok = [r for r in results.values() if not r['error'] and r.get('n_fit_rows')]
             per = (sum(r['fit_seconds'] for r in ok) / sum(r['n_fit_rows'] * len(r['epochs'] or [1]) for r in ok)
                    if ok else 0.05)
@@ -1198,8 +1223,10 @@ def stage_cv(a, plan, runner, dev, ctx, hp, D):
     return the per-sample conformal scores of their held-out samples:
     ``cv['oof_scores']`` (scheme, method, fold = fold label, fold_index and
     the ``train.conformal_scores`` columns; every development sample once
-    per scheme and method), from which the final models are calibrated
-    (LOCO) and ``cv['crossfit']`` estimates the coverage."""
+    per scheme and method, except in the productivity scheme, which holds
+    out and scores only its two tails), from which the final models are
+    calibrated (LOCO) and
+    ``cv['crossfit']`` estimates the coverage."""
     import pandas as pd
     protocol = ctx.get('protocol') or PROTOCOL
     mk, lk, tk = hp_kwargs(hp, plan, protocol)
@@ -1267,19 +1294,21 @@ def crossfit_table(scores, alpha=ALPHA):
     return pd.DataFrame(rows)
 
 
-def oof_calibration_scores(cv, scheme, method, dev, sp, strict=True):
+def oof_calibration_scores(cv, scheme, method, dev, sp, strict=True, drop=False):
     """Records of the out-of-fold conformal scores of ``method`` in CV
     ``scheme``, checked for use as a calibration set: every development
     sample scored exactly once, none of them a test sample, and >=
-    train.MIN_CALIB_GROUPS configurations. Raises (``strict``) or logs a
-    warning otherwise."""
-    from fermentation_insights.coeff_predictor.train import MIN_CALIB_GROUPS
+    train.MIN_CALIB_GROUPS configurations. Otherwise: raises (``strict``;
+    a test sample in the table raises always), or logs a warning and
+    returns None (``drop``: the model gets no intervals) or the incomplete
+    records (quick mode)."""
+    from fermentation_insights.coeff_predictor.train import MIN_CALIB_GROUPS, EPS_KEYS
     sc = cv.get('oof_scores')
-    if sc is None or not len(sc):
+    if sc is None or not len(sc) or not ((sc['scheme'] == scheme) & (sc['method'] == method)).any():
         msg = f'no out-of-fold conformal scores of {method} in the {scheme} CV'
         if strict:
             raise SystemExit('final: ' + msg)
-        log('final: WARNING ' + msg)
+        log('final: WARNING ' + msg + ('; no intervals for it' if drop else ''))
         return None
     sc = sc[(sc['scheme'] == scheme) & (sc['method'] == method)].reset_index(drop=True)
     ids = sc['sample_id'].astype(str)
@@ -1300,8 +1329,13 @@ def oof_calibration_scores(cv, scheme, method, dev, sp, strict=True):
         msg = f'out-of-fold scores of {method} ({scheme} CV) unusable for calibration: ' + '; '.join(problems)
         if set(ids) & test or strict:
             raise SystemExit('final: ' + msg)
+        if drop:
+            log(f'final: WARNING {msg}; {method} gets no intervals')
+            return None
         log('final: WARNING (quick mode) ' + msg)
-    keep = ['sample_id', 'config_id', 'fold', 'invalid', *[c for c in ('a', 'b', 'c', 'd', 'g', 'mpsp')]]
+    keep = ['sample_id', 'config_id', 'fold', 'invalid', 'a', 'b', 'c', 'd', 'g', 'mpsp']
+    # raw |error| and spread: the final ensemble re-scores with its own eps (train.rescore_conformal)
+    keep += [c for k in EPS_KEYS for c in (f'{k}_abserr', f'{k}_sd') if c in sc]
     return sc[keep].to_dict('list')
 
 
@@ -1327,9 +1361,11 @@ def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir, cv):
     evals = dict(test_ood=list(sp['ood_test_sample_ids']), test_id=list(sp['id_test_sample_ids']),
                  test_all=sorted(set(sp['ood_test_sample_ids']) | set(sp['id_test_sample_ids'])))
     all_ids = s['sample_id'].astype(str).tolist()
-    strict = not a.quick
-    cal = {m: oof_calibration_scores(cv, 'config', m, dev, sp, strict) for m in NN_BASES}
-    rnd = {m: oof_calibration_scores(cv, 'random', m, dev, sp, False) for m in NN_BASES}
+    # a missing or incomplete PI-NN score table stops the run (full mode); the
+    # plain MLP's only costs the plain final_dev its intervals
+    cal = {m: oof_calibration_scores(cv, 'config', m, dev, sp, strict=not a.quick and m == 'pinn',
+                                     drop=not a.quick and m != 'pinn') for m in NN_BASES}
+    rnd = {m: oof_calibration_scores(cv, 'random', m, dev, sp, False, drop=not a.quick) for m in NN_BASES}
     src = ('out-of-fold scores of the development leave-one-configuration-out CV '
            f'({plan["cv_members"]}-member ensembles, same training procedure)')
 
@@ -1356,7 +1392,7 @@ def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir, cv):
                                      ('sens', 'scores') if nn else ('sens',)),
                              save_model=os.path.join(models_dir, 'final_dev') if m == 'pinn' else None,
                              calib_scores=cal[m] if nn and not own_hold_out else None,
-                             calib_info=info(m) if nn and not own_hold_out else None,
+                             calib_info=info(m) if nn and not own_hold_out and cal[m] is not None else None,
                              calib_extra=extra(m) if nn else None,
                              meta=dict(kind='final', nn=nn)))
     # release: ALL samples are fitted, intervals from the dev LOCO PI-NN scores
@@ -1419,8 +1455,12 @@ def final_intervals(fin, samples_by_id, alpha=ALPHA):
     score <= q, i.e. for MPSP every TY point is inside its interval) pooled,
     averaged over configurations and in the worst configuration, the
     pointwise MPSP coverage, the mean / median relative half-width, next to
-    the cross-fitted estimate of the calibration (mean, min, q10 over the
-    LOCO folds). Returns (summary, per-configuration table)."""
+    the cross-fitted estimate of the calibration (fold-balanced mean,
+    sample-pooled, min, q10 over the LOCO folds: compare ``coverage`` with
+    ``crossfit_pooled`` and ``coverage_cfg_mean`` with ``crossfit_mean``).
+    ``calibration``: 'loco' (out-of-fold LOCO scores), 'holdout' (own
+    calibration hold-out, ``--v1-protocol``) or a reporting-only calibration
+    (e.g. 'random_cv'). Returns (summary, per-configuration table)."""
     import numpy as np
     import pandas as pd
     from fermentation_insights.coeff_predictor.train import CONF_KEYS
@@ -1430,7 +1470,9 @@ def final_intervals(fin, samples_by_id, alpha=ALPHA):
         if r is None or r.get('error'):
             continue
         if r.get('conformal'):
-            cals.append((meth, r, 'loco', r['conformal']))
+            # 'loco': out-of-fold LOCO scores (v2); 'holdout': own calibration hold-out (--v1-protocol)
+            lab = 'holdout' if r['conformal'].get('source') == 'calibration hold-out' else 'loco'
+            cals.append((meth, r, lab, r['conformal']))
         for name, c in (r.get('conformal_extra') or {}).items():
             cals.append((meth, r, name, c))
     for meth, r, cal, conf in cals:
@@ -1471,7 +1513,8 @@ def final_intervals(fin, samples_by_id, alpha=ALPHA):
                                  coverage_pointwise=(mm.get(('coverage', 'MPSP'), np.nan) if key == 'mpsp'
                                                      else float(cov.mean())),
                                  halfwidth_rel_mean=hw_mean, halfwidth_rel_median=hw_med,
-                                 crossfit_mean=cf.get('mean', np.nan), crossfit_min=cf.get('min', np.nan),
+                                 crossfit_mean=cf.get('mean', np.nan), crossfit_pooled=cf.get('pooled', np.nan),
+                                 crossfit_min=cf.get('min', np.nan),
                                  crossfit_q10=cf.get('q10', np.nan), source=conf.get('source'),
                                  weighting=conf.get('weighting'), n_calib=conf.get('n'),
                                  n_calib_groups=conf.get('n_calib_groups'),
@@ -1573,11 +1616,16 @@ def protocol_table(cv, fin, hpo, plan):
     return pd.DataFrame(rows)
 
 
-def load_v1_tables(out_dir):
+def load_v1_tables(out_dir, fallback=True):
     """Headline tables of the v1 run (commit fd3f386; ``results/v1/tables``)
-    for the v1 / v2 comparison of the report: {name: DataFrame}."""
+    for the v1 / v2 comparison of the report: {name: DataFrame}. Looks in
+    ``<out_dir>/v1/tables``, then (``fallback``; not in quick mode, whose
+    numbers are not comparable with the v1 full run) in the package's
+    ``results/v1/tables``."""
     import pandas as pd
-    for d in (os.path.join(out_dir, 'v1', 'tables'), os.path.join(DEFAULT_RESULTS, 'v1', 'tables')):
+    dirs = [os.path.join(out_dir, 'v1', 'tables')] + ([os.path.join(DEFAULT_RESULTS, 'v1', 'tables')] if fallback
+                                                       else [])
+    for d in dirs:
         if os.path.isdir(d):
             res = {}
             for name in ('final_test_headline', 'cv_headline', 'final_test_per_config', 'cv_lopo_per_product',
@@ -2124,8 +2172,13 @@ def v1_comparison(fh, head, v1):
             rows.append(dict(set=st, method=m, v1_mpsp_mape=g(a, 'mpsp_mape'), v2_mpsp_mape=g(b, 'mpsp_mape'),
                              v1_median=g(a, 'mpsp_mape_median'), v2_median=g(b, 'mpsp_mape_median'),
                              v1_R2_g=g(a, 'R2_g'), v2_R2_g=g(b, 'R2_g'), n_test=g(b, 'n_test')))
-    L.append('**Final test** (same frozen split; v1 = commit fd3f386; MAPE in %):\n')
+    L.append('**Final test** (same frozen split, used a second time: the v2 numbers are likely optimistic, see '
+             'the notice above; v1 = commit fd3f386; MAPE in %):\n')
     L.append(md_table(pd.DataFrame(rows), pct_cols=('v1_mpsp_mape', 'v2_mpsp_mape', 'v1_median', 'v2_median')) + '\n')
+    L.append('v1 fit every method, the baselines included, without its 6 calibration configurations (15 % of the '
+             'development configurations, configuration-grouped calibration hold-out of the v1 protocol); v2 fits '
+             'every method on all development rows. So the v1 -> v2 change of the baselines (ridge, HGB, kNN, '
+             'plain MLP) comes from the protocol, not from the methods.\n')
     c1 = v1.get('cv_headline')
     if c1 is not None and len(head):
         rows = []
@@ -2151,43 +2204,53 @@ def changes_since_v1(ctx):
     L = ['## Changes since v1 (development-set evidence only)\n',
          'Each change was chosen on the development set (paired over seeds or draws, test split never used); '
          'DESIGN.md section 6 ("Development-set diagnostics, round 4") has the full evidence tables, including '
-         'the combined validation of all changes together. Each has a CLI flag that restores the v1 behaviour.\n',
+         'the combined validation of all changes together. Each has a CLI flag that restores the v1 behaviour. '
+         '"Seed t" below is a t over training seeds on fixed folds: it measures seed noise only, not whether a '
+         'new configuration, feedstock or product benefits; the fold-level statistics (seeds averaged per fold, '
+         'paired over folds) answer that.\n',
          '1. **Training protocol** (`PROTOCOL`): every network fit -- HPO, all CV schemes, `final_dev` and '
          '`release` -- trains on all its samples with sample-level early stopping (each member on its own '
          'random 15 % hold-out), without a calibration hold-out and without refit, so the CV estimates the '
-         'procedure of the final models. v1 held out 15 % of the configurations for calibration and '
+         'training procedure of the final models with the selected hyperparameters (the HPO is not nested in '
+         'the CV). v1 held out 15 % of the configurations for calibration and '
          'early-stopped every member on about five held-out configurations: noisy and often far too short '
          '(dev proxy of the frozen test: best epochs 6-226, in 4 of 6 draws a member stopped at <= 20 '
          'epochs). On that proxy the v1 protocol gave OOD 12.0 ± 6.9 % / ID 13.9 ± 5.5 %, the new one '
-         '7.2 ± 1.2 % / 3.9 ± 0.2 % (6 draws, paired t = -1.8 / -4.6). Refitting after early stopping did not '
+         '7.2 ± 1.2 % / 3.9 ± 0.2 % (6 draws, paired t = -1.8 / -4.6; the draws share configurations: 24 '
+         'picks, 16 distinct). Refitting after early stopping did not '
          'help (+0.2 pp at twice the cost) and is not used.' + on(v2p, '--v1-protocol'),
          '2. **Intervals**: the final and release ensembles have no calibration hold-out; their split-conformal '
          'quantiles come from the out-of-fold scores of the development leave-one-configuration-out CV of the '
-         'same procedure and ensemble size (`train.calibrate_conformal_oof`, `coverage_guaranteed = False`), '
-         'with a cross-fitted coverage estimate. v1 calibrated `final_dev` on its own 6 calibration '
-         'configurations and transferred the release intervals from the dev model scored on its calibration '
-         'configurations AND the test configurations; v2 never uses test samples for calibration.',
+         'same procedure and ensemble size (`train.calibrate_conformal_oof`, re-scored with the final '
+         'ensemble\'s spread floors, `coverage_guaranteed = False`), with a cross-fitted coverage estimate. v1 '
+         'calibrated `final_dev` on its own 6 calibration configurations and transferred the release intervals '
+         'from the dev model scored on its calibration configurations AND the test configurations; v2 never uses '
+         'test samples for calibration.' + on(v2p, '--v1-protocol'),
          "3. **Hard productivity structure** (`ModelConfig.r_structure='physics'`): the coefficients of the "
          "fermentation capital and of the electricity intensity are theta0(x) + theta1(x) r_ref/r with "
          'theta1 >= 0, so dMPSP/dr <= 0 holds by construction (v1 violated it for 0.8-8 % of held-out samples). '
          'In the data only the fermentation capital depends materially on r, as 1/r (beta = 1.0, R² = 0.9999 '
-         'within configurations). Dev productivity CV with sample-level hold-outs: 5.16 -> 4.29 % (t = -4.5; '
-         'low-r side 6.34 -> 4.39 %, t = -12.5); LOCO and random CV unchanged.'
+         'within configurations). Dev productivity CV with sample-level hold-outs: 5.16 -> 4.29 % (seed t = '
+         '-4.5; low-r side 6.34 -> 4.39 %, seed t = -12.5; per configuration of the single productivity fold 28 '
+         'of 36 better, t = -2.9); LOCO and random CV unchanged.'
          + on(bool(mk.get('r_structure')), '--no-r-structure'),
          "4. **Recovery inputs** (masking preset 'physics_v2'): the recovery g no longer sees the reagent "
          '(base / acid) prices, which set what the reagents cost, not how much product is recovered '
-         '(dg/dprice = 0 exactly; within-configuration correlation -0.05 / -0.02). Dev CV: in-family g unchanged, '
-         'LOPO -10.5 points (t = -1.2; g error t = -2.9), LOFO configuration-balanced -2.5 points (t = -2.4), LOCO '
-         'neutral. Feedstock, fermentation, scale or titer-domain inputs for g, and a larger g loss weight, did '
-         'not help and are not used.' + on(mk.get('channel_inputs') == 'physics_v2', '--v1-g-inputs'),
+         '(dg/dprice = 0 exactly; within-configuration correlation -0.05 / -0.02). Adopted as a hard physical '
+         'constraint, not for accuracy: dev CV in-family g unchanged, LOPO -10.5 points (seed t = -1.2; g error '
+         'seed t = -2.9; per held-out product 3 better / 4 worse, median +0.1), LOFO configuration-balanced -2.5 '
+         'points (seed t = -2.4), LOCO neutral. Feedstock, fermentation, scale or titer-domain inputs for g, and '
+         'a larger g loss weight, did not help and are not used.' + on(mk.get('channel_inputs') == 'physics_v2', '--v1-g-inputs'),
          '5. **Extrapolation safeguards** (`EXTRAPOLATION_SAFEGUARDS`): a sugar-availability prior of the '
          'feedstock intensity (free sugars and starch fully available, structural polysaccharides by the '
          'saccharification yield; the network predicts only the residual), clipping of the feedstock and '
          'pretreatment inputs to their training range, and a neutralization gate (no neutralization cost '
          'without an acid group or neutralizing agent; verified on the data). v1 extrapolated a new '
          "feedstock's minor composition fractions (corn: 9.5 training sd) into a saturated feedstock efficiency "
-         '(corn 1/eta 1.50 vs 0.93-1.01). Dev LOFO fold mean 63.4 -> 34.4 % (t = -5.3, 5 seeds; corn 128 -> 43 %); '
-         'LOCO and random not worse.' + on(bool(mk.get('fs_prior')), '--no-extrapolation-safeguards'),
+         '(corn 1/eta 1.50 vs 0.93-1.01). Dev LOFO fold mean 63.4 -> 34.4 % (seed t = -5.3, 5 seeds; corn 128 -> '
+         '43 %); over the 4 held-out feedstocks 3 better / 1 worse, median -15.8, t over folds -1.5, corn 72 % of '
+         'the gain: not established at the fold level, but the corrected feedstock channel is (DESIGN.md 4d: '
+         'feedstock-channel error 23 -> 3.5 % of the numerator). LOCO and random not worse.' + on(bool(mk.get('fs_prior')), '--no-extrapolation-safeguards'),
          '6. **Plan**: the CV, final_dev and release ensembles have the same number of members (the scores '
          'divide by the member spread); the PI-NN and the plain MLP run on every LOCO fold, the PI-NN '
          'ablations on a stratified subset of configurations (`--ablation-loco-folds`). The hyperparameter '
@@ -2195,12 +2258,32 @@ def changes_since_v1(ctx):
          '',
          '**All changes together** (development set only; DESIGN.md round 4e): PI-NN with the v1 settings vs v2 on '
          "the pipeline's CV folds, 3 members, paired over 3 seeds, the v1-selected hyperparameters for both "
-         '(fold-mean MPSP MAPE): leave-one-configuration-out 16.1 -> 9.7 % (t = -10.8), leave-one-feedstock-out '
-         '64.1 -> 34.9 % (t = -24), leave-one-product-out 86.1 -> 50.1 % (t = -7.5; succinic 28 -> 51 % is the one '
-         'held-out group that got worse), productivity extrapolation 18.3 -> 4.3 % (t = -4.2), random 4.10 -> 3.91 % '
-         '(t = -9.1); LOCO restricted to the families of the OOD test configurations 13.3 -> 6.2 % (t = -9.5). On '
-         'the development proxy of the frozen test (6 draws): OOD 11.8 -> 7.1 %, ID 14.3 -> 3.8 %, better than '
-         'HGB (9.2 / 4.8 %), the plain MLP (10.3 / 6.1 %) and ridge (11.4 / 7.7 %) on both.',
+         '(fold-mean MPSP MAPE, %). "Folds" columns: seeds averaged per fold, then paired over the folds '
+         '(held-out configurations for the single productivity fold):\n',
+         '| scheme | v1 -> v2 | seed t | folds better / worse | median diff | t over folds |',
+         '|---|---|---|---|---|---|',
+         '| random (5 folds) | 4.10 -> 3.91 | -9.1 | 5 / 0 | -0.19 | -5.7 |',
+         '| leave-one-configuration-out (37) | 16.1 -> 9.7 | -10.8 | 35 / 2 | -3.7 | -4.4 |',
+         '| ... HP / TAL / succinic / lactic configurations (32; matched OOD estimate) | 13.3 -> 6.2 | -9.5 | 31 / 1 | '
+         '-3.3 | -4.9 |',
+         '| leave-one-feedstock-out (4) | 64.1 -> 34.9 | -24 | 3 / 1 (cornstover +8) | -14.9 | -1.3 |',
+         '| leave-one-product-out (7) | 86.1 -> 50.1 | -7.5 | 6 / 1 (succinic +23) | -5.6 | -1.5 |',
+         '| productivity (1 fold; 36 configurations) | 18.3 -> 4.3 | -4.2 | 36 / 0 | -8.0 | -9.2 |',
+         '',
+         'The LOCO and productivity gains hold at the fold (configuration) level. The leave-one-feedstock-out and '
+         'leave-one-product-out gains are **not statistically established at the fold level**: one fold '
+         'dominates each (corn 72 %, isobutanol 48 % of the summed absolute change). On the development proxy of '
+         'the frozen test (6 draws that share configurations: 24 picks, 16 distinct): OOD 11.8 -> 7.1 %, ID '
+         '14.3 -> 3.8 % (6 of 6 draws better), better than HGB (9.2 / 4.8 %), the plain MLP (10.3 / 6.1 %) and '
+         'ridge (11.4 / 7.7 %) on both.\n',
+         '**Post-selection caveat.** These v2 figures, and this report\'s CV (same folds: LOCO, LOFO, LOPO and '
+         'productivity are deterministic, and the random CV with the default `--seed 0` too), come from the folds and proxy draws on which round 4 '
+         'was diagnosed and its variants were selected, so they are optimistic -- most of all leave-one-feedstock-out, '
+         'whose safeguards were designed from the corn failure. Confirmation on 6 fresh proxy draws and a fresh '
+         'random-CV fold seed that played no role in any decision (same configurations, new combinations, ID '
+         'samples and seeds; DESIGN.md 4e): OOD 13.3 -> 6.9 %, ID 13.9 -> 4.0 % (6 of 6 draws better), v2 better '
+         'than HGB (8.5 / 4.9 %), the plain MLP (8.9 / 5.7 %) and ridge (9.8 / 8.0 %) on both; random CV 4.12 -> '
+         '3.95 % (4 of 5 folds better). No fresh LOFO or LOPO folds exist.\n',
          '']
     return '\n'.join(L)
 
@@ -2228,19 +2311,23 @@ def intervals_section(fin, protocol):
              f'of {conf.get("n_calib_groups")} configurations).\n')
     iv = fin.get('intervals')
     if iv is not None and len(iv):
-        sub = iv[(iv['set'] != 'test_all') & (iv['method'] == 'pinn')
-                 & ((iv['calibration'] == 'loco') | iv['key'].isin(['mpsp', 'g']))]
-        cols = ['method', 'calibration', 'set', 'key', 'n', 'q', 'coverage', 'coverage_cfg_mean', 'coverage_cfg_min',
-                'coverage_pointwise', 'halfwidth_rel_mean', 'halfwidth_rel_median', 'crossfit_mean', 'crossfit_min',
-                'crossfit_q10']
+        own = iv['calibration'].isin(['loco', 'holdout'])
+        sub = iv[(iv['set'] != 'test_all') & (iv['method'] == 'pinn') & (own | iv['key'].isin(['mpsp', 'g']))]
+        cols = ['method', 'calibration', 'set', 'key', 'n', 'q', 'coverage', 'crossfit_pooled', 'coverage_cfg_mean',
+                'crossfit_mean', 'coverage_cfg_min', 'crossfit_min', 'crossfit_q10', 'coverage_pointwise',
+                'halfwidth_rel_mean', 'halfwidth_rel_median']
         L.append('Realized test coverage (report only, never used for any choice) next to the cross-fitted '
-                 'estimate of the calibration (`tables/final_intervals.csv`; `calibration` = loco: the intervals '
-                 'of the saved models; random_cv: reporting-only calibration on the random-CV out-of-fold scores, '
-                 'stored in the checkpoint meta as `conformal_random_cv`; the plain MLP\'s rows are in the CSV):\n')
-        L.append(md_table(sub[cols]) + '\n')
+                 'estimate of the calibration (`tables/final_intervals.csv`). Compare like with like: `coverage` '
+                 '(pooled over the test samples) with `crossfit_pooled`, `coverage_cfg_mean` (mean over the test '
+                 'configurations) with `crossfit_mean` (mean over the LOCO folds), the worst configuration with '
+                 '`crossfit_min`. `calibration` = loco: the intervals of the saved models (out-of-fold LOCO scores); '
+                 'holdout: own calibration hold-out (`--v1-protocol` only); random_cv: reporting-only calibration on '
+                 'the random-CV out-of-fold scores, stored in the checkpoint meta as `conformal_random_cv`. The '
+                 'plain MLP\'s rows are in the CSV:\n')
+        L.append(md_table(sub[[c for c in cols if c in sub]]) + '\n')
     pc = fin.get('intervals_per_config')
     if pc is not None and len(pc):
-        sub = pc[(pc['method'] == 'pinn') & (pc['calibration'] == 'loco') & (pc['set'] == 'test_ood')
+        sub = pc[(pc['method'] == 'pinn') & pc['calibration'].isin(['loco', 'holdout']) & (pc['set'] == 'test_ood')
                  & pc['key'].isin(['mpsp', 'g'])]
         if len(sub):
             t = sub.pivot_table(index='config_id', columns='key', values='coverage', aggfunc='mean').reset_index()
@@ -2249,11 +2336,15 @@ def intervals_section(fin, protocol):
             L.append('PI-NN realized coverage per held-out test configuration (estimate = cross-fitted mean: '
                      + ', '.join(f'{k} {_fmt(v)}' for k, v in est.items()) + '):\n')
             L.append(md_table(t) + '\n')
-    L.append('Coverage is marginal over configurations: the per-configuration coverage of the out-of-fold '
-             'scores spreads widely (cross-fitted `min` / `q10` in section 5), and a new configuration of a family '
-             'whose scores are larger than the calibration set\'s (e.g. TAL on the development proxy) is '
-             'under-covered. For in-distribution queries the LOCO-calibrated intervals are conservative (they are '
-             'calibrated for new configurations). No test sample was used for selection or calibration.\n')
+    L.append('Coverage is marginal over the samples of new configurations, with the configurations weighted by '
+             'their numbers of samples (weighting `sample`), not guaranteed per configuration: the '
+             'per-configuration coverage of the out-of-fold scores spreads widely (cross-fitted `min` / `q10` in '
+             'section 5), and a new configuration of a family whose scores are larger than the calibration set\'s '
+             'is under-covered (development proxy of the frozen test with LOCO-calibrated intervals, 6 draws: '
+             'MPSP coverage 0.86-0.99 per draw, mean 0.93, but TAL_glucose / TAL_corn 0.70 in 2 draws and '
+             'lactic_lowpH_SHF_cornstover 0.58 in one; DESIGN.md round 4f). For in-distribution queries the '
+             'LOCO-calibrated intervals are conservative (proxy 0.95-0.99; they are calibrated for new '
+             'configurations). No test sample was used for selection or calibration.\n')
     return '\n'.join(L)
 
 
@@ -2288,7 +2379,9 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       f'{plan["cv_members"]}-member ensembles for the networks), with the same training procedure as the final '
       f'models (protocol `{protocol["name"]}`, section 3). (2) *Final-test estimate*: the selected PI-NN '
       f'ensemble ({plan["final_members"]} members, `models/final_dev`) and the baselines, trained once on the whole '
-      'development set and evaluated on the final test set, which played no role in any choice or calibration. '
+      'development set and evaluated on the frozen test split. No test sample was used to fit, tune, select or '
+      'calibrate anything, but the v1 test results directed which failure modes round 4 investigated, so the '
+      'test split is a re-used hold-out (notice below). '
       f'(3) *Release model*: {plan["release_members"]}-member PI-NN ensemble with the same hyperparameters and '
       'procedure trained on ALL data '
       '(`models/release`); it has no independent test estimate -- the CV and final-test numbers are the estimates '
@@ -2300,9 +2393,16 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       'frozen test split (`split.json`, unchanged). The first run (v1) is commit fd3f386; its report and headline '
       'tables are kept in `results/v1/`. Between the two runs the pipeline was changed on development-set '
       'evidence only (DESIGN.md section 6, "Development-set diagnostics, round 4"; summary in the section '
-      '"Changes since v1" below). The v1 test results motivated looking for causes, but no test sample was used to '
-      'choose, tune or calibrate anything; the v1 release intervals had been calibrated partly on the test '
-      'configurations, which v2 no longer does.\n')
+      '"Changes since v1" below): no test sample was used to fit, tune, select or calibrate anything. But the v1 '
+      'test results (OOD error above ridge and HGB, in-distribution error far above the random CV, recovery R² '
+      '0.04 on the OOD test) set the round-4 agenda: the protocol and recovery-input causes were looked for '
+      'because of failures seen on the test. The test split is therefore an adaptively re-used hold-out: the v2 '
+      'test MAPE and the v1 -> v2 test improvement are likely optimistic and are not an independent '
+      'confirmation of the round-4 changes. The primary evidence is the development CV and its matched LOCO '
+      'estimate of the OOD test (themselves optimistic after selection; "Changes since v1"). v2 was fixed '
+      'before its test evaluation (code version, protocol and settings in `plan.json`) and is the released '
+      'model whatever the v1 / v2 test comparison shows; that comparison is not used to choose a version. The '
+      'v1 release intervals had been calibrated partly on the test configurations, which v2 no longer does.\n')
     # summary
     head, fh = cv['headline'], fin['headline']
     P('## Summary\n')
@@ -2340,13 +2440,17 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
                   f'n = {int(r["n_test"].iloc[0])} samples).')
     iv = fin.get('intervals')
     if iv is not None and len(iv):
-        r = iv[(iv['method'] == 'pinn') & (iv['key'] == 'mpsp')]
+        r = iv[(iv['method'] == 'pinn') & (iv['key'] == 'mpsp') & iv['calibration'].isin(['loco', 'holdout'])]
         if len(r):
-            cov = {st: float(r[r['set'] == st]['coverage'].iloc[0]) for st in ('test_ood', 'test_id')
-                   if (r['set'] == st).any()}
-            P(f'* PI-NN MPSP intervals (nominal {1 - ALPHA:.0%}, calibrated on dev LOCO out-of-fold scores; '
-              f'cross-fitted estimate {float(r["crossfit_mean"].iloc[0]):.2f}): realized sample-simultaneous '
-              'coverage ' + ', '.join(f'{k} {v:.2f}' for k, v in cov.items()) + '.')
+            g = lambda st, c: float(r[r['set'] == st][c].iloc[0])
+            sets = [st for st in ('test_ood', 'test_id') if (r['set'] == st).any()]
+            src = ('dev LOCO out-of-fold scores' if r['calibration'].iloc[0] == 'loco'
+                   else 'its own calibration hold-out (v1 protocol)')
+            P(f'* PI-NN MPSP intervals (nominal {1 - ALPHA:.0%}, calibrated on {src}): realized '
+              'sample-simultaneous coverage pooled over samples / mean over configurations '
+              + ', '.join(f'{st} {g(st, "coverage"):.2f} / {g(st, "coverage_cfg_mean"):.2f}' for st in sets)
+              + f'; cross-fitted estimate pooled {g(sets[0], "crossfit_pooled"):.2f} / mean over configurations '
+              f'{g(sets[0], "crossfit_mean"):.2f}.')
     P('')
     P(v1_comparison(fh, head, v1))
     P(changes_since_v1(ctx))
@@ -2394,8 +2498,10 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           'calibration hold-out; each ensemble member early-stops on its own random 15 % sample-level hold-out '
           '(the hold-outs differ between members, so the ensemble sees every sample; patience '
           f'{plan["patience"]}, at least {plan["min_epochs"]} and at most {plan["epochs"]} epochs); no refit. '
-          'The baselines fit exactly the rows the members train on. So the CV numbers estimate the procedure that '
-          'made the final models. Intervals: section 6.\n')
+          'The baselines fit exactly the rows the members train on. So the CV numbers estimate the training '
+          'procedure that made the final models, with the selected hyperparameters: the HPO (section 4) chose '
+          'them on the same development set and is not nested in the CV, so the CV is slightly optimistic for '
+          'the whole procedure (HPO + fit). Intervals: section 6.\n')
     else:
         P('**v1 protocol** (`--v1-protocol`, `experiments.PROTOCOL_V1`): CV calibration (15 %) and early-stopping '
           f'hold-outs grouped per scheme by {INNER_GROUP_V1}; `final_dev` with a 15 % configuration-grouped '
@@ -2447,7 +2553,13 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
          + (f'; the PI-NN ablations on a stratified subset of {len(cv["ablation_folds"])}: '
             + ', '.join(f'`{c}`' for c in cv['ablation_folds']) if cv.get('ablation_folds') else '') + '); ')
       + 'productivity: train on the central 20-80 % quantile range of log(r / baseline r), test both tails. '
-      'MAPE = mean over folds (± s.e.); pooled = over all out-of-fold samples; R² pooled out-of-fold.\n')
+      'MAPE = mean over folds (± s.e.); pooled = over all out-of-fold samples; R² pooled out-of-fold. '
+      'Caveats: the HPO selected the hyperparameters on this development set and is not nested in the CV; and '
+      'the leave-one-configuration-out, -feedstock-out, -product-out and productivity folds are deterministic '
+      f'(random CV: seed {a.seed}), so they are the folds on which round 4 diagnosed and selected the v2 changes '
+      '-- post-selection estimates, optimistic, most of all leave-one-feedstock-out (4 folds) and '
+      'leave-one-product-out (7 folds), whose v1 -> v2 gains are not established at the fold level ("Changes '
+      'since v1").\n')
     cols = ['scheme', 'method', 'n_folds_common', 'mpsp_mape', 'mpsp_mape_se', 'mpsp_mape_median', 'mpsp_mape_pooled',
             'fit_mape'] + [f'R2_{k}' for k in TARGETS]
     P(md_table(head[cols], pct_cols=('mpsp_mape', 'mpsp_mape_se', 'mpsp_mape_median', 'mpsp_mape_pooled',
@@ -2520,8 +2632,8 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
               f'{conf.get("n_calib_groups")} configurations, weighting `{conf.get("weighting")}`, cross-fitted MPSP '
               f'coverage {_fmt(conf.get("mpsp_coverage_cv", float("nan")))}): the same scores as `final_dev`, '
               'none of them from a test sample. The release ensemble trains on more data than the CV fold '
-              'ensembles, so these intervals are expected to be slightly conservative for it; flagged '
-              '`coverage_guaranteed = False` in its checkpoint.\n')
+              'ensembles; both its errors and its member spread shrink with more data, so the direction of the '
+              'resulting coverage error is unknown; flagged `coverage_guaranteed = False` in its checkpoint.\n')
         else:
             P('Intervals: none (no usable out-of-fold scores; see log).\n')
         P(f'Loads with `CoefficientPredictor.load`: {rc.get("ok")} '
@@ -2593,9 +2705,10 @@ def parse_args(argv=None):
     ap.add_argument('--members', type=int, default=5,
                     help='full mode: ensemble members of the CV, final_dev and release ensembles (equal, so that '
                          'the CV out-of-fold scores calibrate the final intervals)')
-    ap.add_argument('--ablation-loco-folds', type=int, default=12,
-                    help='full mode: LOCO folds (stratified subset of configurations) of the PI-NN ablations '
-                         '(0 = all; the PI-NN and the plain MLP always run on every LOCO fold)')
+    ap.add_argument('--ablation-loco-folds', type=int, default=None,
+                    help='LOCO folds (stratified subset of configurations) of the PI-NN ablations (default: '
+                         f'{ABLATION_LOCO_FOLDS} in full mode, 4 in quick mode; 0 = all; the PI-NN and the plain MLP '
+                         'always run on every LOCO fold; full mode: the budget may shrink it)')
     ap.add_argument('--hpo-members', type=int, default=2, help='full mode: ensemble members per HPO fit')
     ap.add_argument('--split-file', default=SPLIT_FILE,
                     help='frozen final test split (created from PLANNED_CONFIGS if missing, then never changed)')
@@ -2773,7 +2886,7 @@ def main(argv=None):
     fin['intervals'], fin['intervals_per_config'] = final_intervals(fin, S)
     fin['intervals'].to_csv(os.path.join(tdir, 'final_intervals.csv'), index=False)
     fin['intervals_per_config'].to_csv(os.path.join(tdir, 'final_intervals_per_config.csv'), index=False)
-    checks['v1'] = load_v1_tables(a.out)
+    checks['v1'] = load_v1_tables(a.out, fallback=not a.quick)
     res = cv['results']
     lp = res[(res['scheme'] == 'product') & (res['fold'] >= 0) & (res['metric'] == 'mpsp_mape')]
     if len(lp):

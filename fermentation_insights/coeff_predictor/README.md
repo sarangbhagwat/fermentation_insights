@@ -254,8 +254,9 @@ inflection yield or outside the training titer range.
   scores come from the CV fold ensembles, not from the released one), and
   `P.ensemble.conformal['crossfit']` holds a cross-fitted estimate of the
   coverage (per key: mean, pooled, worst and 10 % quantile over the
-  configurations). The coverage is marginal over configurations: it varies
-  widely between configurations, so a new configuration of a family whose
+  configurations). The coverage is marginal over the samples of new
+  configurations (configurations weighted by their numbers of samples), not
+  guaranteed per configuration: it varies widely between configurations, so a new configuration of a family whose
   errors are larger than usual can be under-covered, while for a query close
   to the training configurations the intervals are conservative. REPORT.md
   (section 6) compares the estimate with the realized test coverage; no test
@@ -410,12 +411,18 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   configuration list and a seed. It holds out four whole configurations
   (`HP_corn`, `TAL_sugarcane`, `succinic_glucose`,
   `lactic_neutral_SSCF_cornstover`; *test_ood*) and 10 % of the samples of
-  the other configurations (*test_id*). These played no role in any choice.
+  the other configurations (*test_id*). No test sample is used to fit, tune,
+  select or calibrate anything. The v1 test results did, however, direct
+  which failure modes round 4 investigated, so in the v2 report the test
+  split is a re-used hold-out and its numbers are likely optimistic (see
+  *Two runs* below).
 * **One training procedure everywhere.** Every network fit (hyperparameter
   search, every CV scheme, `final_dev`, release) trains on all its samples,
   each ensemble member early-stopping on its own random 15 % sample-level
   hold-out, without a calibration hold-out. The CV numbers therefore
-  estimate the procedure that made the final models. The intervals of the
+  estimate the training procedure that made the final models, with the
+  selected hyperparameters (the hyperparameter search is not nested in the
+  CV, so they are slightly optimistic for search + fit). The intervals of the
   final models are calibrated from the leave-one-configuration-out
   out-of-fold scores (section 4.5).
 * **Hyperparameters** are selected by leave-configurations-out CV on the
@@ -457,7 +464,15 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   interval calibration, recovery inputs, productivity structure,
   extrapolation safeguards), which were chosen on the development set only
   (DESIGN.md §6, round 4). The current report (v2) uses the same frozen test
-  split a second time and shows v1 and v2 side by side.
+  split a second time and shows v1 and v2 side by side. Because the v1 test
+  failures set the round-4 agenda, the v2 test numbers (and the v1 → v2
+  test improvement) are likely optimistic and are not an independent
+  confirmation; the development CV is the primary evidence, and it too is
+  optimistic for the leave-one-feedstock-out and leave-one-product-out
+  schemes, whose folds were used to design the changes (4 and 7 folds; at
+  the fold level those gains are not statistically established, DESIGN.md
+  round 4f). v2 was fixed before its test evaluation and is released
+  whatever the v1 / v2 test comparison shows.
 
 ## 7. Known limitations
 
@@ -576,7 +591,13 @@ script):
    The search size is set so that the whole run fits `--budget-hours` on
    `--threads` single-threaded workers. The estimate is made from the
    measured cost of the first candidate; `--plan-only` writes the estimate
-   to `results/plan.json` and stops. Outputs: `results/` (REPORT.md, tables,
+   to `results/plan.json` and stops. A later run reuses `plan.json` only
+   while the data, split, code version, protocol, workers, members and the
+   requested `--budget-hours` / `--hpo-candidates` / `--hpo-members` /
+   `--ablation-loco-folds` are unchanged (otherwise it re-plans; `--replan`
+   forces it). A full run can take longer than a terminal session or a
+   2-hour job limit: start it detached (e.g. `setsid nohup ... &`) or simply
+   relaunch the same command, which resumes from the cache. Outputs: `results/` (REPORT.md, tables,
    figures, log), `models/final_dev` and `models/release`. The CV must run
    before the final stage: the final intervals are calibrated from its
    leave-one-configuration-out out-of-fold scores.

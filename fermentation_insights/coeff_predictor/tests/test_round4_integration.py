@@ -221,6 +221,45 @@ def test_oof_calibration_scores_checks(dev_like):
     with pytest.raises(SystemExit, match='configurations'):
         E.oof_calibration_scores(dict(oof_scores=sc_few), 'config', 'pinn', few, sp)
     assert E.oof_calibration_scores(dict(oof_scores=sc_few), 'config', 'pinn', few, sp, strict=False) is not None
+    # drop (full mode, plain MLP): an unusable table means no intervals, not a stopped run
+    assert E.oof_calibration_scores(dict(oof_scores=ok.iloc[1:]), 'config', 'plain', dev, sp, strict=False,
+                                    drop=True) is None
+    assert E.oof_calibration_scores(dict(oof_scores=ok.iloc[1:].assign(method='plain')), 'config', 'plain', dev,
+                                    sp, strict=False, drop=True) is None
+    assert E.oof_calibration_scores(dict(oof_scores=ok), 'config', 'plain', dev, sp, strict=False,
+                                    drop=True) is None          # no plain scores at all
+    with pytest.raises(SystemExit, match='test samples'):
+        E.oof_calibration_scores(dict(oof_scores=leak), 'config', 'pinn', dev, sp, strict=False, drop=True)
+    # the raw |error| / spread columns are kept for re-scoring with the final ensemble's eps
+    raw = ok.assign(**{f'{k}_{c}': 1. for k in T.EPS_KEYS for c in ('abserr', 'sd')})
+    rec = E.oof_calibration_scores(dict(oof_scores=raw), 'config', 'pinn', dev, sp)
+    assert {'a_abserr', 'g_sd'} <= set(rec)
+
+
+def test_plan_request_and_ablation_folds_per_mode():
+    full = E.base_plan(E.parse_args([]))
+    assert full['ablation_loco_folds'] == E.ABLATION_LOCO_FOLDS == 12
+    assert full['request'] == dict(budget_hours=2.5, hpo_candidates=0, hpo_members=2, ablation_loco_folds=12)
+    p6 = E.base_plan(E.parse_args(['--ablation-loco-folds', '6', '--budget-hours', '3']))
+    assert p6['ablation_loco_folds'] == 6 and p6['request'] != full['request']
+    assert E.base_plan(E.parse_args(['--ablation-loco-folds', '0']))['ablation_loco_folds'] is None
+    # quick mode: default 4, the CLI value is honoured
+    assert E.base_plan(E.parse_args(['--quick']))['ablation_loco_folds'] == 4
+    assert E.base_plan(E.parse_args(['--quick', '--ablation-loco-folds', '2']))['ablation_loco_folds'] == 2
+
+
+def test_final_intervals_label_follows_the_calibration_source():
+    sc = dict(sample_id=['1', '2'], config_id=['c1', 'c2'], invalid=[False, False],
+              **{k: [0.5, 2.0] for k in T.CONF_KEYS})
+    ev = dict(scores=sc, rows=[], coef=np.ones((2, 4)), coef_std=np.ones((2, 4)), g=np.ones(2), g_std=np.ones(2))
+    base = dict(alpha=0.1, n=10, n_calib_groups=10, weighting='sample', **{k: 1.0 for k in T.CONF_KEYS},
+                crossfit={k: dict(mean=0.9, pooled=0.92, min=0.5, q10=0.7) for k in T.CONF_KEYS})
+    for src, lab in (('calibration hold-out', 'holdout'), ('out-of-fold scores of the LOCO CV', 'loco')):
+        fin = dict(final=dict(pinn=dict(error=None, conformal=dict(base, source=src), evals=dict(test_ood=ev))))
+        iv, pc = E.final_intervals(fin, None)
+        assert set(iv['calibration']) == {lab} and set(pc['calibration']) == {lab}
+        r = iv[iv['key'] == 'mpsp'].iloc[0]
+        assert r['coverage'] == 0.5 and r['crossfit_pooled'] == 0.92 and r['crossfit_mean'] == 0.9
 
 
 def test_make_job_cache_key_includes_calibration():

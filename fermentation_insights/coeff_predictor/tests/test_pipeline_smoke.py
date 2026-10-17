@@ -35,11 +35,11 @@ def tables_dir(tmp_path_factory):
     return root, s, fr
 
 
-def _run(root, name, *flags):
+def _run(root, name, *flags, quick=True):
     out, models = root / name / 'out', root / name / 'models'
     # v1 headline tables for the report's side-by-side comparison
     v1 = out / 'v1' / 'tables'
-    v1.mkdir(parents=True)
+    v1.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([dict(set='test_ood', method='pinn', mpsp_mape=0.145, mpsp_mape_median=0.09, R2_g=0.04),
                   dict(set='test_id', method='pinn', mpsp_mape=0.099, mpsp_mape_median=0.05, R2_g=0.9)]
                  ).to_csv(v1 / 'final_test_headline.csv', index=False)
@@ -48,9 +48,10 @@ def _run(root, name, *flags):
                  ).to_csv(v1 / 'timings_fits.csv', index=False)
     E._W.clear()
     try:
-        rc = E.main(['--quick', '--processed', str(root / 'processed'), '--raw', str(root / 'raw'), '--no-rebuild',
-                     '--out', str(out), '--models', str(models), '--split-file', str(root / 'split.json'),
-                     '--threads', '1', *flags])
+        rc = E.main((['--quick', '--threads', '1'] if quick else [])
+                    + ['--processed', str(root / 'processed'), '--raw', str(root / 'raw'), '--no-rebuild',
+                       '--out', str(out), '--models', str(models), '--split-file', str(root / 'split.json'),
+                       *flags])
     finally:
         E._W.clear()
         fh = E._LOG.pop('fh', None)
@@ -169,3 +170,50 @@ def test_v1_flags_reproduce_v1_settings(tables_dir):
     assert json.loads((out / 'plan.json').read_text())['protocol'] == 'v1'
     rep = (out / 'REPORT.md').read_text()
     assert 'Not used in this run (`--v1-protocol`)' in rep and '**v1 protocol**' in rep
+    item2 = next(line for line in rep.splitlines() if line.startswith('2. **Intervals**'))
+    assert 'Not used in this run (`--v1-protocol`)' in item2
+    # final_dev's intervals come from its own hold-out and are labelled so (not 'loco')
+    iv = pd.read_csv(out / 'tables' / 'final_intervals.csv')
+    assert set(iv[iv['method'] == 'pinn']['calibration']) >= {'holdout'}
+    assert 'loco' not in set(iv[iv['method'] == 'pinn']['calibration'])
+
+
+def test_full_mode_runs_resumes_and_replans(tables_dir):
+    """Full mode (spawned worker pool, plan_budget, strict out-of-fold checks,
+    --members / --ablation-loco-folds through base_plan) on the synthetic
+    tables; a second identical run reuses plan.json and every cached fit; a
+    changed --ablation-loco-folds recomputes the plan."""
+    from fermentation_insights.coeff_predictor.train import Ensemble
+    root, s, fr = tables_dir
+    # a tiny budget: plan_budget shrinks the search to its minimum of 8 candidates
+    # (--hpo-candidates would bypass the planning and plan.json reuse)
+    flags = ['--threads', '4', '--budget-hours', '0.01', '--members', '2', '--hpo-members', '1',
+             '--ablation-loco-folds', '4']
+    rc, out, models = _run(root, 'full', *flags, quick=False)
+    assert rc == 0
+    plan = json.loads((out / 'plan.json').read_text())
+    assert plan['mode'] == 'full' and plan['ablation_loco_folds'] == 4 and plan['hpo_candidates'] == 8
+    assert plan['cv_members'] == plan['final_members'] == plan['release_members'] == 2
+    assert plan['request'] == dict(budget_hours=0.01, hpo_candidates=0, hpo_members=1, ablation_loco_folds=4)
+    assert plan['estimate']['fits_budget'] is False
+    for name in ('final_dev', 'release'):
+        conf = Ensemble.load(str(models / name)).conformal
+        assert 'leave-one-configuration-out' in conf['source'] and conf['coverage_guaranteed'] is False
+        assert conf['eps_rescored'] == ['a', 'b', 'c', 'd', 'g'] and 'nominal' in conf['level_kind']
+    rep = (out / 'REPORT.md').read_text()
+    assert 'QUICK' not in rep and 'adaptively re-used hold-out' in rep
+    n_cache = sum(1 for _ in (out / 'cache').rglob('*') if _.is_file())
+    log = out / 'experiments.log'
+    n_log = len(log.read_text())
+    # resume: same command -> plan reused, nothing re-trained
+    rc, out, models = _run(root, 'full', *flags, quick=False)
+    assert rc == 0
+    new = log.read_text()[n_log:]
+    assert 'plan: reusing' in new and 'not reusing' not in new
+    assert sum(1 for _ in (out / 'cache').rglob('*') if _.is_file()) == n_cache
+    # a changed request recomputes the plan (plan-only: stops after writing it)
+    n_log = len(log.read_text())
+    rc, out, models = _run(root, 'full', *flags[:-1], '3', '--plan-only', quick=False)
+    new = log.read_text()[n_log:]
+    assert 'not reusing' in new and 'request' in new
+    assert json.loads((out / 'plan.json').read_text())['ablation_loco_folds'] == 3

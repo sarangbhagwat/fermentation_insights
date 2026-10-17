@@ -68,6 +68,14 @@ def test_sugar_availability():
     # structural polysaccharides with an unknown feedstock type: no prior; free sugars only: 1
     assert np.isnan(a[5]) and a[6] == 1.
     assert 'struct_sugar_availability' in STRUCTURAL
+    # the type is compared case- and blank-insensitively; a type outside the vocabulary
+    # is unknown (no prior, imputed and reported), not a non-lignocellulosic one (0.05 floor)
+    row = df.iloc[[4]]
+    for t, want in ((' Lignocellulose ', SACCHARIFICATION_DEFAULT), ('LIGNOCELLULOSE', SACCHARIFICATION_DEFAULT),
+                    ('lignocellulosic', np.nan), ('agricultural_residue', np.nan), ('', np.nan)):
+        np.testing.assert_allclose(sugar_availability(row.assign(feedstock_type=t)), [want])
+    # free sugars only: the type does not matter
+    np.testing.assert_allclose(sugar_availability(df.iloc[[0]].assign(feedstock_type='molasses')), [1.])
 
 
 def test_neutralization_gate(tabs):

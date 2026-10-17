@@ -569,6 +569,19 @@ STRUCTURAL_SUGARS = ('glucan', 'xylan', 'arabinan', 'galactan', 'mannan')
 SACCHARIFICATION_DEFAULT = 0.9
 
 
+#: feedstock types the sugar-availability prior knows (``FIELD_UNITS['feedstock_type']``)
+FEEDSTOCK_TYPES = ('pure_sugar', 'starch', 'sugar_juice', 'lignocellulose')
+
+
+def _feedstock_type(v):
+    """Canonical feedstock type (case, surrounding blanks, '-' / ' ' vs '_'
+    ignored), or None when omitted or outside :data:`FEEDSTOCK_TYPES`."""
+    if v is None:
+        return None
+    t = str(v).strip().lower().replace('-', '_').replace(' ', '_')
+    return t if t in FEEDSTOCK_TYPES else None
+
+
 def sugar_availability(df):
     """Physics prior of the fraction of the feedstock's glucose-eq. sugar
     (``fs_w_fermentable_sugar_eq``) that reaches fermentation:
@@ -577,8 +590,19 @@ def sugar_availability(df):
     (default SACCHARIFICATION_DEFAULT) for a lignocellulosic feedstock
     (``feedstock_type`` 'lignocellulose', or a saccharification parameter
     given) and s = 0 otherwise; NaN when the composition is unknown or the
-    feedstock type is unknown while structural polysaccharides are present.
-    Used by ``ModelConfig.fs_prior`` (structural input
+    feedstock type is unknown (omitted or outside :data:`FEEDSTOCK_TYPES`,
+    e.g. 'lignocellulosic') while structural polysaccharides are present
+    (the transform then uses 1 and reports the input as imputed).
+
+    Approximation: s, the glucan saccharification conversion in the data
+    (adapters: enzymatic glucan-to-glucose / saccharification reactor), is
+    applied to every structural polysaccharide, including the pentosans
+    converted in pretreatment. Within configurations the data follow the
+    prior's 1/s with a log-log slope of 0.5-0.7, not 1 (ethanol and lactic
+    SHF corn stover; 1.1 for lactic SSCF; DESIGN.md round 4f), so the
+    network residual corrects the sensitivity inside the training range of s
+    (0.77-0.94), while far below it the prior overstates the feedstock
+    intensity (about +10 % at s = 0.6 for corn stover). Used by ``ModelConfig.fs_prior`` (structural input
     ``struct_sugar_availability``)."""
     n = len(df)
     if not n:
@@ -590,7 +614,7 @@ def sugar_availability(df):
     free = sum(np.nan_to_num(_col(df, f'fs_w_{k}').to_numpy()) * SUGAR_GAIN[k] for k in FREE_SUGARS)
     struct = sum(np.nan_to_num(_col(df, f'fs_w_{k}').to_numpy()) * SUGAR_GAIN[k] for k in STRUCTURAL_SUGARS)
     sy_given = _col(df, 'p_saccharification_yield').to_numpy()
-    ftype = [None if v is None else str(v) for v in _strings(df, 'feedstock_type')]
+    ftype = [_feedstock_type(v) for v in _strings(df, 'feedstock_type')]
     ligno = np.array([t == 'lignocellulose' for t in ftype]) | np.isfinite(sy_given) \
         | np.isfinite(_col(df, 'p_enzyme_loading').to_numpy())
     type_known = np.array([t is not None for t in ftype]) | ligno

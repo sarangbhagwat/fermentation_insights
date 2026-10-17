@@ -62,7 +62,8 @@ from .model import (CoefficientNet, ModelConfig, make_layout, mpsp_equation_np,
 __all__ = (
     'LossConfig', 'TrainConfig', 'Ensemble', 'fit_target_scales', 'make_tensors',
     'pad_points', 'compute_loss', 'physics_residuals', 'mpsp_dlogr', 'train_model', 'train_ensemble',
-    'calibrate_conformal', 'calibrate_conformal_oof', 'conformal_scores', 'crossfit_coverage',
+    'calibrate_conformal', 'calibrate_conformal_oof', 'conformal_scores', 'crossfit_coverage', 'rescore_conformal',
+    'EPS_KEYS',
     'REFIT_MODES', 'CONF_KEYS', 'check_constraints', 'apply_constraint_report',
     'split_random', 'split_group', 'split_productivity', 'make_splits', 'inner_split',
     'ensemble_splits', 'SCHEMES', 'SCHEME_GROUP', 'load_tables', 'setup_torch',
@@ -1337,8 +1338,10 @@ def _conf_q(scores, alpha, warn=True):
 
 
 def _conf_info(scores, alpha, warn=True):
-    """``(q, n, level)``: conformal quantile, number of scores and the
-    guaranteed coverage ``k/(n+1)`` (1 when ``q`` is infinite)."""
+    """``(q, n, level)``: conformal quantile, number of scores and the rank
+    level ``k/(n+1)`` (1 when ``q`` is infinite): the finite-sample coverage
+    guarantee when the scores are exchangeable with the query's (a hold-out
+    of the same ensemble), only nominal for out-of-fold scores."""
     s = np.asarray(scores, float)
     s = np.sort(s[~np.isnan(s)])
     n = len(s)
@@ -1381,9 +1384,12 @@ def conformal_scores(ens, samples, points):
     points (simultaneous coverage of the sample's surface; +inf when the mean
     predicted MPSP is 0, NaN without points). Rows with invalid physical
     inputs get NaN scores. Returns a DataFrame with ``sample_id`` /
-    ``config_id`` (when present), ``invalid`` and one column per key in
-    :data:`CONF_KEYS`; :func:`calibrate_conformal_oof` calibrates from such
-    tables collected out of fold."""
+    ``config_id`` (when present), ``invalid``, one column per key in
+    :data:`CONF_KEYS` and, for the keys with an additive floor
+    (:data:`EPS_KEYS`), the raw ``<key>_abserr`` and member spread
+    ``<key>_sd``; :func:`calibrate_conformal_oof` calibrates from such tables
+    collected out of fold (re-scored with its ensemble's eps,
+    :func:`rescore_conformal`)."""
     samples = samples.reset_index(drop=True)
     batch, outs = ens.predict_samples(samples, strict=False)
     ok = ~batch.invalid if batch.invalid is not None else np.ones(len(samples), bool)
@@ -1392,11 +1398,14 @@ def conformal_scores(ens, samples, points):
     out = pd.DataFrame({c: samples[c].astype(str).to_numpy() for c in ('sample_id', 'config_id') if c in samples})
     out['invalid'] = ~ok
     tgt = np.column_stack([pd.to_numeric(samples[k], errors='coerce').to_numpy(float) for k in COEFF_KEYS])
+    raw = {}
     for k, key in enumerate(COEFF_KEYS):
         mu, sd = coef[:, :, k].mean(0), coef[:, :, k].std(0)
-        out[key] = np.where(ok, np.abs(tgt[:, k] - mu) / (sd + eps[key]), np.nan)
+        raw[key] = (np.abs(tgt[:, k] - mu), sd)
     gt = pd.to_numeric(samples['g'], errors='coerce').to_numpy(float)
-    out['g'] = np.where(ok, np.abs(gt - g.mean(0)) / (g.std(0) + eps['g']), np.nan)
+    raw['g'] = (np.abs(gt - g.mean(0)), g.std(0))
+    for key, (err, sd) in raw.items():
+        out[key] = np.where(ok, err / (sd + eps[key]), np.nan)
     Y, T, M, _, mask = pad_points(samples, points)
     mm = ens.mpsp_members(outs, Y, T)
     mu, sd = mm.mean(0), mm.std(0)
@@ -1405,7 +1414,39 @@ def conformal_scores(ens, samples, points):
     sc = np.where(np.isnan(sc), np.inf, sc)          # mu = 0 -> not covered
     s_sample = np.where(mask.any(1), np.where(mask, sc, -np.inf).max(1), np.nan)
     out['mpsp'] = np.where(ok, s_sample, np.nan)
+    # raw |error| and member spread of the additive-eps keys, so that out-of-fold
+    # scores can be re-scored with another ensemble's eps (rescore_conformal)
+    for key, (err, sd) in raw.items():
+        out[f'{key}_abserr'] = np.where(ok, err, np.nan)
+        out[f'{key}_sd'] = np.where(ok, sd, np.nan)
     return out
+
+
+#: keys whose score has an additive spread floor eps (MPSP: relative floor 1 %)
+EPS_KEYS = (*COEFF_KEYS, 'g')
+
+
+def rescore_conformal(scores, eps):
+    """Scores of a :func:`conformal_scores` table recomputed with the
+    spread floors ``eps`` (e.g. :func:`conformal_eps` of the ensemble the
+    intervals are for): ``<key> = <key>_abserr / (<key>_sd + eps[key])`` for
+    a', b', c', d' and g wherever the raw columns are finite (other rows and
+    tables without them keep their stored scores). MPSP is unchanged (its
+    floor is relative and the same for every ensemble). Returns ``(table,
+    rescored keys)``."""
+    sc = scores.copy()
+    done = []
+    for key in EPS_KEYS:
+        ce, cs = f'{key}_abserr', f'{key}_sd'
+        if key not in sc or ce not in sc or cs not in sc:
+            continue
+        err, sd = sc[ce].to_numpy(float), sc[cs].to_numpy(float)
+        fin = np.isfinite(err) & np.isfinite(sd)
+        if not fin.any():
+            continue
+        sc[key] = np.where(fin, err / (sd + eps[key]), sc[key].to_numpy(float))
+        done.append(key)
+    return sc, done
 
 
 def _conf_info_grouped(scores, groups, alpha):
@@ -1434,7 +1475,7 @@ def _conf_info_grouped(scores, groups, alpha):
 
 
 def _conformal_from_scores(scores, alpha, eps, n_groups, grouping, weighting='sample', group_col=None):
-    """Quantiles (and n / guaranteed level per key) from a score table;
+    """Quantiles (and n / rank level k/(n+1) per key) from a score table;
     ``weighting='group'`` uses :func:`_conf_info_grouped` over ``group_col``."""
     n_inv = int(np.sum(scores['invalid'])) if 'invalid' in scores else 0
     conf = {'alpha': float(alpha), 'n': int(len(scores)), 'n_invalid': n_inv,
@@ -1461,13 +1502,16 @@ def calibrate_conformal(ens, samples, points, alpha=0.1, group_col=None):
     """Split-conformal scaling of ensemble spreads on held-out samples
     (scores: :func:`conformal_scores`; the exchangeable units are samples,
     not points). Stores quantiles in ``ens.conformal`` with, per key, the
-    number of scores ``<key>_n`` and the guaranteed level ``<key>_level``,
+    number of scores ``<key>_n`` and the level ``<key>_level`` = k/(n+1)
+    (``level_kind``),
     plus the calibration grouping and ``coverage_guaranteed`` (finite-sample
     valid AND calibrated on >= MIN_CALIB_GROUPS held-out groups)."""
     n_groups = int(samples[group_col].astype(str).nunique()) if group_col and group_col in samples else len(samples)
     sc = conformal_scores(ens, samples, points)
     conf = _conformal_from_scores(sc, alpha, conformal_eps(ens), n_groups, group_col or 'sample (within-config)')
     conf['source'] = 'calibration hold-out'
+    conf['level_kind'] = ('k/(n+1) of the hold-out scores: finite-sample marginal coverage of exchangeable '
+                          'samples of the hold-out kind')
     conf['coverage_guaranteed'] = bool(conf['finite_sample_valid'] and group_col is not None
                                        and n_groups >= MIN_CALIB_GROUPS)
     ens.conformal = conf
@@ -1522,26 +1566,36 @@ def calibrate_conformal_oof(ens, scores, alpha=0.1, group_col='config_id', fold_
     procedure: ``scores`` is a :func:`conformal_scores` table of the
     cross-validation fold ensembles on their held-out samples (one row per
     held-out sample, e.g. the leave-configurations-out CV of the development
-    set; must contain ``group_col``). The quantile rule, keys and eps floors
-    are those of :func:`calibrate_conformal` (eps from ``ens``'s own target
-    scales); the fold ensembles are not ``ens``, so ``coverage_guaranteed`` is
-    False. ``conformal['crossfit']`` holds the cross-fitted coverage estimate
-    (:func:`crossfit_coverage` over ``fold_col``, default ``group_col``) and
-    ``<key>_coverage_cv`` its fold-balanced mean. ``weighting``: 'sample'
-    (plain split-conformal quantile over all scores) or 'group' (every
-    configuration weighted equally, :func:`_conf_info_grouped`). ``info`` is
-    stored as metadata (e.g. scheme, members of the fold ensembles)."""
+    set; must contain ``group_col``). The quantile rule and keys are those of
+    :func:`calibrate_conformal`. The eps floors are ``ens``'s own
+    (:func:`conformal_eps`, the ones its intervals use): the scores of a',
+    b', c', d' and g are re-scored with them from the raw ``<key>_abserr`` /
+    ``<key>_sd`` columns when present (:func:`rescore_conformal`;
+    ``conformal['eps_rescored']`` lists the keys; without those columns the
+    fold ensembles' floors are kept, an approximation). The fold ensembles
+    are not ``ens``, so ``coverage_guaranteed`` is False and ``<key>_level``
+    is only nominal (``level_kind``). ``conformal['crossfit']`` holds the
+    cross-fitted coverage estimate (:func:`crossfit_coverage` over
+    ``fold_col``, default ``group_col``) and ``<key>_coverage_cv`` its
+    fold-balanced mean. ``weighting``: 'sample' (plain split-conformal
+    quantile over all scores: configurations count by their numbers of
+    samples) or 'group' (every configuration weighted equally,
+    :func:`_conf_info_grouped`). ``info`` is stored as metadata (e.g.
+    scheme, members of the fold ensembles)."""
     if group_col not in scores:
         raise ValueError(f'scores need a {group_col!r} column')
     if weighting not in ('sample', 'group'):
         raise ValueError(f'weighting={weighting!r}')
     fold_col = fold_col or group_col
-    sc = scores.reset_index(drop=True)
+    eps = conformal_eps(ens)
+    sc, rescored = rescore_conformal(scores.reset_index(drop=True), eps)
     n_groups = int(sc[group_col].astype(str).nunique())
-    conf = _conformal_from_scores(sc, alpha, conformal_eps(ens), n_groups, group_col, weighting, group_col)
+    conf = _conformal_from_scores(sc, alpha, eps, n_groups, group_col, weighting, group_col)
     cf = crossfit_coverage(sc, alpha, fold_col, weighting=weighting, group_col=group_col)
     conf.update(source=source, coverage_guaranteed=False, crossfit=cf, crossfit_fold_col=fold_col,
-                n_folds=int(sc[fold_col].astype(str).nunique()), **info)
+                n_folds=int(sc[fold_col].astype(str).nunique()), eps_rescored=rescored,
+                level_kind=('nominal: k/(n+1) of out-of-fold scores of other (fold) ensembles, no finite-sample '
+                            'guarantee for this ensemble'), **info)
     for key in CONF_KEYS:
         conf[f'{key}_coverage_cv'] = cf[key]['mean']
     ens.conformal = conf
