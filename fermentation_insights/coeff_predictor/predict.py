@@ -61,9 +61,14 @@ from the registry when unique for the product pair in training, from
 Known feedstocks/products can be given by name: omitted fields (feedstock
 composition and baseline capacity, theoretical/inflection yields,
 stoichiometric mass ratio, chemical IDs, the fermentation regime when it is
-unique for the product pair in training, baseline contextual ``p_*``
-parameters, ...) are filled from the training data's registry
-(``filled_from_registry``), and chemical descriptors come from
+unique, baseline contextual ``p_*`` parameters, ...) are filled from the
+training data's registry (``filled_from_registry``; precedence: a known
+``config_id``, then the (product pair, feedstock) combination, then the
+pair / feedstock / product entries -- ``features.apply_spec_registry``).
+Parameters not applicable to the matched training configuration stay NaN
+as in training (``not_applicable``; ``features.NOT_APPLICABLE`` = 'n/a'
+marks one explicitly), so a by-name query of a training configuration
+encodes exactly as its training rows. Chemical descriptors come from
 ``registry/chemicals.json``. Unrecognized names are reported (with close
 matches). New chemicals are described by passing
 ``descriptors={chemical_ID: {...}}`` (keys of the registry), by
@@ -110,9 +115,11 @@ totals), ``int__<fs|el|ng>__<k>`` (intensities of price-explicit channels),
 ``ad_ratio`` (kNN distance / training threshold, in the encoder-feature +
 productivity space), ``in_domain``, ``outside_range``,
 ``price_outside_range`` (informational: price channels are exactly linear),
+``intervals_calibrated`` (False when the feedstock, fermentation product or
+product pair is not in training: the intervals are then not calibrated),
 ``imputed`` (per row), ``contextual_defaults`` (contextual parameters not
-given by the user: product baseline or training baseline) and
-``filled_from_registry``. Without per-channel heads (``channels=False``) the
+given by the user; their origin in ``contextual_source``), ``not_applicable``
+(contextual parameters kept NaN) and ``filled_from_registry``. Without per-channel heads (``channels=False``) the
 breakdown has a ``ch__rest__<k>`` channel. Intervals are omitted when the
 calibration set was too small for the nominal level
 (``ensemble.conformal['<k>_level']``). With a user recovery, ``g_std`` = 0 and

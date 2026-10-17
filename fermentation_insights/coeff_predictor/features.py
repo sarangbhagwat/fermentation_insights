@@ -178,7 +178,8 @@ FIELD_UNITS = {
     'aerobic': 'bool',
     'fermentation_mode': 'batch, fed-batch or continuous',
     'separation_principle': 'free text; used only by checkpoints trained without the downstream fields',
-    # contextual parameters (omitted: product-pair baseline, else training baseline)
+    # contextual parameters (omitted: configuration / (pair, feedstock) baseline -- NaN where not
+    # applicable --, else product-pair baseline, else training baseline; 'n/a' = not applicable)
     'p_operating_days': 'd/yr',
     'p_IRR': 'fraction (internal rate of return)',
     'p_income_tax': 'fraction',

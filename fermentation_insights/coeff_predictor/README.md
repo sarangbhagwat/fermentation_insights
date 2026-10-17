@@ -45,7 +45,11 @@ per-sample least-squares fits of exactly this equation to simulated MPSPs
   channel is fitted with the same basis `[1, 1/y, 1/t, 1/(y·t)]`, so the
   channel coefficients sum exactly to a′, b′, c′, d′. The network predicts
   the channels (intermediate supervision), and the totals are their sum (a
-  hard identity).
+  hard identity). In the release the channel supervision is weak (loss
+  weight `w_ch = 0.1`, selected by an MPSP-only criterion): the totals are
+  accurate, but individual channels are not (REPORT.md section 8), and the
+  channel supervision shows no measurable accuracy gain in the ablations
+  (section 6 below).
 * **Price-explicit intensities (§2, §3).** Feedstock, electricity and natural
   gas enter as price × predicted intensity (kg feedstock, kWh, kg gas per kg
   product). The prices are not network inputs, so predictions are exactly
@@ -61,10 +65,16 @@ per-sample least-squares fits of exactly this equation to simulated MPSPs
 * **Equation layer and hard bounds (§3, §4).** The equation turns the totals
   into MPSP at the simulated points, and the MPSP error is part of the loss.
   The recovery is bounded, `g = g_max·sigmoid(·)`.
-* **Soft constraints at collocation points (§4).** MPSP non-increasing in
-  yield, titer and productivity, positive MPSP and non-negative intensities are
-  penalized at labelled points and at unlabelled, perturbed inputs (only
-  constraints the training data satisfy are enabled).
+* **Soft constraints at collocation points (§4).** Residuals for MPSP
+  non-increasing in yield, titer and productivity, positive MPSP and
+  non-negative intensities are available, but only those the training data
+  satisfy are enabled. In the release only two are active, at labelled
+  points and at unlabelled, perturbed inputs (prices kept inside the
+  training box, `colloc_price_range = [1, 1]`): **positive MPSP** and a
+  **non-negative feedstock intensity**. Monotonicity in yield and titer is
+  NOT enforced (7 % / 2 % of the training samples violate it), monotonicity
+  in productivity is replaced by the hard structure below, and the
+  natural-gas non-negativity is disabled (`meta.json` → `loss_config`).
 * **Channel-wise input masking (§3).** Each output has its own sub-network
   that sees only the features of the process areas that can affect it. For
   example, the feedstock intensity and upstream capital see no product
@@ -109,7 +119,8 @@ conda create -n fi_ml python=3.12 && conda activate fi_ml
 pip install torch numpy pandas scipy scikit-learn matplotlib pytest
 pip install thermosteam==0.54.2      # optional: descriptors of new chemicals
 export PYTHONPATH=/path/to/fermentation_insights
-python -m pytest fermentation_insights/coeff_predictor/tests   # ~1 min, synthetic data only
+python -m pytest fermentation_insights/coeff_predictor/tests   # ~8-12 min (incl. the pipeline smoke tests)
+python -m pytest fermentation_insights/coeff_predictor/tests -k "not smoke"   # ~2 min subset
 ```
 
 Tested with torch 2.6.0, numpy 2.5.4, pandas 3.0.6, scipy 1.18.1,
@@ -150,14 +161,41 @@ p[['a', 'b', 'c', 'd', 'g']]
 P.unprimed(known)                       # A, B, C, D = a'/g, ...
 ```
 
-Names fill everything the training data define for them: the feedstock
-composition and baseline capacity, the yields and acid properties of the
-product, the stoichiometric ratio, the regime fields that are unique for the
-product pair in training, and the baseline contextual parameters. The output
-lists what was filled (`filled_from_registry`), defaulted
-(`contextual_defaults`) or imputed (`imputed`), and UserWarnings repeat it. A
-regime field that varies between the configurations of a product pair should
-be given; otherwise it is encoded as unknown, and a warning names it. The values of the known configurations are in
+Names fill everything the training data define for them, most specific
+first:
+
+1. a known `config_id` fills its baseline sample's values of every input
+   (names, composition, capacity, product properties, regime, downstream
+   fields and contextual `p_*` parameters). Parameters that do not apply to
+   that configuration (NaN in its training data, e.g. `p_operating_days` of
+   the corn ethanol plant) stay NaN, as in training (`not_applicable`
+   column). `P.predict({'config_id': 'HP_corn', 'r': 0.3,
+   'feedstock_price': 0.2})` is enough; names that contradict the
+   `config_id` disable its baselines, with a warning;
+2. otherwise the (product pair, feedstock) combination fills the same from
+   its training baseline (regime fields only where unique for the
+   combination; e.g. sugarcane mills run 180 days, the others 330);
+3. then the product pair, the feedstock and the product entries. For a
+   feedstock-product combination not in training, the feedstock-dependent
+   parameters (operating days, saccharification yield, enzyme loading) come
+   from the feedstock's own baseline with other products; if they can only
+   come from other feedstocks, a warning says so. Saccharification
+   parameters are never filled for feedstocks not known to be
+   lignocellulosic.
+
+A query of a training configuration by `config_id` (or by names, when the
+combination has one configuration) therefore encodes exactly as its
+training rows: the release check (REPORT.md section 7) and
+`tests/test_serving_consistency.py` verify that the API reproduces the
+validated predictions for every training row and every configuration. The
+output lists what was filled (`filled_from_registry`), defaulted
+(`contextual_defaults`, with their origin in `contextual_source`), kept
+not applicable (`not_applicable`) or imputed (`imputed`), and UserWarnings
+repeat it. A regime field that varies between the configurations of a
+product pair (and feedstock) should be given; otherwise it is encoded as
+unknown, and a warning names it. A contextual parameter that does not apply
+to a new configuration can be given as `'n/a'`
+(`features.NOT_APPLICABLE`; None / NaN mean "not given" and are filled). The values of the known configurations are in
 their adapters' `configurations()` (`data_generation/adapters/`), and
 `P.known_downstream(config_id)` returns their downstream fields.
 
@@ -186,6 +224,14 @@ P.predict(straw)
 
 Other gains, as in `data_generation/harness.describe_feedstock`: 1 for
 monomeric sugars, 2·180.16/342.30 for sucrose and 180.16/162.14 for starch.
+
+**Accuracy for a new feedstock.** In leave-one-feedstock-out CV the PI-NN's
+MPSP error is 23.9 % (fold mean; 4 folds) against 9.3 % for a new
+configuration of known feedstocks, and the intervals are NOT calibrated for
+it: the shipped quantiles cover 0.75 of the held-out MPSP samples (0.54 for
+corn stover, 0.63 for sugarcane) and 0.66 of the recoveries, against a
+nominal 0.90 (REPORT.md section 6). Such rows are flagged
+`intervals_calibrated = False`.
 
 ### 4.3 A new fermentation product
 
@@ -220,6 +266,18 @@ The descriptor keys are those of `registry/chemicals.json`. `dor` and
 registers a chemical for the session instead of passing `descriptors=`. A
 value outside a vocabulary raises ValueError (`P.downstream_vocabulary`), and
 `P.missing_fields(spec)` lists the required fields that are still missing.
+
+**Accuracy for a new product: poor.** For a product family not in
+training the predictions are rough first guesses, not estimates. In
+leave-one-product-out CV the PI-NN's MPSP error is 57 % (fold mean over 7
+products; 41-78 % per product: HP 78, isobutanol 66, succinic 60, ethanol
+59, lactic 54, TAL 42, oxalic 41 %), no better than a nearest-configuration
+lookup (kNN 53 %) or the plain MLP (53 %), and the recovery is off by a
+median -30 % (succinic) to +57 % (lactic) per product. The intervals are
+NOT calibrated for a new product: the shipped quantiles cover 0.56 of the
+held-out MPSP samples and 0.42 of the recoveries (0.00-0.10 for lactic,
+TAL and succinic acid) against a nominal 0.90 (REPORT.md sections 5-6).
+Such rows are flagged `intervals_calibrated = False`.
 
 ### 4.4 MPSP surface and relative impact of yield vs. titer
 
@@ -263,6 +321,19 @@ inflection yield or outside the training titer range.
   sample was used to calibrate. `P.ensemble.meta['conformal_random_cv']` holds,
   for information only, the quantiles calibrated on the random-CV scores
   (in-distribution queries).
+* **Measured coverage (nominal 0.90).** Cross-fitted LOCO estimate for a new
+  configuration, pooled over samples (the targeted quantity) / mean over
+  configurations: a′ 0.90 / 0.93, b′ 0.88 / 0.93, c′ 0.89 / 0.94, d′
+  0.84 / 0.95, **g 0.79 / 0.87** (10 % quantile over configurations 0.40),
+  **MPSP 0.83 / 0.95**. The recovery intervals under-cover: on the OOD test
+  0.67 (TAL_sugarcane 0.38, lactic_neutral_SSCF_cornstover 0.41), and with
+  the shipped quantile every TAL development configuration is covered at
+  only about 0.4 in LOCO. For a **new feedstock or a new product the
+  intervals are not calibrated**: the shipped quantiles cover 0.75 / 0.56
+  of the held-out MPSP samples and 0.66 / 0.42 of the recoveries in
+  leave-one-feedstock-out / leave-one-product-out CV (REPORT.md section 6).
+  `intervals_calibrated` is False (with an `ApplicabilityWarning`) for rows
+  whose feedstock, fermentation product or product pair is not in training.
 * `ad_ratio` is the mean distance to the 5 nearest training rows, divided by
   the 99 % quantile of the training rows' own distances, in the space of the
   encoder features and productivity. `in_domain` = `ad_ratio ≤ 1` and no
@@ -270,7 +341,11 @@ inflection yield or outside the training titer range.
   the domain, an `ApplicabilityWarning` is issued; treat the prediction as an
   extrapolation. Prices are not part of the domain (the price channels are
   exactly linear), and prices outside the training range are listed in
-  `price_outside_range`.
+  `price_outside_range`. On the OOD test (final_dev, REPORT.md section 6)
+  46 % of the samples are in the domain, with an MPSP error of 3.3 % in it
+  and 9.6 % outside (Spearman correlation of `ad_ratio` with the error
+  0.49); the flag is informative but no guarantee, and the CV folds could
+  not be checked (their models are not saved).
 
 ### 4.6 Channel breakdown
 
@@ -278,8 +353,18 @@ inflection yield or outside the training titer range.
 channels. They sum to the totals, and `ch__<channel>__a + …/y + …/t +
 …/(y·t)` divided by g is that channel's share of the MPSP. For the
 price-explicit channels, `int__<fs|el|ng>__<k>` are the intensities and
-`ch__feedstock__k = feedstock_price · int__fs__k`, so the effect of a
-feedstock, electricity or natural-gas price change is exact. The channel
+`ch__feedstock__k = feedstock_price · int__fs__k`, so the predictions are
+exactly linear in the feedstock, electricity and natural-gas prices. The
+price SENSITIVITY is only as accurate as the predicted intensity, which is
+learned and biased for some configurations even in-sample (release model,
+REPORT.md section 8 (ii-b), error of the MPSP response to a 100 % price
+change in % of MPSP): the feedstock sensitivity dMPSP/dp_fs is 19-24 % too
+low for every corn configuration (the corn intensity is shared through the
+feedstock-only sub-network and is plausibly distorted by TAL's
+substrate-basis defect D8), and
+the isobutanol electricity / natural-gas responses are off by -42 / -23 %
+of MPSP (corn ethanol electricity -25 %). Individual channels are less
+accurate than their sum (the channels offset each other). The channel
 names are in `P.ensemble.channel_names()`.
 
 ```python
@@ -319,9 +404,10 @@ error of the predicted g).
 `a, b, c, d, g` (ensemble means; `g` is the user recovery where one was
 given), `g_predicted`, `g_source`, `<k>_std`, `<k>_lo`, `<k>_hi`,
 `ch__<channel>__<k>`, `int__<fs|el|ng>__<k>`, `ad_ratio`, `in_domain`,
-`outside_range`, `price_outside_range`, `imputed`, `contextual_defaults` and
+`outside_range`, `price_outside_range`, `intervals_calibrated`, `imputed`,
+`contextual_defaults`, `contextual_source`, `not_applicable` and
 `filled_from_registry`. `mpsp()` returns `row, y, t, MPSP, MPSP_std,
-MPSP_lo, MPSP_hi, g_source`.
+MPSP_lo, MPSP_hi, g_source, intervals_calibrated`.
 
 ## 5. Field reference
 
@@ -350,7 +436,7 @@ imputed field is reported per row.
 | `feedstock_type` | pure_sugar, starch, sugar_juice or lignocellulose | feedstock name, else unknown level |
 | `fs_w_*` | kg/kg wet feedstock (mass fractions, wet basis) | feedstock name, else training median (`imputed`) |
 | `fs_w_fermentable_sugar_eq` | kg glucose-eq. fermentable sugar / kg wet feedstock, in (0, 1.12] (> 1 only for anhydro sugars, e.g. pure starch 1.11) | **required** unless the feedstock is known by name |
-| `p_feedstock_capacity` | kg/h wet feedstock | feedstock name (baseline), else training baseline (`contextual_defaults`) |
+| `p_feedstock_capacity` | kg/h wet feedstock | configuration / (pair, feedstock) baseline, else feedstock name (baseline), else training baseline (`contextual_defaults`) |
 | **Fermentation product and regime** | | |
 | `theoretical_yield` | g fermentation product / g glucose-eq. sugar | **required** unless the fermentation product is known by name |
 | `inflection_yield` | g fermentation product / g glucose-eq. sugar | **required** unless the fermentation product is known by name |
@@ -376,16 +462,16 @@ imputed field is reported per row.
 | `neutralization_degree` | mol base-eq. / mol product acid groups converted to salt in fermentation, in [0, 1] | `config_id` or product pair (if unique), else imputed |
 | `acid_regeneration` | acid regenerating the free acid downstream: 'H2SO4' or 'none' | `config_id` or product pair (if unique), else imputed |
 | **Contextual parameters** | | |
-| `p_operating_days` | d/yr | product-pair baseline, else training baseline (`contextual_defaults`) |
-| `p_IRR` | fraction (internal rate of return) | product-pair baseline, else training baseline (`contextual_defaults`) |
-| `p_income_tax` | fraction | product-pair baseline, else training baseline (`contextual_defaults`) |
-| `p_boiler_efficiency` | fraction | product-pair baseline, else training baseline (`contextual_defaults`) |
-| `p_turbogenerator_efficiency` | fraction | product-pair baseline, else training baseline (`contextual_defaults`) |
-| `p_cell_mass_yield` | g cell mass / g sugar (biorefinery convention) | product-pair baseline, else training baseline (`contextual_defaults`) |
-| `p_base_price` | USD/kg base | product-pair baseline, else training baseline (`contextual_defaults`) |
-| `p_acid_price` | USD/kg acid | product-pair baseline, else training baseline (`contextual_defaults`) |
-| `p_enzyme_loading` | biorefinery-specific units | product-pair baseline, else training baseline (`contextual_defaults`) |
-| `p_saccharification_yield` | fraction | product-pair baseline, else training baseline (`contextual_defaults`) |
+| `p_operating_days` | d/yr | configuration / (pair, feedstock) baseline (NaN where not applicable), else product-pair baseline, else training baseline (`contextual_defaults`, `contextual_source`); `'n/a'` = not applicable |
+| `p_IRR` | fraction (internal rate of return) | configuration / (pair, feedstock) baseline (NaN where not applicable), else product-pair baseline, else training baseline (`contextual_defaults`, `contextual_source`); `'n/a'` = not applicable |
+| `p_income_tax` | fraction | configuration / (pair, feedstock) baseline (NaN where not applicable), else product-pair baseline, else training baseline (`contextual_defaults`, `contextual_source`); `'n/a'` = not applicable |
+| `p_boiler_efficiency` | fraction | configuration / (pair, feedstock) baseline (NaN where not applicable), else product-pair baseline, else training baseline (`contextual_defaults`, `contextual_source`); `'n/a'` = not applicable |
+| `p_turbogenerator_efficiency` | fraction | configuration / (pair, feedstock) baseline (NaN where not applicable), else product-pair baseline, else training baseline (`contextual_defaults`, `contextual_source`); `'n/a'` = not applicable |
+| `p_cell_mass_yield` | g cell mass / g sugar (biorefinery convention) | configuration / (pair, feedstock) baseline (NaN where not applicable), else product-pair baseline, else training baseline (`contextual_defaults`, `contextual_source`); `'n/a'` = not applicable |
+| `p_base_price` | USD/kg base | configuration / (pair, feedstock) baseline (NaN where not applicable), else product-pair baseline, else training baseline (`contextual_defaults`, `contextual_source`); `'n/a'` = not applicable |
+| `p_acid_price` | USD/kg acid | configuration / (pair, feedstock) baseline (NaN where not applicable), else product-pair baseline, else training baseline (`contextual_defaults`, `contextual_source`); `'n/a'` = not applicable |
+| `p_enzyme_loading` | biorefinery-specific units | configuration / (pair, feedstock) baseline (NaN where not applicable), else product-pair baseline, else training baseline (`contextual_defaults`, `contextual_source`); `'n/a'` = not applicable |
+| `p_saccharification_yield` | fraction | configuration / (pair, feedstock) baseline (NaN where not applicable), else product-pair baseline, else training baseline (`contextual_defaults`, `contextual_source`); `'n/a'` = not applicable |
 | **Query and output** | | |
 | `y` | g fermentation product / g glucose-eq. sugar | argument of `mpsp()` |
 | `t` | g/L | argument of `mpsp()` |
@@ -446,7 +532,7 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   of the 4-coefficient equation itself (irreducible). Also reported (REPORT.md
   and `tables/cv_headline.csv`): the
   configuration-balanced MAPE (each configuration counts once), MAPE split
-  into spec-determined and random samples, the noise floor, per-coefficient
+  into spec-determined and random samples, a within-configuration linear baseline, per-coefficient
   MAE/R², a conditioning-aware coefficient error (`coef_gram_rel`), interval
   coverage and constraint violations. The basis is collinear on the
   titer-yield domain, so b′ and d′ are individually ill-determined (an R² of
@@ -454,7 +540,23 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   errors and `coef_gram_rel`, not single-coefficient R².
 * **Baselines and ablations.** Nearest configuration (kNN), ridge, gradient
   boosting, plain MLP, and the PI-NN without channels, without price-explicit
-  channels and without physics residuals or collocation.
+  channels and without physics residuals or collocation. Only the PI-NN is
+  tuned: the plain MLP reuses the PI-NN's selected hyperparameters, gradient
+  boosting and kNN use fixed settings and ridge its internal CV of the
+  penalty, so the comparisons are tilted toward the PI-NN by an unknown
+  amount. No ablation effect is established at the fold level (REPORT.md
+  summary and section 5: every |t| ≤ 1.3, each mean driven by one fold); the
+  fold-level evidence for the physics-informed model as a whole is PI-NN
+  vs. plain MLP on leave-one-configuration-out (PI-NN better on 34 of 37
+  folds, +2.5 ± 1.3 pp for the plain MLP). The channel decomposition, the
+  price-explicit structure and the physics terms are kept for the
+  guarantees they give (exact price linearity, dMPSP/dr ≤ 0, bounds, an
+  additive channel breakdown), not for a measured accuracy gain. On the
+  final test the PI-NN is better than the best baseline on the
+  in-distribution samples (PI-NN − plain MLP −1.1 pp, configuration-cluster
+  bootstrap 95 % CI [−1.5, −0.6]); with 4 held-out configurations the OOD
+  test cannot rank the methods (plain MLP 6.6 % vs. PI-NN 6.9 %, CI of the
+  difference [−1.8, +2.9] pp).
 * **Release model** (`models/release`). It is trained on all data and has no
   independent test. The CV and final-test estimates (`models/final_dev`)
   measure its accuracy.
@@ -482,26 +584,47 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   of the Bioindustrial-Park modules. Yields are covered up to
   each configuration's inflection yield, and titers and productivities over
   the simulated ranges.
-* **New-product extrapolation is uncertain.** Products without a close
-  relative in training (in development CV: ethanol, isobutanol, oxalic,
-  lactic) have errors several times those of new configurations of a known
-  product. The errors come from the recovery g and from the electricity,
-  natural-gas and downstream channels, which legitimately depend on the
-  product, and from process structure no training configuration has
-  (coproduct credits of isobutanol and corn ethanol, corn ethanol's missing
-  boiler; DESIGN.md §6, rounds 1–4). The recovery of a new separation train
-  is not predictable from the present descriptors (leave-one-product-out g
-  errors of −23 to +44 % for every input set tried). Check
-  `in_domain`/`ad_ratio`, and supply a known recovery (section 4.7) where
-  possible.
+* **New-product extrapolation is poor.** In leave-one-product-out CV (v2)
+  the PI-NN's MPSP error is 57 % (fold mean, 7 products; 41-78 % per
+  product: HP 78, isobutanol 66, succinic 60, ethanol 59, lactic 54, TAL
+  42, oxalic 41 %), not better than a nearest-configuration lookup (kNN
+  53 %) or the plain MLP (53 %); only 11 % of the held-out TY points are
+  within ±20 %. The median recovery error per held-out product ranges from
+  −30 % (succinic) to +57 % (lactic). The intervals are not calibrated for a
+  new product (coverage of the shipped quantiles 0.56 for MPSP and 0.42 for
+  g; section 4.5). The errors come from the recovery g and from the
+  electricity, natural-gas and downstream channels, which legitimately
+  depend on the product, and from process structure no training
+  configuration has (coproduct credits of isobutanol and corn ethanol, corn
+  ethanol's missing boiler; DESIGN.md §6). The v2 HP fold (78 %, against
+  21 % for the plain MLP, ridge and gradient boosting) is a regression of
+  the re-selected PI-NN hyperparameters (DESIGN.md §6, "v2 run vs. the
+  round-4 estimates"). Use predictions for a new product as rough first
+  guesses, check `in_domain`/`ad_ratio`, and supply a known recovery
+  (section 4.7) where possible.
+* **New feedstocks** are better but still far from new configurations:
+  leave-one-feedstock-out MPSP error 23.9 % (fold mean, 4 folds), interval
+  coverage of the shipped quantiles 0.75 (MPSP) and 0.66 (g).
 * **Per-configuration bias.** The remaining error is mostly a systematic
   bias per configuration, not noise. The ensemble spread does not capture
   it, and the conformal intervals cover it only on average over
   configurations (`coverage_guaranteed` is False; section 4.5).
-* **Noise floor.** Random samples differ in biorefinery-specific parameters
-  (`bp_*`) that are not model inputs. Even a model that knows the
-  configuration exactly cannot predict those samples better than the noise
-  floor reported in REPORT.md (`evaluate.noise_floor`).
+* **Unobserved biorefinery parameters.** Random samples differ in
+  biorefinery-specific parameters (`bp_*`) that are not model inputs, so
+  part of their variation is not predictable from the specification.
+  REPORT.md section 1 gives a within-configuration linear baseline
+  (`evaluate.noise_floor`, 6.1 % configuration geo-mean); it is not a noise
+  floor (the PI-NN predicts random samples at 3.1 % in random CV, and adding
+  the `bp_*` inputs makes the linear baseline worse).
+* **Sample coverage.** Some configurations keep fewer samples than planned
+  (REPORT.md section 1, `tables/data_coverage.csv`): `TAL_SA_glucose` keeps
+  only its baseline sample and `TAL_SA_sugarcane` 10 of 29 (a harness
+  defect recorded later samples without simulated points after a failed
+  reset; fixed, data not regenerated); the lactic SSCF configurations lose a
+  third of their random samples, the low-carbohydrate ones (the retained
+  data are censored toward carbohydrate-rich corn stover);
+  `lactic_lowpH_SHF_cornstover` and `succinic_neutral_cornstover` stopped
+  short of plan (27/36 and 15/18 completed).
 * **Primed coefficients, not process detail.** The model predicts costs at
   the biorefineries' own designs. A user recovery is a first-order
   approximation (section 4.7). Price linearity is exact only for the feedstock,
@@ -512,12 +635,21 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     sugarcane RIN credit, D6 HP lime price, D7 HP inflection yield, M1/M3/
     M12/M23 metadata, S1 downstream fields). The D2 corn-ethanol samples
     were regenerated.
-  - Defects that are not corrected are tracked: HP acid regeneration (D5),
-    TAL substrate basis (D8, a negative feedstock c′), lactic (D1, D9),
-    isobutanol (D10), oxalic (D13, D14).
-  - Known module behaviour: the succinic_neutral flowsheet acidulates but
-    records an acid cost of 0, and TAL's final-product purity varies with
-    titer.
+  - Known data defects that are not corrected (definitions, affected
+    configurations, effect on the coefficients and status: DESIGN.md §1,
+    "Known data defects"):
+
+    | id | configurations | defect | effect |
+    |---|---|---|---|
+    | D5 | HP low-pH | cation-exchange regeneration H2SO4 not in `acid_cost` | its cost sits in materials_other, not neutralization; channel labels only |
+    | D8 | TAL, TAL_SA | y counts glucose only, but the spiked acetate also makes TAL | y is not the yield on all carbon; TAL's feedstock c′/d′ are distorted (negative c′), which plausibly also biases the shared corn feedstock intensity of other products |
+    | D9 | lactic | sampled hydrolysis conversion never applied | one sampled `bp_*` has no effect |
+    | D10 | isobutanol | starch-content setter depends on history | sampled and actual starch differ (corr. 0.87); moisture drifts 13-17 % |
+    | D13 | oxalic | reagent costs in facilities | channel labels only |
+    | D14 | oxalic | fermentation reaction creates mass; no aeration | physically invalid fermentation balance; `aerobic=True` misleading |
+    | D15 | succinic_neutral | no salt formation simulated (module default `base_neutralizes_product=False`) | the downstream table claims acidulation and gypsum, the data have none; only the base cost differs from succinic |
+
+  - TAL's final-product purity varies with titer.
   - Some cost-allocation conventions differ between modules and cannot be
     explained by the features: labor per module, the upstream capital of
     the cellulosic and sugarcane ethanol modules, and the broth-volume term
@@ -559,9 +691,17 @@ script):
 
    ```bash
    SEED=1 bash fermentation_insights/coeff_predictor/data_generation/scripts/run_all.sh
+   # another layout: RAW_BASE (raw output, $RAW_BASE/<name>), BIP_BASE
+   # (worktrees $BIP_BASE/bip_<name>), ENV_BASE (conda envs $ENV_BASE/fi_<env>)
+   RAW_BASE=/data/raw BIP_BASE=/src ENV_BASE=/opt/conda/envs SEED=1 bash .../run_all.sh
    ```
 
-   Each launcher (`run_<name>.sh`; `ENV`/`ENV_PY`, `BIP`, `FI`,
+   `run_all.sh` derives each launcher's output directory, worktree and
+   environment from these base directories (exported `OUT`, `ENV`, `BIP`
+   are ignored there, since one value would apply to every launcher). A
+   sample whose system state could not be restored after a convergence
+   failure is written with `retry: true` and is re-run on a resume. Each
+   launcher (`run_<name>.sh`; `ENV`/`ENV_PY`, `BIP`, `FI`,
    `OUT`/`OUT_DIR`, `LOG_DIR`, `N_RANDOM`, `N_PROD`, `N_WORKERS`) starts
    background workers. Each worker runs every configuration in its own
    Python process, writes one JSON-lines file per configuration, and skips

@@ -56,6 +56,8 @@ carries `harness_version`, `adapter_version` and `data_patches`.
 | D4 | ethanol_sugarcane, adapter < 2 | The MPSP was net of the module's RIN credit, recorded as `coproduct_sales` (0.2593 USD per kg of denatured product, checked to be constant before patching). Patched: `x_RIN_credit = coproduct_sales/h`, `MPSP += coproduct_sales/(h·F_final_product)`, `x_MPSP_denatured`/`x_MESP_…` raised by the credit, `coproduct_sales = 0`. |
 | D6 | HP, adapter < 2 | `base_cost = x_lime_fermentation · p_base_price`. The TEA charges `lime_fresh`, which is linked to `fermentation_lime`, at the sampled price. v1 read `fermentation_lime`, whose price was frozen. |
 | D7 | HP, adapter < 2 | `x_inflection_yield = (1 − p_cell_mass_yield)·theoretical_yield`, `x_above_inflection = y > x_inflection_yield`. Basis checked: the config inflection is 0.755 = 1 − 0.245, and `x_cell_mass_conversion` equals `p_cell_mass_yield` at low y. |
+| D11 | ethanol_corn, adapter < 2 | The corn natural gas missed the thermal oxidizer X611 and its price was the stream's own (0). Fixed in adapter v2 (sum over the 'Natural gas' and 'Fuel' utilities, `bst.stream_prices`); the affected samples were regenerated with D2. |
+| D12 | ethanol_corn, adapter < 2 | The real corn natural-gas price was never sampled (the sampled heating-agent price had no effect). Fixed in adapter v2 (`p_natural_gas_price` sets `stream_prices['Natural gas']`); regenerated with D2. |
 | D2 | ethanol_corn, adapter < 2 | The molar yeast growth destroyed sugar mass. This cannot be patched, so the samples are rejected (`unpatchable_D2`) and the configuration was regenerated. |
 | M1 | TAL, succinic low-pH, adapter < 2 | `neutralizing_agent` = 'NaOH' (TAL pH control) or 'Ca(OH)2' (succinic partial pH control). `neutralization` stays False. |
 | M3 | TAL, adapter < 2 | `bp_fermentation_fermentation_y_lipolytica_yield` → `p_cell_mass_yield`, in the sample values and in the config's parameter list. |
@@ -66,9 +68,39 @@ carries `harness_version`, `adapter_version` and `data_patches`.
 Resumed samples append duplicate rows (M11). `read_raw` already keeps only
 the points of each sample's chosen, complete attempt. Points above the
 sample's own inflection are dropped (`x_inflection_yield`, `x_above_inflection`;
-§7). Defects that need regeneration or are not corrected here (HP acid
-regeneration D5, TAL substrate basis D8, lactic D1/D9, isobutanol D10, oxalic
-D13/D14, and the minor items not listed) are tracked in the review report.
+§7).
+
+### Known data defects
+
+Defects found in the data review that are not (or not fully) corrected by
+the patches above. "Effect" is what they do to the training targets and the
+model; none of them was corrected for the v2 models.
+
+| id | configurations / fields | defect | effect on the coefficients and the model | status |
+|---|---|---|---|---|
+| D1 | lactic, random samples | the feedstock-price bounds were rebound after sampling (prices outside the intended range) | none now: the random samples were regenerated with the bound fix (`adapters/lactic.py` 408-421; old files in `raw_lactic_D1`, prices 0.0005-0.175 USD/kg = U(0, 200) USD/dry t). The fix was not versioned (lactic configs carry no `adapter_version`) | fixed by regeneration |
+| D5 | HP low-pH (8 configurations) | the cation-exchange regeneration H2SO4 (`H2SO4_fresh` → T611) and the anion-exchange NaOH are not in `acid_cost` / `base_cost`; `acid_cost` = 0 in every low-pH HP configuration | their cost is in materials_other instead of the neutralization channel (lactic and oxalic book such reagents as neutralization); totals unaffected, channel labels and the `acid_regeneration` field ('none') understate HP's reagent use | open |
+| D8 | TAL, TAL_SA | y counts glucose only, but the spiked acetate (up to 18 t/h against 40 t/h sugar) also makes TAL: F_ferm/(y·F_sugar) reaches 1.64, the excess correlates with the acetate fed (r = 0.98, TAL_corn) | y is not the yield on all fermentable carbon; the feedstock c′ / d′ are distorted (negative c′ down to −93), and, through the feedstock-only sub-network shared by all products of a feedstock, plausibly the corn feedstock intensity of other products (REPORT.md section 8 (ii-b): corn feedstock sensitivities 19-24 % low) | open (regenerate with a carbon-basis yield, or mask the TAL feedstock-channel targets) |
+| D9 | lactic | `R403._setup` rebuilds the hydrolysis reaction at X = 0.8 on every simulation, so the sampled `bp_hydrolysis_reactor_r403_hydrolysis_conversion` (0.745-0.850) is never applied | that `bp_*` has no effect (it is not a model input); no bias | open (harmless) |
+| D10 | isobutanol | the starch-content setter rescales the current composition, so the result depends on history | sampled and actual dry starch differ (sampled 0.59-0.85, actual 0.67-0.76, corr. 0.87), moisture drifts 13.4-17.1 % (baseline 15 %); the model sees the actual `fs_w_*`, so the inputs are right, but the starch range covered is narrow | open |
+| D13 | oxalic | the module's unit groups put lime, H2SO4 and CSL/MgCl2/DAP storage in facilities (99.6 % of the non-feedstock material cost) | channel labels only (facilities instead of fermentation / separation materials); totals unaffected | open |
+| D14 | oxalic | the reaction `Glucose -> 2 OxalicAcid + 2 AceticAcid + O2` creates mass and carbon: (OA + AcOH + cells + CO2)/sugar = 1.61-1.70, air feed 5-8 kg/h for 133 t/h sugar, acetic acid 0.667 g/g OA | physically invalid fermentation balance; `aerobic=True` is misleading (no aeration cost), and the oxalic yields are not comparable with the other products' | open (kept for fidelity to the module; patch the reaction and regenerate for physical consistency) |
+| D15 | succinic_neutral (4 configurations, 72 samples) | the adapter sets only `spec.neutralization` (as the publication's TRY script); the reactor keeps `base_neutralizes_product=False`, which removes the purchased lime from the broth and bypasses R401 / R401_P / S405 (acidulation, gypsum filtration) | the data equal succinic (low pH) except the base cost (separation capex and recovery identical at identical TY points; acid, gypsum and acidulation costs 0), but `downstream.TABLE` describes acidulation + gypsum filtration (neutralization degree 1, H2SO4): the acid / gypsum features of these configurations claim costs their targets lack, which weakens that mapping and likely biases low the predictions for new neutralized products that do acidulate | open (needs a new table version or regeneration with `base_neutralizes_product=True`, then retraining) |
+| H1 | TAL_SA_glucose, TAL_SA_sugarcane | after a convergence failure whose `reset()` also failed, the harness wrote the later samples as complete with no simulated point (27 and 19 samples) | TAL_SA_glucose keeps only its baseline sample, TAL_SA_sugarcane 10 of 29 | harness fixed (reload, `retry`); data not regenerated |
+
+Minor items, also not corrected: oxalic recoveries slightly above the
+stoichiometric ratio in 26 of 211 samples (max 1.003; lime loading > 1 gives
+negative free acid in the module; ≤ 0.3 % on the coefficients; the
+`max_g_over_stoich = 1.05` filter does not catch it); succinic sugar
+concentrations above the module's own 600 g/L limit at 12-19 % of the points
+of the non-corn-stover configurations (the module's check is never called;
+refitting without them changes MPSP on the feasible points by a median of
+0.1-0.9 %); 13 retained samples with an isolated interior MPSP spike of more
+than 10 % along titer (TAL_glucose 7, TAL_corn 2, lactic 3, HP_neutral_corn
+1; likely convergence or sizing artefacts, kept); the lactic SSCF random
+samples rejected for too few feasible points are the low-carbohydrate ones
+(retained median carbohydrate content 0.54, rejected 0.25-0.59), so the
+retained data are censored toward carbohydrate-rich feedstock.
 
 ## 2. Physics layer 1 — exact cost-channel decomposition (system-level data)
 
@@ -515,9 +547,15 @@ satisfy it, which is checked and reported):
 4. non-negative feedstock and natural-gas intensities over the domain.
 
 **Collocation points**: unlabeled inputs created by perturbing training inputs
-(productivity log-uniform over a range wider than the data, prices over wide
-ranges); only physics residuals 1–4 are evaluated there (PINN-style), which
-regularizes extrapolation.
+(productivity log-uniform over a range wider than the data; the prices can be
+widened by `LossConfig.colloc_price_range`, but the pipeline and the release
+keep them inside the training box, `[1, 1]`); only physics residuals 1–4 are
+evaluated there (PINN-style). Residuals the training data violate in more
+than 1 % of the samples are disabled (`train.check_constraints`): in the
+release only positive MPSP and the non-negative feedstock intensity are
+active (monotonicity in y and t is violated by 7 % / 2 % of the samples,
+monotonicity in r is replaced by the hard structure of §3, the natural-gas
+non-negativity is disabled; `models/release/meta.json` → `loss_config`).
 
 Options (`LossConfig`; defaults = the loss above):
 
@@ -1590,6 +1628,40 @@ is unchanged):
   20× feedstock-intensity prior); it is now unknown (prior not applied,
   imputed 1 and reported), after case / blank normalization. The prior is
   identical on all development rows.
+
+#### v2 run vs. the round-4 estimates (written after the v2 run)
+
+The v2 pipeline re-ran the HPO under the v2 protocol and selected different
+hyperparameters (width 64, depth 2, lr 0.0045, `w_ch` 0.1, `w_phys` 1.0,
+early stopping on MPSP; `results/tables/selected_hyperparameters.json`) from
+those of v1 used in the round-4 estimates (width 64, depth 4, lr 0.0012,
+`w_ch` 1.0, `w_phys` 0.03; `results/v1/tables/selected_hyperparameters.json`).
+The released CV numbers therefore differ from 4e:
+
+* fold means, v1 run → 4e (v2 settings, v1 hyperparameters) → v2 run: LOCO
+  14.4 → (4e: 35 of 37 folds better) → 9.3 %; LOFO 66.3 → 35 → 23.9 %; LOPO
+  75.1 → 50 → 57.2 %;
+* LOPO per held-out product, v1 run → 4e → v2 run (%): ethanol 177.1 → 44.4
+  → 59.4, isobutanol 148.2 → 85.1 → 66.2, **HP 21.8 → 12.7 → 77.8**,
+  lactic 59.6 → 53.5 → 54.3, oxalic 47.5 → 59.3 → 41.1, **succinic 28.3 →
+  51.4 → 59.7**, TAL 43.0 → 44.3 → 41.8. The median over products got
+  worse (v1 47.5 → v2 59.4 %) although the mean fell (75.1 → 57.2 %, carried
+  by ethanol and isobutanol).
+
+**The HP fold is a regression of the v2 run**: 77.8 % against 21.1 (plain
+MLP), 21.0 (ridge), 21.3 (gradient boosting) and 29.5 % (kNN) on the same
+fold, and 79-82 % for all three PI-NN ablations, so the cause is shared by
+every PI-NN variant of the v2 run, plausibly the re-selected hyperparameters
+(the ablations use them too, and 4e with the v1 hyperparameters gave
+12.7 %). Succinic got worse already in 4e (protocol, 4d) and again in the v2
+run. Not diagnosed further: the direct test is to retrain the HP LOPO fold
+(development data only) with the v1-selected hyperparameters and with the
+package defaults, and to compare with 77.8 %; if the HPO choice is the
+cause, the HPO criterion (LOCO-type folds only) does not protect
+extrapolation to new products, and LOPO should enter the selection (a model
+change, i.e. a new run). The "All changes together" statement of REPORT.md
+("Changes since v1": LOPO 86.1 → 50.1, 6 of 7 better) refers to 4e, not to
+the released run.
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 
