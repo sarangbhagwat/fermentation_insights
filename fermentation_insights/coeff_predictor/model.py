@@ -119,12 +119,13 @@ CHANNEL_INPUT_PRESETS = {
         'fixed': ('feedstock', 'scale', 'financial'),
         'closure': ('feedstock', 'scale', 'financial'),
         # fermenter volume ~ product rate / r, broth volume ~ 1/t; aeration, pH control
-        'capex_fermentation': ('fermentation', R_GROUP, 'neutralization', 'feedstock', 'scale', 'financial'),
-        # base + acid stoichiometry
-        'neutralization': ('neutralization',),
+        'capex_fermentation': ('fermentation', R_GROUP, 'neutralization', 'reagent_prices', 'feedstock', 'scale',
+                               'financial'),
+        # base + acid stoichiometry and their prices
+        'neutralization': ('neutralization', 'reagent_prices'),
         # product recovery and upgrading
         'capex_downstream': ('product', 'final_product', 'upgrading', 'separation', 'water_route',
-                             'neutralization', 'scale', 'financial'),
+                             'neutralization', 'reagent_prices', 'scale', 'financial'),
         'utilities_other': ('product', 'final_product', 'upgrading', 'separation', 'water_route', 'fermentation',
                             'utilities', 'scale'),
         'natural_gas': ('product', 'final_product', 'upgrading', 'separation', 'water_route', 'feedstock',
@@ -139,8 +140,16 @@ CHANNEL_INPUT_PRESETS = {
                         'utilities', 'scale'),
         'coproducts': ('feedstock', 'fermentation', 'coproducts', 'scale'),
         # recovery: separation of the product, never the feedstock
-        G_KEY: ('product', 'final_product', 'upgrading', 'separation', 'water_route', 'neutralization'),
+        G_KEY: ('product', 'final_product', 'upgrading', 'separation', 'water_route', 'neutralization',
+                'reagent_prices'),
     },
+}
+#: 'physics' with the recovery blind to the reagent prices (they set what the
+#: base and acid cost, not how much product is recovered; DESIGN.md section 6,
+#: round 4). A new name, so that checkpoints saved with 'physics' load unchanged.
+CHANNEL_INPUT_PRESETS['physics_v2'] = {
+    **CHANNEL_INPUT_PRESETS['physics'],
+    G_KEY: tuple(g for g in CHANNEL_INPUT_PRESETS['physics'][G_KEY] if g != 'reagent_prices'),
 }
 
 

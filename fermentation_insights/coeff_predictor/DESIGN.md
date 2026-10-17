@@ -258,7 +258,8 @@ process-area group (`features.feature_group`, `FeatureSpec.column_groups`):
 | pretreatment | `p_enzyme_loading`, `p_saccharification_yield` |
 | scale / financial | `phys_log10_capacity`, `p_operating_days` / `p_IRR`, `p_income_tax` |
 | fermentation | `T_fermentation`, `aerobic`, `fermentation_mode`, `p_cell_mass_yield`, `phys_inflection_over_theoretical` |
-| neutralization | neutralization flag / agent / degree, `n_acid_groups`, `pKa1`, `phys_{base,acid,gypsum}_per_product`, `p_{base,acid}_price`, `ds_sep__acidulation`, `ds_sep__gypsum_filtration` |
+| neutralization | neutralization flag / agent / degree, `n_acid_groups`, `pKa1`, `phys_{base,acid,gypsum}_per_product`, `ds_sep__acidulation`, `ds_sep__gypsum_filtration` |
+| reagent_prices | `p_{base,acid}_price` (split from neutralization: they set what the reagents cost, not how much product is recovered) |
 | product | `fp_*`, `phys_fp_*`, theoretical / inflection yield, `phys_ty_over_*`, solubility |
 | final_product | `pp_*`, `phys_pp_*`, stoichiometric ratio, phase, broth flag, `phys_log10_w_final` |
 | upgrading | `upgrading`, `ds_upg__*`, `phys_n_upgrading_ops` |
@@ -272,16 +273,17 @@ distinct set of groups gets its own sub-network (`masked_width` 64,
 `masked_depth` 2; the pipeline uses width/2 and depth − 1 of the HPO
 candidate) fed only those columns, plus log r and 1/r for the pseudo-group
 'productivity'; every output (intensity, channel, g) is a head on the
-sub-network of its groups (`CHANNEL_INPUT_PRESETS['physics']`):
+sub-network of its groups (`CHANNEL_INPUT_PRESETS['physics']`; `'physics_v2'` differs only in the
+recovery, which does not see the reagent prices -- §6, round 4):
 
 | output | groups |
 |---|---|
 | feedstock intensity | feedstock, pretreatment |
 | capex_upstream | feedstock, pretreatment, scale, financial |
 | fixed, closure | feedstock, scale, financial |
-| capex_fermentation | fermentation, productivity, neutralization, feedstock, scale, financial |
-| neutralization | neutralization |
-| capex_downstream | product, final_product, upgrading, separation, water_route, neutralization, scale, financial |
+| capex_fermentation | fermentation, productivity, neutralization, reagent_prices, feedstock, scale, financial |
+| neutralization | neutralization, reagent_prices |
+| capex_downstream | product, final_product, upgrading, separation, water_route, neutralization, reagent_prices, scale, financial |
 | utilities_other | product, final_product, upgrading, separation, water_route, fermentation, utilities, scale |
 | natural-gas intensity | product, final_product, upgrading, separation, water_route, feedstock, utilities, scale |
 | materials_other | feedstock, pretreatment, fermentation, product, final_product, upgrading, separation, water_route, scale |
@@ -289,7 +291,7 @@ sub-network of its groups (`CHANNEL_INPUT_PRESETS['physics']`):
 | capex_utilities | feedstock, water_route, upgrading, coproducts, utilities, scale, financial |
 | electricity intensity | feedstock, fermentation, productivity, water_route, upgrading, coproducts, utilities, scale |
 | coproducts | feedstock, fermentation, coproducts, scale |
-| g | product, final_product, upgrading, separation, water_route, neutralization |
+| g | product, final_product, upgrading, separation, water_route, neutralization, reagent_prices (`'physics_v2'`, the pipeline default since round 4: without reagent_prices) |
 
 An excluded input has exactly zero influence on an output (∂output/∂input = 0,
 tested); the water gate, the structured feedstock intensity, the g bound and
@@ -710,6 +712,131 @@ in §3. The hybrid's residual absorbs these product-specific effects in-family
 but extrapolates them to new products (ethanol LOPO 104–110 %). The masked
 model (no residual) is therefore the pipeline default (`experiments.py`; CLI
 `--no-masking`); the library default is unchanged.
+
+### Development-set diagnostics, round 4: inputs of the recovery g (2026-10-17; never on test data)
+
+Data (development set: 1306 samples, 37 configurations, 29 284 points;
+scripts in the round-4 scratch directory `g_inputs/`). What drives g:
+
+* Between versus within configurations: 96.9 % of the variance of ln g lies
+  between configurations (RMS 0.20), 3.1 % within (RMS 0.036). The
+  fermentation product alone explains R² = 0.94 (configuration-balanced
+  0.91); product + separation variant + neutralization + final product
+  0.999. The feedstock alone explains 0.18 / 0.08, and that only through
+  confounding (lactic only on cornstover, oxalic only on sugarcane).
+* Feedstock within a product specification (configuration medians): HP with
+  hexanol extraction 0.675–0.695 (2.8 %, cornstover highest), HP neutral +
+  hexanol 2.3 %, HP without hexanol and HP neutral ≤ 0.4 %, TAL / TAL_SA ≤
+  1.0 %, succinic ≤ 0.1 %; ethanol corn 0.9937 vs 0.9995 (cornstover,
+  sugarcane), which the separation inputs already distinguish (the dry-grind
+  DDGS train). Neutralization changes g within HP (+4 %: 0.600 → 0.625,
+  hexanol 0.680 → 0.707) and lactic (−4 %); it is a g input already.
+  Simultaneous saccharification and co-fermentation (lactic lowpH SSCF vs
+  SHF: 0.627 vs 0.659, −5 %; residual solids go with the broth to
+  separation) is represented by no feature: `fermentation_mode` is 'batch'
+  for both and the `saccharification` field exists only in the
+  configurations table of the lactic module.
+* Within configurations no observed specification moves g: pooled
+  within-configuration correlation of ln g (random samples, configuration-
+  demeaned) with log capacity −0.01, operating days −0.03, cell-mass yield
+  −0.03, base price −0.05, acid price −0.02, log r −0.06 (slopes ≤ 0.25 %
+  per sd). The within-configuration spread comes from unobserved `bp_*`
+  parameters: TAL sd(ln g) = 0.11 (`bp_separation_tal_decarboxylation_conversion`,
+  r = −0.76 … −0.96; a 10 % MPSP noise floor for TAL from g alone),
+  succinic 0.005 (crystallization pressure-filter recovery, r ≈ +0.75),
+  lactic 0.01–0.03, oxalic 0.003 (lime loading, r = 1.00), HP ≤ 0.003,
+  ethanol ≤ 0.0005. Scale and productivity therefore have no place among the
+  g inputs, and the reagent prices (in the 'neutralization' group until now)
+  neither.
+* Titer: the per-point recovery depends on the titer within a sample
+  (d ln recovery / d ln t: lactic 0.27–0.32, i.e. 26–33 % over the domain;
+  TAL 0.06–0.08; HP with hexanol 0.04; HP 0.02; IBO 0.03; ethanol, succinic,
+  oxalic ≈ 0), but g is the median over a TY domain that is fixed per
+  product family (HP 10–200 g/L, TAL 10–100, lactic 40–200, succinic 10–120,
+  oxalic 5–100, IBO 5–80, ethanol 10–58 / 140 / 150), so the median has no
+  within-family dependence on the domain, and across products none either
+  (lactic: highest domain titer, lowest g; IBO: lowest, g 0.985). A domain
+  feature is a product-identity proxy on these data. The TY-domain bounds
+  are not features (only the broth product's `phys_log10_w_final` uses a
+  reference titer).
+* Consistency of the target: a′ = g·A to machine precision (relative
+  1e−13), the median recovery over all ok points equals the median over the
+  fitted-domain points (lactic −1.0 / −1.3 %, all others 0), g ≤ g_max
+  except oxalic (24 samples, g/g_max ≤ 1.0029, absorbed by `g_margin`). The
+  equation is invariant to the g convention (the primed coefficients carry
+  g); fitting MPSP × per-point recovery instead and dividing by the median
+  g would double the fit error (median 1.35 → 2.45 %, lactic 7–9 %), so the
+  titer dependence of the recovery is correctly left to the coefficients.
+* Where the v1 g errors are (v1 development CV, out-of-fold, PI-NN):
+  configuration-mean |ln(ĝ/g)| random 2.1 %, leave-configurations-out
+  4.9 % (MPSP 14.4 %; 11.9 % with the true g), leave-one-product-out 22.3 %
+  (MPSP 47.8 %; 34.1 % with the true g), leave-one-feedstock-out 6.8 %, of
+  which nearly all is the product-unique feedstocks (cornstover held out:
+  every lactic configuration is a new product, +45 %; sugarcane: oxalic,
+  −28 %); otherwise TAL 7–12 % (its within-configuration noise), HP ≤ 4.6 %,
+  succinic and ethanol ≤ 1.4 %. v1's
+  HP_sugarcane +8 % (LOCO) is not an input problem: its g inputs are those
+  of HP_glucose / HP_cornstover (0.600 / 0.603); with the protocol below it
+  is +1.3 %.
+
+Candidate input groups of the recovery sub-network, paired development CV
+(seeds 0–2; one network per fit, no conformal hold-out, early-stopping
+hold-out of 15 % grouped as `experiments.INNER_GROUP`, selected
+hyperparameters, downstream features, water gate, masked width 32 / depth
+3; leave-configurations-out = 5 folds of whole configurations stratified by
+biorefinery (`stratified_group_kfold`, seed 0, every configuration held out
+once), leave-one-product-out 7 folds, leave-one-feedstock-out 4 folds).
+Reference 'physics' (identical, bit for bit, before and after the
+reagent-price split); MPSP MAPE = mean over held-out configurations (LOCO) or
+held-out groups (LOPO, LOFO); g error = configuration mean of |ln(ĝ/g)|;
+mean ± sd over seeds, paired Δ (t over 3 seeds):
+
+| g inputs | LOCO MPSP | LOCO g MAE | LOCO g R² | LOCO g err | LOPO MPSP | LOPO g err | LOFO MPSP | LOFO g err | LOPO degenerate stops |
+|---|---|---|---|---|---|---|---|---|---|
+| 'physics' | 12.8 ± 3.6 | 0.057 | 0.62 | 3.9 % | 75.5 ± 15.6 | 24.9 % | 75.5 ± 17.4 | 7.9 % | 19 % |
+| + feedstock | 11.8 (−1.0, t −2.7) | 0.041 (t −7.1) | 0.78 (t 2.9) | 3.9 % (t 0.8) | 82.8 (+7.2, t 0.7) | 23.7 % (t −1.2) | 76.7 (+1.2, t 0.3) | 8.8 % (t 2.1) | 38 % |
+| + feedstock + fermentation (seed 0 only; reference seed 0 in brackets) | 12.4 (11.7) | 0.050 (0.046) | 0.73 (0.76) | 3.7 % (3.2) | 106 (61) | 28.2 % (27.4) | 64.7 (70.8) | 12.5 % (9.9) | 29 % (0 %) |
+| + titer_domain (`domain_features`) | 12.3 (−0.5, t −1.3) | 0.054 (t −1.3) | 0.67 (t 1.4) | 3.9 % (t 0.4) | 87.3 (+11.8, t 1.2) | 25.0 % (t 0.4) | 77.5 (+2.0, t 0.5) | 7.9 % (t −0.1) | 33 % |
+| − reagent_prices ('physics_v2') | 12.5 (−0.3, t −1.1) | 0.065 (t 1.5) | 0.47 (t −1.4) | 4.1 % (t 1.5) | 65.1 (−10.5, t −1.2) | 24.5 % (t −2.9) | 71.1 (−4.4, t −1.5) | 8.0 % (t 0.5) | 29 % |
+| 'physics', w_g = 5 | 11.5 (−1.4, t −1.8) | 0.044 (t −1.8) | 0.76 (t 1.7) | 3.4 % (t −1.8) | 81.2 (+5.7, t 2.0) | 25.4 % (t 0.6) | 75.2 (−0.3, t −0.4) | 7.1 % (t −1.4) | 33 % |
+
+* The feedstock's apparent LOCO gain is the broth product alone (oxalic,
+  only on sugarcane: MPSP 80 → 53 %, g error 21 → 9 %); it is an
+  extrapolation shift for an unseen water route, not recovery physics. The
+  families with feedstock variants get worse: HP g error 0.9 → 1.7 % (MPSP
+  4.0 → 4.2 %, t 3.4), TAL 10.5 → 11.0 %, ethanol 30.5 → 32.3 %; under LOFO
+  the held-out sugarcane g error grows from −4.6 to −11.5 % and under LOPO
+  twice as many fits stop with their best epoch at 0 (38 vs 19 %). The network does not
+  resolve the ≤ 3 % within-family feedstock effect; fermentation, scale and
+  the titer domain have no within-family variation that the median g
+  follows (above). None of them is adopted.
+* Without the reagent prices g is unchanged in-family (HP, TAL, succinic,
+  ethanol within 0.1 point) and LOPO / LOFO are better within the seed
+  noise (configuration-balanced LOFO −2.5 points, t −2.4); the oxalic LOCO
+  fold is worse (MPSP 80 → 100 %, t 1.6; the same unseen-route
+  extrapolation). Adopted as a hard constraint (∂g/∂price = 0, as observed:
+  within-configuration r = −0.05 / −0.02): preset `'physics_v2'`, pipeline
+  default; `'physics'` is kept so that saved checkpoints load unchanged.
+* w_g = 5 helps LOCO a little (IBO g error 23 → 11 %) and hurts LOPO (t
+  2.0; configuration-balanced t 3.8): w_g stays 1. The g target and its
+  bound need no change (consistency checks above).
+* Early stopping under LOPO: the inner hold-out is one whole training
+  product, and on it the criterion `data` is dominated by the extrapolated
+  coefficient and recovery terms (TAL as hold-out: tot 2.2, g 2.3, channels
+  1.5, MPSP 0.2 at epoch 0). When the recovery of the hold-out product
+  drifts away during training (e.g. with feedstock inputs: g term 2.4 →
+  3.6–4.0) the best epoch is 0 and the fit is essentially untrained (19 %
+  of the reference LOPO fits, 29–38 % for the variants). LOPO
+  comparisons of g variants are therefore dominated by this selection noise
+  (ethanol and IBO MPSP swing by 30–100 points between variants and seeds).
+* Missing information, not features: the TAL recovery noise floor (10 %,
+  `bp_separation_tal_decarboxylation_conversion`) and the saccharification
+  mode (SHF / SSCF, −5 % for lactic) — the latter would belong in the regime
+  specification (`saccharification`, recorded only by the lactic module);
+  with one SSCF development configuration it cannot be validated here. The
+  opt-in titer-domain feature (`FeatureSpec(domain_features=True)`, group
+  'titer_domain', `phys_log10_t_ref` = log10 sqrt(t_min·t_max)) is kept for
+  reproducibility only.
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 

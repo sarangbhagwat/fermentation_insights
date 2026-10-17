@@ -1944,7 +1944,7 @@ def parse_args(argv=None):
     # on by default since the 2026-10-17 masking CV (DESIGN.md section 3)
     ap.add_argument('--no-masking', action='store_true',
                     help="PI-NN with one shared encoder instead of the channel-wise input masking "
-                         "(ModelConfig.channel_inputs='physics')")
+                         "(ModelConfig.channel_inputs='physics_v2')")
     ap.add_argument('--split-seed', type=int, default=None, help='only when the split is created (default 2026)')
     ap.add_argument('--replan', action='store_true', help='recompute plan.json from the pilot timings')
     ap.add_argument('--fresh', action='store_true', help='delete the fit cache first')
@@ -1997,7 +1997,7 @@ def main(argv=None):
         if not a.no_water_gate:
             mk_extra['water_gate'] = True
     if not a.no_masking:
-        mk_extra['channel_inputs'] = 'physics'
+        mk_extra['channel_inputs'] = 'physics_v2'
     if mk_extra:
         ctx['mk_extra'] = mk_extra
     T = lambda name, t0: stage_t.__setitem__(name, time.time() - t0)

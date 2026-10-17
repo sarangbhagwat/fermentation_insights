@@ -69,7 +69,9 @@ Feature groups
 
 Never used as features: ids (``sample_id``, ``config_id``, ``biorefinery``,
 ``sample_kind``, ``seed``), biorefinery-specific parameters ``bp_*``, product
-and feedstock names, the TY domain bounds, and all targets. Prices used by the
+and feedstock names, the TY domain bounds (except, opt-in with
+``FeatureSpec(domain_features=True)``, ``DOMAIN_PHYS`` = log10 of the
+geometric-mean domain titer, group 'titer_domain'), and all targets. Prices used by the
 price-explicit channels (``feedstock_price``, ``electricity_price``,
 ``natural_gas_price``) are returned separately in natural units and are only
 fed to the encoder when ``price_explicit=False``.
@@ -90,7 +92,7 @@ __all__ = (
     'build_spec_registry', 'apply_spec_registry', 'register_chemical',
     'describe_new_chemical', 'psat_water', 'PRICE_COLUMNS', 'PRICE_KEYS',
     'PRICE_ALIASES', 'REQUIRED_FIELDS', 'FIELD_UNITS', 'REGIME_FIELDS',
-    'DS_PHYS', 'DS_CATEGORICAL', 'STRUCTURAL', 'DOWNSTREAM_FIELDS', 'FEATURE_GROUPS', 'feature_group',
+    'DS_PHYS', 'DOMAIN_PHYS', 'DS_CATEGORICAL', 'STRUCTURAL', 'DOWNSTREAM_FIELDS', 'FEATURE_GROUPS', 'feature_group',
 )
 
 try:
@@ -202,6 +204,11 @@ DS_MULTI = {'ds_sep': ('separation_ops', _ds.SEPARATION_OPS), 'ds_upg': ('upgrad
 DS_PHYS = ('phys_log10_w_final', 'phys_water_removal_c', 'phys_water_removal_a', 'phys_evap_water_c',
            'phys_distill_c', 'phys_base_per_product', 'phys_acid_per_product', 'phys_gypsum_per_product',
            'phys_n_separation_ops', 'phys_n_upgrading_ops')
+#: opt-in titer-domain features (``FeatureSpec(domain_features=True)``): log10
+#: of the geometric-mean titer sqrt(t_min * t_max) [g/L] of the TY domain over
+#: which the recovery target g is the median (the per-point recovery depends
+#: on titer). NaN (training fill + missing indicator) without t_min / t_max.
+DOMAIN_PHYS = ('phys_log10_t_ref',)
 #: raw structural inputs (not standardized, not seen by the encoder)
 STRUCTURAL = ('struct_water_removal',)
 #: fallback titer for the mass fraction of a broth product [g/L]
@@ -220,9 +227,13 @@ CHEM_KEYS = {'fp': ('ferm_product_chemical', 'fermentation_product'),
 #: Process-area groups of the feature columns (:func:`feature_group`), used by
 #: the channel-wise input masking of the model (``ModelConfig.channel_inputs``):
 #: every cost channel only sees the groups that can physically affect it.
+#: 'reagent_prices' (base and regeneration-acid prices) is split from
+#: 'neutralization' so that outputs which do not buy the reagents (the
+#: recovery) can exclude them; 'titer_domain' holds the opt-in titer-domain
+#: feature (``FeatureSpec(domain_features=True)``).
 FEATURE_GROUPS = ('feedstock', 'pretreatment', 'scale', 'financial', 'fermentation', 'neutralization',
-                  'product', 'final_product', 'upgrading', 'separation', 'water_route', 'coproducts', 'utilities',
-                  'prices', 'structural', 'other')
+                  'reagent_prices', 'product', 'final_product', 'upgrading', 'separation', 'water_route',
+                  'coproducts', 'utilities', 'titer_domain', 'prices', 'structural', 'other')
 _GROUP_EXACT = {
     'feedstock_type': 'feedstock', 'feedstock': 'feedstock', 'phys_fs_nonsugar_solids': 'feedstock',
     'p_enzyme_loading': 'pretreatment', 'p_saccharification_yield': 'pretreatment',
@@ -233,8 +244,8 @@ _GROUP_EXACT = {
     'neutralization': 'neutralization', 'neutralizing_agent': 'neutralization',
     'neutralization_degree': 'neutralization', 'n_acid_groups': 'neutralization', 'pKa1': 'neutralization',
     'phys_base_per_product': 'neutralization', 'phys_acid_per_product': 'neutralization',
-    'phys_gypsum_per_product': 'neutralization', 'p_base_price': 'neutralization',
-    'p_acid_price': 'neutralization', 'acid_regeneration': 'neutralization',
+    'phys_gypsum_per_product': 'neutralization', 'p_base_price': 'reagent_prices',
+    'p_acid_price': 'reagent_prices', 'acid_regeneration': 'neutralization',
     'ds_sep__acidulation': 'neutralization', 'ds_sep__gypsum_filtration': 'neutralization',
     # the theoretical yield / inflection yield identify the product (stoichiometry)
     'theoretical_yield': 'product', 'inflection_yield': 'product', 'phys_log10_solubility': 'product',
@@ -248,6 +259,7 @@ _GROUP_EXACT = {
     'water_removal_route': 'water_route', 'phys_water_removal_c': 'water_route',
     'phys_water_removal_a': 'water_route', 'phys_evap_water_c': 'water_route', 'phys_distill_c': 'water_route',
     'p_boiler_efficiency': 'utilities', 'p_turbogenerator_efficiency': 'utilities',
+    'phys_log10_t_ref': 'titer_domain',
 }
 _GROUP_PREFIX = (('fs_w_', 'feedstock'), ('phys_ty_over_', 'product'), ('fp_', 'product'),
                  ('phys_fp_', 'product'), ('pp_', 'final_product'), ('phys_pp_', 'final_product'),
@@ -456,6 +468,8 @@ def derive_features(df):
     # NaN when the water fraction is unknown (then imputed and reported, not
     # silently computed as if the feedstock were dry)
     out['phys_fs_nonsugar_solids'] = (1. - _col(df, W_SUGAR) - _col(df, 'fs_w_water')).to_numpy()
+    with np.errstate(invalid='ignore'):
+        out['phys_log10_t_ref'] = _log10_pos(np.sqrt(_col(df, 't_min').to_numpy() * _col(df, 't_max').to_numpy()))
     out.update(downstream_features(df))
     return pd.DataFrame(out, index=df.index)
 
@@ -751,13 +765,19 @@ class FeatureSpec:
         ``separation_principle``, and append the structural inputs
         ``STRUCTURAL``. Off by default (specs saved before it existed load
         with it off).
+    domain_features : bool
+        Add the titer-domain features ``DOMAIN_PHYS`` (group
+        'titer_domain'). Off by default (specs saved before it existed load
+        with it off); in the development CV it did not help (DESIGN.md
+        section 6).
     """
 
     VERSION = 2
 
     def __init__(self, price_explicit=True, use_names=False, clip=10., exclude=(),
-                 log_ratio=100., min_level_count=1, downstream=False):
+                 log_ratio=100., min_level_count=1, downstream=False, domain_features=False):
         self.downstream = bool(downstream)
+        self.domain_features = bool(domain_features)
         self.price_explicit = bool(price_explicit)
         self.use_names = bool(use_names)
         self.clip = float(clip)
@@ -814,7 +834,8 @@ class FeatureSpec:
             if c.startswith('fs_w_'):
                 cands.append((c, 'feedstock'))
         for c in df.columns:
-            if c.startswith('phys_') and (self.downstream or c not in DS_PHYS):
+            if c.startswith('phys_') and (self.downstream or c not in DS_PHYS) and (
+                    self.domain_features or c not in DOMAIN_PHYS):
                 # capacity is contextual (baseline-imputed like p_* parameters)
                 cands.append((c, 'param' if c == 'phys_log10_capacity' else 'derived'))
         params = list(CANONICAL_PARAMETERS) + sorted(
@@ -1090,7 +1111,7 @@ class FeatureSpec:
     # ---- serialization ----
     def to_dict(self):
         return dict(version=self.VERSION, price_explicit=self.price_explicit, downstream=self.downstream,
-                    structural=list(self.structural),
+                    domain_features=self.domain_features, structural=list(self.structural),
                     use_names=self.use_names, clip=self.clip, exclude=list(self.exclude),
                     log_ratio=self.log_ratio, min_level_count=self.min_level_count,
                     numeric=self.numeric, indicators=self.indicators,
@@ -1103,7 +1124,8 @@ class FeatureSpec:
     def from_dict(cls, d):
         self = cls(price_explicit=d['price_explicit'], use_names=d['use_names'], clip=d['clip'],
                    exclude=d.get('exclude', ()), log_ratio=d.get('log_ratio', 100.),
-                   min_level_count=d.get('min_level_count', 1), downstream=d.get('downstream', False))
+                   min_level_count=d.get('min_level_count', 1), downstream=d.get('downstream', False),
+                   domain_features=d.get('domain_features', False))
         self.structural = list(d.get('structural', []))
         self.numeric = [dict(x) for x in d['numeric']]
         self.indicators = list(d['indicators'])
