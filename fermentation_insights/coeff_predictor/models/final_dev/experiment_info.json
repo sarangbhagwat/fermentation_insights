@@ -1,38 +1,61 @@
 {
- "job_key": "b5720d7c06feeea717e6c7ab",
+ "job_key": "81312e506b59664c8fb34500",
  "tag": "final(dev->test)",
  "method": "pinn",
  "members": 5,
  "mk": {
   "width": 64,
-  "depth": 4,
+  "depth": 2,
   "dropout": 0.1,
-  "clip_inputs": -1.0,
+  "clip_inputs": 0.0,
   "water_gate": true,
-  "channel_inputs": "physics",
+  "fs_prior": true,
+  "neutralization_gate": true,
+  "clip_groups": [
+   "feedstock",
+   "pretreatment"
+  ],
+  "channel_inputs": "physics_v2",
+  "r_structure": "physics",
   "masked_width": 32,
-  "masked_depth": 3
+  "masked_depth": 1
  },
  "lk": {
   "w_mpsp": 1.0,
-  "w_ch": 1.0,
-  "w_phys": 0.03,
+  "w_ch": 0.1,
+  "w_phys": 1.0,
   "colloc_ratio": 0.5
  },
  "tk": {
-  "lr": 0.0012,
-  "weight_decay": 0.00089,
+  "lr": 0.0045,
+  "weight_decay": 0.0004,
   "epochs": 300,
   "patience": 40,
   "min_epochs": 20,
   "batch_size": 128,
   "threads": 1,
-  "early_stop": "data"
+  "early_stop": "mpsp",
+  "refit": "none"
  },
  "seed": 0,
- "group_col": "config_id",
- "calib_frac": 0.15,
+ "group_col": null,
+ "calib_frac": 0.0,
+ "protocol": "v2",
+ "calib_info": {
+  "source": "out-of-fold scores of the development leave-one-configuration-out CV (5-member ensembles, same training procedure)",
+  "scheme": "config",
+  "cv_members": 5,
+  "weighting": "sample",
+  "method_scores": "pinn"
+ },
+ "best_epochs": [
+  121,
+  282,
+  105,
+  57,
+  90
+ ],
  "n_train_samples": 1306,
  "data_hash": "51d0efe2b4f517a4",
- "saved": "2026-10-17 06:39:02"
+ "saved": "2026-10-17 17:29:50"
 }

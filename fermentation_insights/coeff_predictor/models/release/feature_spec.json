@@ -2,8 +2,11 @@
  "version": 2,
  "price_explicit": true,
  "downstream": true,
+ "domain_features": false,
  "structural": [
-  "struct_water_removal"
+  "struct_water_removal",
+  "struct_neutralization",
+  "struct_sugar_availability"
  ],
  "use_names": false,
  "clip": 10.0,
@@ -1779,6 +1782,8 @@
   "water_removal_route==evaporate_water",
   "water_removal_route==none",
   "water_removal_route==__other__",
-  "struct_water_removal"
+  "struct_water_removal",
+  "struct_neutralization",
+  "struct_sugar_availability"
  ]
 }

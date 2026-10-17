@@ -2,8 +2,11 @@
  "version": 2,
  "price_explicit": true,
  "downstream": true,
+ "domain_features": false,
  "structural": [
-  "struct_water_removal"
+  "struct_water_removal",
+  "struct_neutralization",
+  "struct_sugar_availability"
  ],
  "use_names": false,
  "clip": 10.0,
@@ -16,856 +19,856 @@
    "kind": "spec",
    "log": false,
    "fill": 1.0,
-   "mean": 0.786142001710864,
-   "std": 0.7905209922592153
+   "mean": 0.8139356814701378,
+   "std": 0.7815769049453702
   },
   {
    "name": "pKa1",
    "kind": "spec",
    "log": false,
    "fill": 4.51,
-   "mean": 3.952070145423438,
-   "std": 1.1983800693567017
+   "mean": 3.9948545176110253,
+   "std": 1.1443249086015301
   },
   {
    "name": "final_product_stoich_mass_ratio",
    "kind": "spec",
    "log": false,
    "fill": 1.0,
-   "mean": 0.949585222510339,
-   "std": 0.09985844168297375
+   "mean": 0.9504099620677037,
+   "std": 0.10546490276292489
   },
   {
    "name": "T_fermentation",
    "kind": "spec",
    "log": false,
    "fill": 303.15,
-   "mean": 303.9883233532935,
-   "std": 4.547105708941814
+   "mean": 304.1454058192956,
+   "std": 5.0735759953396595
   },
   {
    "name": "theoretical_yield",
    "kind": "spec",
    "log": false,
    "fill": 0.9995219695299428,
-   "mean": 0.7914384448050421,
-   "std": 0.2871317430345239
+   "mean": 0.8105562387185747,
+   "std": 0.29145856139714316
   },
   {
    "name": "inflection_yield",
    "kind": "spec",
    "log": false,
-   "fill": 0.7290936581898431,
-   "mean": 0.647025914149231,
-   "std": 0.22636153101504414
+   "fill": 0.7373614528427888,
+   "mean": 0.6582027467785055,
+   "std": 0.23312447047705645
   },
   {
    "name": "neutralization",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.3823781009409752,
-   "std": 0.4859681973768948
+   "mean": 0.37519142419601836,
+   "std": 0.484172303426974
   },
   {
    "name": "upgrading",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.31565440547476475,
-   "std": 0.46477596945102223
+   "mean": 0.3437978560490046,
+   "std": 0.474974620611578
   },
   {
    "name": "aerobic",
    "kind": "flag",
    "log": false,
    "fill": 1.0,
-   "mean": 0.6988879384088965,
-   "std": 0.45874130831598214
+   "mean": 0.7120980091883614,
+   "std": 0.45278519686307517
   },
   {
    "name": "neutralization_degree",
    "kind": "spec",
    "log": false,
    "fill": 0.0,
-   "mean": 0.37357570573139437,
-   "std": 0.46500996020316177
+   "mean": 0.369885145482389,
+   "std": 0.4638107705870731
   },
   {
    "name": "final_product_is_broth",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.16167664670658682,
-   "std": 0.36815391973507533
+   "mean": 0.1447166921898928,
+   "std": 0.35181496726476635
   },
   {
    "name": "ds_sep__centrifugation",
    "kind": "flag",
    "log": false,
    "fill": 1.0,
-   "mean": 0.7835757057313943,
-   "std": 0.4118067740080797
+   "mean": 0.7879019908116386,
+   "std": 0.4087938890036092
   },
   {
    "name": "ds_sep__filtration",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.19674935842600513,
-   "std": 0.39754125368942594
+   "mean": 0.21975497702909647,
+   "std": 0.41408058044303137
   },
   {
    "name": "ds_sep__acidulation",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.3823781009409752,
-   "std": 0.4859681973768948
+   "mean": 0.37519142419601836,
+   "std": 0.484172303426974
   },
   {
    "name": "ds_sep__gypsum_filtration",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.3823781009409752,
-   "std": 0.4859681973768948
+   "mean": 0.37519142419601836,
+   "std": 0.484172303426974
   },
   {
    "name": "ds_sep__adsorption",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.12574850299401197,
-   "std": 0.3315657053869971
+   "mean": 0.1324655436447167,
+   "std": 0.3389961996713627
   },
   {
    "name": "ds_sep__ion_exchange",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.12574850299401197,
-   "std": 0.3315657053869971
+   "mean": 0.1324655436447167,
+   "std": 0.3389961996713627
   },
   {
    "name": "ds_sep__flash",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.046193327630453376,
-   "std": 0.20990355907625524
+   "mean": 0.05972434915773354,
+   "std": 0.23697542335739938
   },
   {
    "name": "ds_sep__evaporation",
    "kind": "flag",
    "log": false,
    "fill": 1.0,
-   "mean": 0.6218990590248076,
-   "std": 0.48491300189710984
+   "mean": 0.6431852986217458,
+   "std": 0.47905946421984136
   },
   {
    "name": "ds_sep__distillation",
    "kind": "flag",
    "log": false,
    "fill": 1.0,
-   "mean": 0.7715996578272027,
-   "std": 0.41980188883346675
+   "mean": 0.7702909647779479,
+   "std": 0.42064568743707115
   },
   {
    "name": "ds_sep__LLE",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.15739948674080412,
-   "std": 0.36417700135309966
+   "mean": 0.16232771822358347,
+   "std": 0.3687511764318974
   },
   {
    "name": "ds_sep__decantation",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.08639863130881095,
-   "std": 0.28095178913253976
+   "mean": 0.0773353751914242,
+   "std": 0.2671228461502794
   },
   {
    "name": "ds_sep__molecular_sieves",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.3413173652694611,
-   "std": 0.47415168610369235
+   "mean": 0.3055130168453293,
+   "std": 0.46062437341438506
   },
   {
    "name": "ds_sep__crystallization",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.16766467065868262,
-   "std": 0.37356823857442445
+   "mean": 0.19525267993874426,
+   "std": 0.39639509446445287
   },
   {
    "name": "ds_sep__drying",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.33875106928999144,
-   "std": 0.473285096263213
+   "mean": 0.34839203675344566,
+   "std": 0.4764609380423871
   },
   {
    "name": "ds_sep__esterification",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.046193327630453376,
-   "std": 0.20990355907625524
+   "mean": 0.05972434915773354,
+   "std": 0.23697542335739938
   },
   {
    "name": "ds_sep__hydrolysis",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.046193327630453376,
-   "std": 0.20990355907625524
+   "mean": 0.05972434915773354,
+   "std": 0.23697542335739938
   },
   {
    "name": "ds_upg__dehydration",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.31565440547476475,
-   "std": 0.46477596945102223
+   "mean": 0.3437978560490046,
+   "std": 0.474974620611578
   },
   {
    "name": "ds_upg__hydrogenation",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.032506415739948676,
-   "std": 0.17734076991963887
+   "mean": 0.04900459418070444,
+   "std": 0.21587761331339778
   },
   {
    "name": "ds_upg__ring_opening_hydrolysis",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.032506415739948676,
-   "std": 0.17734076991963887
+   "mean": 0.04900459418070444,
+   "std": 0.21587761331339778
   },
   {
    "name": "ds_cop__electricity",
    "kind": "flag",
    "log": false,
    "fill": 1.0,
-   "mean": 0.8691189050470488,
-   "std": 0.3372702683855602
+   "mean": 0.8644716692189893,
+   "std": 0.342287017482001
   },
   {
    "name": "ds_cop__DDGS",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.1710863986313088,
-   "std": 0.3765844431660417
+   "mean": 0.15313935681470137,
+   "std": 0.3601217769159218
   },
   {
    "name": "ds_cop__corn_oil",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.1710863986313088,
-   "std": 0.3765844431660417
+   "mean": 0.15313935681470137,
+   "std": 0.3601217769159218
   },
   {
    "name": "ds_cop__ethanol",
    "kind": "flag",
    "log": false,
    "fill": 0.0,
-   "mean": 0.08639863130881095,
-   "std": 0.28095178913253976
+   "mean": 0.0773353751914242,
+   "std": 0.2671228461502794
   },
   {
    "name": "fp_n_C",
    "kind": "descriptor",
    "log": false,
    "fill": 3.0,
-   "mean": 3.039349871685201,
-   "std": 1.2151699764941801
+   "mean": 3.1202143950995405,
+   "std": 1.230086819471495
   },
   {
    "name": "fp_n_H",
    "kind": "descriptor",
    "log": false,
    "fill": 6.0,
-   "mean": 5.698887938408896,
-   "std": 1.9693999021556592
+   "mean": 5.730474732006126,
+   "std": 1.8655265229993119
   },
   {
    "name": "fp_n_O",
    "kind": "descriptor",
    "log": false,
    "fill": 3.0,
-   "mean": 2.545765611633875,
-   "std": 1.1778543728646145
+   "mean": 2.6186830015313936,
+   "std": 1.1429603883259742
   },
   {
    "name": "fp_dor",
    "kind": "descriptor",
    "log": false,
    "fill": 4.0,
-   "mean": 4.164242942686056,
-   "std": 1.6763246884423981
+   "mean": 4.1343797856049,
+   "std": 1.5898718363658035
   },
   {
    "name": "fp_Ymax_carbon",
    "kind": "descriptor",
    "log": false,
    "fill": 0.9832148804369547,
-   "mean": 0.95688234496741,
-   "std": 0.272091371136012
+   "mean": 0.9550088986176248,
+   "std": 0.26020424007635595
   },
   {
    "name": "fp_Ymax_electron",
    "kind": "descriptor",
    "log": false,
    "fill": 0.9999993339106108,
-   "mean": 1.6104911154748482,
-   "std": 1.9404790259154583
+   "mean": 1.5436029327585992,
+   "std": 1.8468182254904109
   },
   {
    "name": "fp_Ymax_stoich",
    "kind": "descriptor",
    "log": false,
    "fill": 0.9832148804369547,
-   "mean": 0.8739225168431634,
-   "std": 0.3525482283025349
+   "mean": 0.8807515945768559,
+   "std": 0.3362422391363167
   },
   {
    "name": "fp_Tm",
    "kind": "descriptor",
    "log": false,
    "fill": 344.99,
-   "mean": 303.50050470487594,
-   "std": 111.12030159557423
+   "mean": 312.0386676875957,
+   "std": 110.24367013905503
   },
   {
    "name": "fp_log10_alpha_inf",
    "kind": "descriptor",
    "log": false,
    "fill": -0.8662539823202613,
-   "mean": -1.1637642294875825,
-   "std": 2.2629651346451087
+   "mean": -1.2696934848791332,
+   "std": 2.233790625708806
   },
   {
    "name": "pp_n_C",
    "kind": "descriptor",
    "log": false,
    "fill": 3.0,
-   "mean": 3.039349871685201,
-   "std": 1.2151699764941801
+   "mean": 3.1202143950995405,
+   "std": 1.230086819471495
   },
   {
    "name": "pp_n_H",
    "kind": "descriptor",
    "log": false,
    "fill": 6.0,
-   "mean": 5.165098374679213,
-   "std": 2.1064762279604023
+   "mean": 5.189892802450229,
+   "std": 2.030944865877219
   },
   {
    "name": "pp_n_O",
    "kind": "descriptor",
    "log": false,
    "fill": 2.0,
-   "mean": 2.23011120615911,
-   "std": 1.147429934176212
+   "mean": 2.274885145482389,
+   "std": 1.126839565515108
   },
   {
    "name": "pp_dor",
    "kind": "descriptor",
    "log": false,
    "fill": 4.0,
-   "mean": 4.1804961505560305,
-   "std": 1.6770772042077013
+   "mean": 4.158882082695253,
+   "std": 1.5914641105573155
   },
   {
    "name": "pp_Ymax_carbon",
    "kind": "descriptor",
    "log": false,
    "fill": 0.8000028863873531,
-   "mean": 0.9046034662744812,
-   "std": 0.27584450717579984
+   "mean": 0.9026086432935594,
+   "std": 0.2626401640863791
   },
   {
    "name": "pp_Ymax_electron",
    "kind": "descriptor",
    "log": false,
    "fill": 0.8000028863873531,
-   "mean": 1.555200641675186,
-   "std": 1.9597163868958636
+   "mean": 1.486662589187871,
+   "std": 1.8654933188962577
   },
   {
    "name": "pp_Ymax_stoich",
    "kind": "descriptor",
    "log": false,
    "fill": 0.8000028863873531,
-   "mean": 0.8186320430435011,
-   "std": 0.343320938366758
+   "mean": 0.823811251006128,
+   "std": 0.32695663681543186
   },
   {
    "name": "pp_Tm",
    "kind": "descriptor",
    "log": false,
    "fill": 286.15,
-   "mean": 289.60312232677506,
-   "std": 113.32203788120657
+   "mean": 298.8584226646248,
+   "std": 115.88235951195155
   },
   {
    "name": "pp_log10_alpha_inf",
    "kind": "descriptor",
    "log": false,
    "fill": -0.29545959374950564,
-   "mean": -0.9889273359471897,
-   "std": 2.3013997408992637
+   "mean": -1.0815011216078891,
+   "std": 2.2840628799802336
   },
   {
    "name": "fs_w_glucose",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0,
-   "mean": 0.12019191400117497,
-   "std": 0.30157044480679823
+   "mean": 0.10774097521313811,
+   "std": 0.287626606606747
   },
   {
    "name": "fs_w_glucan",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0611518345550366,
-   "mean": 0.08494405598581857,
-   "std": 0.10823892737156962
+   "mean": 0.09646699955400032,
+   "std": 0.11459175979293308
   },
   {
    "name": "fs_w_sucrose",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0062263479639033,
-   "mean": 0.05037189245914749,
-   "std": 0.06460138567624525
+   "mean": 0.04731683356589386,
+   "std": 0.0633606991882571
   },
   {
    "name": "fs_w_starch",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0,
-   "mean": 0.1753132784949975,
-   "std": 0.2766725226430427
+   "mean": 0.16910660226696178,
+   "std": 0.27365649412905646
   },
   {
    "name": "fs_w_xylan",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0360810824324729,
-   "mean": 0.04808250550233473,
-   "std": 0.06022229520299596
+   "mean": 0.05446035304440423,
+   "std": 0.06371666682973445
   },
   {
    "name": "fs_w_arabinan",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0,
-   "mean": 0.004288184675941856,
-   "std": 0.007932629596467154
+   "mean": 0.005173276174652128,
+   "std": 0.008436621291078547
   },
   {
    "name": "fs_w_galactan",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0,
-   "mean": 0.0006803048926917844,
-   "std": 0.0021848983984387167
+   "mean": 0.0008532199369238015,
+   "std": 0.0024382931970380432
   },
   {
    "name": "fs_w_mannan",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0,
-   "mean": 0.0010810549603214633,
-   "std": 0.0019998225873446365
+   "mean": 0.0013041872709206891,
+   "std": 0.0021268793170785994
   },
   {
    "name": "fs_w_lignin",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0327609828294848,
-   "mean": 0.0407580459795836,
-   "std": 0.04915136735488135
+   "mean": 0.04605622430426728,
+   "std": 0.0520069555713848
   },
   {
    "name": "fs_w_ash",
    "kind": "feedstock",
    "log": false,
-   "fill": 0.0132862084555644,
-   "mean": 0.015245260574166114,
-   "std": 0.014076197271165212
+   "fill": 0.0139999999999999,
+   "mean": 0.01686426715439843,
+   "std": 0.014802659259620009
   },
   {
    "name": "fs_w_protein",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0,
-   "mean": 0.0057129071050230785,
-   "std": 0.010500501850646198
+   "mean": 0.006912893457990452,
+   "std": 0.011184795604410078
   },
   {
    "name": "fs_w_extractives",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0,
-   "mean": 0.029423466660920064,
-   "std": 0.05825501631656533
+   "mean": 0.03599132392572658,
+   "std": 0.06359125848474732
   },
   {
    "name": "fs_w_fiber",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0,
-   "mean": 0.030595520783422304,
-   "std": 0.048299580085382654
+   "mean": 0.029510232615482905,
+   "std": 0.04776840374989946
   },
   {
    "name": "fs_w_water",
    "kind": "feedstock",
    "log": false,
    "fill": 0.2021541546721867,
-   "mean": 0.3509772869919875,
-   "std": 0.26237827979291517
+   "mean": 0.3407681564794137,
+   "std": 0.25595433475000445
   },
   {
    "name": "fs_w_other",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0150004500135003,
-   "mean": 0.04233432093246864,
-   "std": 0.04782962696078775
+   "mean": 0.04147445503582537,
+   "std": 0.0471586886873059
   },
   {
    "name": "fs_w_fermentable_sugar_eq",
    "kind": "feedstock",
    "log": false,
-   "fill": 0.5289707505922393,
-   "mean": 0.5238575486729915,
-   "std": 0.22456371101157205
+   "fill": 0.5289707505922392,
+   "mean": 0.5227910592325906,
+   "std": 0.21629956614866014
   },
   {
    "name": "phys_fp_log10_MW",
    "kind": "derived",
    "log": false,
-   "fill": 1.9544107900715926,
-   "mean": 1.895629538654163,
-   "std": 0.14777191631569866
+   "fill": 1.954618445703735,
+   "mean": 1.9076978988316775,
+   "std": 0.1457172222170494
   },
   {
    "name": "phys_fp_Tb_minus_water",
    "kind": "derived",
    "log": false,
    "fill": 79.75,
-   "mean": 76.74533072231138,
-   "std": 75.72937423127344
+   "mean": 80.22990169554518,
+   "std": 72.80910216437519
   },
   {
    "name": "phys_fp_log10_gamma_inf",
    "kind": "derived",
    "log": false,
    "fill": 0.7044957346045877,
-   "mean": 0.8613595940394311,
-   "std": 0.5367269930761875
+   "mean": 0.8734739469306182,
+   "std": 0.541993038844538
   },
   {
    "name": "phys_fp_log10_Psat_ratio",
    "kind": "derived",
    "log": false,
    "fill": -1.541274541000739,
-   "mean": -2.0235740055852327,
-   "std": 2.110171332984873
+   "mean": -2.1416176138679703,
+   "std": 2.0933837015046644
   },
   {
    "name": "phys_fp_LHV_mass",
    "kind": "derived",
    "log": false,
    "fill": 13.594295393842298,
-   "mean": 17.318984376829977,
-   "std": 9.420139418901943
+   "mean": 17.006090688110433,
+   "std": 9.007736138060762
   },
   {
    "name": "phys_fp_Hvap_mass",
    "kind": "derived",
    "log": false,
    "fill": 0.859723632120863,
-   "mean": 0.8048324565929983,
-   "std": 0.1814011855739813
+   "mean": 0.7975241699751249,
+   "std": 0.1805228883834416
   },
   {
    "name": "phys_pp_log10_MW",
    "kind": "derived",
    "log": false,
    "fill": 1.8577102888995196,
-   "mean": 1.8706596711694186,
-   "std": 0.14776871317455953
+   "mean": 1.8828528608280541,
+   "std": 0.14974669222923553
   },
   {
    "name": "phys_pp_Tb_minus_water",
    "kind": "derived",
    "log": false,
    "fill": 42.0,
-   "mean": 66.62698170605817,
-   "std": 77.6721375543777
+   "mean": 69.96148668788821,
+   "std": 75.58221742915991
   },
   {
    "name": "phys_pp_log10_gamma_inf",
    "kind": "derived",
    "log": false,
    "fill": 0.5695281129179298,
-   "mean": 0.7211805118337479,
-   "std": 0.5310299255471534
+   "mean": 0.6949331884668598,
+   "std": 0.5161427692439121
   },
   {
    "name": "phys_pp_log10_Psat_ratio",
    "kind": "derived",
    "log": false,
    "fill": -0.7222321430828683,
-   "mean": -1.7224812547805215,
-   "std": 2.192859263452069
+   "mean": -1.795874255919805,
+   "std": 2.1964694610073123
   },
   {
    "name": "phys_pp_LHV_mass",
    "kind": "derived",
    "log": false,
    "fill": 17.765775062979912,
-   "mean": 17.849460950777452,
-   "std": 9.700494399432733
+   "mean": 17.254907033821045,
+   "std": 9.567881815133328
   },
   {
    "name": "phys_pp_Hvap_mass",
    "kind": "derived",
    "log": false,
    "fill": 0.859723632120863,
-   "mean": 0.7484736424791627,
-   "std": 0.2599947671344125
+   "mean": 0.7431264745747048,
+   "std": 0.2598479696783293
   },
   {
    "name": "phys_ty_over_Ymax_stoich",
    "kind": "derived",
    "log": false,
    "fill": 1.0000006660898328,
-   "mean": 0.93470305582211,
-   "std": 0.17980475675469734
+   "mean": 0.9433394321576544,
+   "std": 0.1859137691894921
   },
   {
    "name": "phys_ty_over_Ymax_carbon",
    "kind": "derived",
    "log": false,
-   "fill": 0.6666671107265554,
-   "mean": 0.8209303887148771,
-   "std": 0.20603733833954466
+   "fill": 0.6666702643583875,
+   "mean": 0.8415015700991894,
+   "std": 0.21586624322746367
   },
   {
    "name": "phys_inflection_over_theoretical",
    "kind": "derived",
    "log": false,
-   "fill": 0.8341470274591912,
-   "mean": 0.8272296331162479,
-   "std": 0.12217720018911944
+   "fill": 0.8229466739836555,
+   "mean": 0.819217880069818,
+   "std": 0.12249235868644612
   },
   {
    "name": "phys_pp_fp_MW_ratio",
    "kind": "derived",
    "log": false,
    "fill": 1.0,
-   "mean": 0.9495852050736698,
-   "std": 0.09985839950110123
+   "mean": 0.9504099357812962,
+   "std": 0.10546484275823517
   },
   {
    "name": "phys_log10_solubility",
    "kind": "derived",
    "log": false,
    "fill": 3.0,
-   "mean": 2.4960501203721885,
-   "std": 0.6675948288110691
+   "mean": 2.481611061050156,
+   "std": 0.6836544640366796
   },
   {
    "name": "phys_log10_capacity",
    "kind": "param",
    "log": false,
    "fill": 4.934195349347885,
-   "mean": 5.162563550251841,
-   "std": 0.4882750469130989
+   "mean": 5.14481284238571,
+   "std": 0.470932746553563
   },
   {
    "name": "phys_fs_nonsugar_solids",
    "kind": "derived",
    "log": false,
-   "fill": 0.15567011665462624,
-   "mean": 0.12516516433502095,
-   "std": 0.10752200549849522
+   "fill": 0.1700025163283807,
+   "mean": 0.1364407842879957,
+   "std": 0.11184585644686147
   },
   {
    "name": "phys_log10_w_final",
    "kind": "derived",
    "log": false,
    "fill": -0.013541787262693518,
-   "mean": -0.2674818811381029,
-   "std": 0.5633802198938896
+   "mean": -0.2427553169814764,
+   "std": 0.5379670738401876
   },
   {
    "name": "phys_water_removal_c",
    "kind": "derived",
    "log": false,
    "fill": 1000.0,
-   "mean": 838.3233532934132,
-   "std": 368.1539197350754
+   "mean": 855.2833078101072,
+   "std": 351.8149672647664
   },
   {
    "name": "phys_water_removal_a",
    "kind": "derived",
    "log": false,
    "fill": -0.003310926055984719,
-   "mean": -0.041568830154132645,
-   "std": 0.06036299764155585
+   "mean": -0.04542552643915125,
+   "std": 0.06282835363812002
   },
   {
    "name": "phys_evap_water_c",
    "kind": "derived",
    "log": false,
-   "fill": 0.0,
-   "mean": 497.0059880239521,
-   "std": 499.99103581193066
+   "fill": 1000.0,
+   "mean": 549.7702909647779,
+   "std": 497.51675161473844
   },
   {
    "name": "phys_distill_c",
    "kind": "derived",
    "log": false,
    "fill": 0.0,
-   "mean": 341.31736526946105,
-   "std": 474.15168610369227
+   "mean": 305.5130168453293,
+   "std": 460.624373414385
   },
   {
    "name": "phys_base_per_product",
    "kind": "derived",
    "log": false,
    "fill": 0.0,
-   "mean": 0.2239563881609185,
-   "std": 0.2952193151753471
+   "mean": 0.2184324124317521,
+   "std": 0.28965274775606586
   },
   {
    "name": "phys_acid_per_product",
    "kind": "derived",
    "log": false,
    "fill": 0.0,
-   "mean": 0.2916829393686666,
-   "std": 0.3933093632259775
+   "mean": 0.28273472868192134,
+   "std": 0.38672985710877505
   },
   {
    "name": "phys_gypsum_per_product",
    "kind": "derived",
    "log": false,
    "fill": 0.0,
-   "mean": 0.5120265466726142,
-   "std": 0.69042377131309
+   "mean": 0.4963186639052846,
+   "std": 0.6788739638293397
   },
   {
    "name": "phys_n_separation_ops",
    "kind": "derived",
    "log": false,
    "fill": 5.0,
-   "mean": 4.620188195038494,
-   "std": 1.5447041233093606
+   "mean": 4.704441041347627,
+   "std": 1.5266680536594912
   },
   {
    "name": "phys_n_upgrading_ops",
    "kind": "derived",
    "log": false,
    "fill": 0.0,
-   "mean": 0.3806672369546621,
-   "std": 0.6563521814572245
+   "mean": 0.44180704441041346,
+   "std": 0.7352830373427467
   },
   {
    "name": "p_operating_days",
    "kind": "param",
    "log": false,
    "fill": 330.0,
-   "mean": 277.3854879848276,
-   "std": 72.52288285900913
+   "mean": 280.9144545234865,
+   "std": 71.3632059968021
   },
   {
    "name": "p_IRR",
    "kind": "param",
    "log": false,
    "fill": 0.1,
-   "mean": 0.10201394370402324,
-   "std": 0.011180204784060658
+   "mean": 0.10179251258310829,
+   "std": 0.010915214508049878
   },
   {
    "name": "p_income_tax",
    "kind": "param",
    "log": false,
    "fill": 0.21,
-   "mean": 0.23645513562150552,
-   "std": 0.05866189310543571
+   "mean": 0.23382695880281232,
+   "std": 0.05665532040817023
   },
   {
    "name": "p_boiler_efficiency",
    "kind": "param",
    "log": false,
    "fill": 0.8,
-   "mean": 0.8000841490446616,
-   "std": 0.03436268668776943
+   "mean": 0.8002588728421952,
+   "std": 0.035092700309881236
   },
   {
    "name": "p_turbogenerator_efficiency",
    "kind": "param",
    "log": false,
    "fill": 0.85,
-   "mean": 0.8503034722203217,
-   "std": 0.033019578340472026
+   "mean": 0.8501874680557658,
+   "std": 0.03326492651331112
   },
   {
    "name": "p_cell_mass_yield",
    "kind": "param",
    "log": false,
    "fill": 0.245,
-   "mean": 0.23560648283388455,
-   "std": 0.053395967749816343
+   "mean": 0.2370014019300567,
+   "std": 0.05384680653511398
   },
   {
    "name": "p_base_price",
    "kind": "param",
    "log": false,
    "fill": 0.286,
-   "mean": 0.27039201578447847,
-   "std": 0.026506849104873397
+   "mean": 0.269232253089931,
+   "std": 0.027049551700698823
   },
   {
    "name": "p_acid_price",
    "kind": "param",
    "log": false,
    "fill": 0.10355,
-   "mean": 0.10090425201075008,
-   "std": 0.006035204422655258
+   "mean": 0.10104706989089679,
+   "std": 0.0058569650198056515
   },
   {
    "name": "p_enzyme_loading",
    "kind": "param",
    "log": false,
    "fill": 20.0,
-   "mean": 19.99798936573252,
-   "std": 0.8002274843068571
+   "mean": 20.00701414320655,
+   "std": 0.8945062758879854
   },
   {
    "name": "p_saccharification_yield",
    "kind": "param",
    "log": false,
    "fill": 0.9,
-   "mean": 0.8990720625071811,
-   "std": 0.010003763883494192
+   "mean": 0.8987792990563737,
+   "std": 0.011296927882387776
   }
  ],
  "indicators": [
@@ -918,31 +921,31 @@
   ]
  },
  "r_stats": {
-  "log_r_mean": -0.4455574561152107,
-  "log_r_std": 1.534947941434143,
-  "inv_r_mean": 3.858561122941509,
-  "inv_r_std": 5.4835712487561326,
+  "log_r_mean": -0.5026337280654611,
+  "log_r_std": 1.5101181819016756,
+  "inv_r_mean": 3.997820528807315,
+  "inv_r_std": 5.652603622936248,
   "log_r_min": -3.6978400353770478,
   "log_r_max": 4.151068208048267
  },
  "price_stats": {
   "feedstock_price": {
-   "mean": 0.1055496288010488,
-   "std": 0.08262972387810927,
-   "min": 0.0014615063338929,
+   "mean": 0.10280219623968324,
+   "std": 0.07949128738531147,
+   "min": 0.0004730349022048,
    "max": 0.334973684106906
   },
   "electricity_price": {
-   "mean": 0.07112750298574953,
-   "std": 0.007878723234736283,
+   "mean": 0.07104184369032139,
+   "std": 0.00746975873183436,
    "min": 0.0520934828058803,
    "max": 0.0979985558441651
   },
   "natural_gas_price": {
-   "mean": 0.2600183790078027,
-   "std": 0.029572758026526414,
+   "mean": 0.2607906106536612,
+   "std": 0.02901603808575223,
    "min": 0.1660360341748205,
-   "max": 0.3223840700666498
+   "max": 0.3241897708026443
   }
  },
  "price_fill": {
@@ -1271,7 +1274,7 @@
    "LacticAcid": {
     "ferm_product_chemical": "LacticAcid",
     "theoretical_yield": 1.0,
-    "inflection_yield": 0.8956572707850234,
+    "inflection_yield": 0.8931209395125529,
     "n_acid_groups": 1.0,
     "pKa1": 3.86,
     "product_water_solubility": 1000.0
@@ -1779,6 +1782,8 @@
   "water_removal_route==evaporate_water",
   "water_removal_route==none",
   "water_removal_route==__other__",
-  "struct_water_removal"
+  "struct_water_removal",
+  "struct_neutralization",
+  "struct_sugar_availability"
  ]
 }
