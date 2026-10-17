@@ -59,6 +59,7 @@ carries `harness_version`, `adapter_version` and `data_patches`.
 | D11 | ethanol_corn, adapter < 2 | The corn natural gas missed the thermal oxidizer X611 and its price was the stream's own (0). Fixed in adapter v2 (sum over the 'Natural gas' and 'Fuel' utilities, `bst.stream_prices`); the affected samples were regenerated with D2. |
 | D12 | ethanol_corn, adapter < 2 | The real corn natural-gas price was never sampled (the sampled heating-agent price had no effect). Fixed in adapter v2 (`p_natural_gas_price` sets `stream_prices['Natural gas']`); regenerated with D2. |
 | D2 | ethanol_corn, adapter < 2 | The molar yeast growth destroyed sugar mass. This cannot be patched, so the samples are rejected (`unpatchable_D2`) and the configuration was regenerated. |
+| D15 | succinic_neutral, adapter < 3 | The salt formation, acidulation and gypsum filtration were never simulated (see "Known data defects"). Not patchable: such samples are rejected (`unpatchable_D15`); the four configurations were regenerated with adapter v3 (2026-10-17). |
 | M1 | TAL, succinic low-pH, adapter < 2 | `neutralizing_agent` = 'NaOH' (TAL pH control) or 'Ca(OH)2' (succinic partial pH control). `neutralization` stays False. |
 | M3 | TAL, adapter < 2 | `bp_fermentation_fermentation_y_lipolytica_yield` → `p_cell_mass_yield`, in the sample values and in the config's parameter list. |
 | M12 | TAL, adapter < 2 | `product_water_solubility` = 9.8 g/L water at 25 °C, interpolated from the TAL module's experimental data. v1 used 5.41 from the fitted model. |
@@ -74,19 +75,71 @@ sample's own inflection are dropped (`x_inflection_yield`, `x_above_inflection`;
 
 Defects found in the data review that are not (or not fully) corrected by
 the patches above. "Effect" is what they do to the training targets and the
-model; none of them was corrected for the v2 models.
+model; none of them was corrected for the v2 models. D15 and H1 were fixed
+afterwards by regenerating the affected data (2026-10-17); models trained
+before that (v2) still carry them.
 
 | id | configurations / fields | defect | effect on the coefficients and the model | status |
 |---|---|---|---|---|
 | D1 | lactic, random samples | the feedstock-price bounds were rebound after sampling (prices outside the intended range) | none now: the random samples were regenerated with the bound fix (`adapters/lactic.py` 408-421; old files in `raw_lactic_D1`, prices 0.0005-0.175 USD/kg = U(0, 200) USD/dry t). The fix was not versioned (lactic configs carry no `adapter_version`) | fixed by regeneration |
 | D5 | HP low-pH (8 configurations) | the cation-exchange regeneration H2SO4 (`H2SO4_fresh` → T611) and the anion-exchange NaOH are not in `acid_cost` / `base_cost`; `acid_cost` = 0 in every low-pH HP configuration | their cost is in materials_other instead of the neutralization channel (lactic and oxalic book such reagents as neutralization); totals unaffected, channel labels and the `acid_regeneration` field ('none') understate HP's reagent use | open |
-| D8 | TAL, TAL_SA | y counts glucose only, but the spiked acetate (up to 18 t/h against 40 t/h sugar) also makes TAL: F_ferm/(y·F_sugar) reaches 1.64, the excess correlates with the acetate fed (r = 0.98, TAL_corn) | y is not the yield on all fermentable carbon; the feedstock c′ / d′ are distorted (negative c′ down to −93), and, through the feedstock-only sub-network shared by all products of a feedstock, plausibly the corn feedstock intensity of other products (REPORT.md section 8 (ii-b): corn feedstock sensitivities 19-24 % low) | open (regenerate with a carbon-basis yield, or mask the TAL feedstock-channel targets) |
+| D8 | TAL, TAL_SA | the spiked acetate (10 g/L AcOH-eq. by default, up to 0.45 g per g sugar) also makes TAL, at the sugars' yield fraction and with a 1.5× higher theoretical yield per g (AcOH → 1/3 TAL, 0.700 g/g, vs glucose 0.4667 g/g), but `F_sugar_fed` counts the sugars only: F_ferm/(y·F_sugar) reaches 1.65, while F_ferm = y·(F_sugar + 1.5·F_acetate) within 0.5 % (median; development rows) | y is the module's (and the publication's) yield on all substrates, glucose-eq. by theoretical TAL yield, so it agrees with ADAPTERS.md; but the sugar demand per kg TAL is 1/y − 1.5·a/t (a = acetate per L broth, 1.8-10.4 g/L between points), so the feedstock channel carries a negative c′ (all 144 development TAL samples; median −2.7, −7.3 to −0.7) and a positive d′ (median 0.29), where the other products have c′ ≈ d′ ≈ 0 (medians 0.000 / 0.002); no sugar-only feedstock description explains that, and, through the feedstock-only sub-network shared by all products of a feedstock, plausibly biases the corn feedstock intensity of other products (REPORT.md section 8 (ii-b): corn feedstock sensitivities 19-24 % low) | analysed, y kept ("D8 analysis" below); mitigation left to the model study (mask the TAL feedstock-channel targets, or an acetate co-feed input) |
 | D9 | lactic | `R403._setup` rebuilds the hydrolysis reaction at X = 0.8 on every simulation, so the sampled `bp_hydrolysis_reactor_r403_hydrolysis_conversion` (0.745-0.850) is never applied | that `bp_*` has no effect (it is not a model input); no bias | open (harmless) |
 | D10 | isobutanol | the starch-content setter rescales the current composition, so the result depends on history | sampled and actual dry starch differ (sampled 0.59-0.85, actual 0.67-0.76, corr. 0.87), moisture drifts 13.4-17.1 % (baseline 15 %); the model sees the actual `fs_w_*`, so the inputs are right, but the starch range covered is narrow | open |
 | D13 | oxalic | the module's unit groups put lime, H2SO4 and CSL/MgCl2/DAP storage in facilities (99.6 % of the non-feedstock material cost) | channel labels only (facilities instead of fermentation / separation materials); totals unaffected | open |
 | D14 | oxalic | the reaction `Glucose -> 2 OxalicAcid + 2 AceticAcid + O2` creates mass and carbon: (OA + AcOH + cells + CO2)/sugar = 1.61-1.70, air feed 5-8 kg/h for 133 t/h sugar, acetic acid 0.667 g/g OA | physically invalid fermentation balance; `aerobic=True` is misleading (no aeration cost), and the oxalic yields are not comparable with the other products' | open (kept for fidelity to the module; patch the reaction and regenerate for physical consistency) |
-| D15 | succinic_neutral (4 configurations, 72 samples) | the adapter sets only `spec.neutralization` (as the publication's TRY script); the reactor keeps `base_neutralizes_product=False`, which removes the purchased lime from the broth and bypasses R401 / R401_P / S405 (acidulation, gypsum filtration) | the data equal succinic (low pH) except the base cost (separation capex and recovery identical at identical TY points; acid, gypsum and acidulation costs 0), but `downstream.TABLE` describes acidulation + gypsum filtration (neutralization degree 1, H2SO4): the acid / gypsum features of these configurations claim costs their targets lack, which weakens that mapping and likely biases low the predictions for new neutralized products that do acidulate | open (needs a new table version or regeneration with `base_neutralizes_product=True`, then retraining) |
-| H1 | TAL_SA_glucose, TAL_SA_sugarcane | after a convergence failure whose `reset()` also failed, the harness wrote the later samples as complete with no simulated point (27 and 19 samples) | TAL_SA_glucose keeps only its baseline sample, TAL_SA_sugarcane 10 of 29 | harness fixed (reload, `retry`); data not regenerated |
+| D15 | succinic_neutral (4 configurations, 72 samples) | succinic adapter v2 set only `spec.neutralization` (as the publication's TRY script); the reactor kept `base_neutralizes_product=False`, which removes the purchased lime from the broth and bypasses R401 / R401_P / S405 (acidulation, gypsum filtration) | the v2 data equal succinic (low pH) except the base cost (acid, gypsum and acidulation costs 0), but `downstream.TABLE` describes acidulation + gypsum filtration (neutralization degree 1, H2SO4): the acid / gypsum features claimed costs the targets lacked (v2 models). Regenerated data: MPSP +0.22 USD/kg vs. succinic (low pH) at identical TY points and baseline parameters (+0.10 vs. the v2 rows): lime 1 mol/mol SA (+0.5 mol/mol acetic acid) instead of 0.21 (+0.13 USD/kg), 0.89-0.90 kg H2SO4 (93 wt%) per kg SA (+0.09 USD/kg), 1.44-1.45 kg wet gypsum (20 % moisture) per kg SA (0 USD/kg at baseline, sampled −0.029 to +0.008), R401 + S405 +1.0-1.6 M USD installed, while the fermenters are 304 instead of 316 stainless steel (−5 to −9 M USD, in v2 already); recovery unchanged (the module loses no acid in R401 / S405) | fixed by regeneration: adapter v3 (`base_neutralizes_product=True` for the neutral configurations), old files in `raw_archive/succinic_neutral_v2`, v2 rows rejected (`unpatchable_D15`); models must be retrained |
+| H1 | TAL_SA_glucose, TAL_SA_sugarcane | after a convergence failure whose `reset()` also failed, the old harness wrote the later samples as complete with no simulated point (27 and 19 samples; TAL_SA_glucose's sample 1 was cut after 3 points). Cause: the IPA evaporator F407 of the KSA systems ("Failed to extrapolate enthalpy of vaporization ... at T=1207 K"): BioSTEAM's root search for the first-effect evaporation tried fractions at which an effect evaporates all the IPA left and superheats its vapor; once the search started from the bounds (reset() clears its guess), it failed every time | TAL_SA_glucose kept only its baseline sample, TAL_SA_sugarcane 10 of 29 (v2 models) | fixed: harness reloads after a failed reset and writes `retry` records (resume re-runs them); TAL adapter returns the exact overall fraction 1 in that region (`_robust_V_overall`; re-simulated recorded points change by < 1e-4); the empty and the cut attempts were removed (originals in `raw_archive/TAL_SA_v2`) and re-run: 29 / 29 samples each; F407 failed once more without the mitigation (after 13 re-run samples), never with it; remaining failures 9 of 700 re-run points of TAL_SA_glucose (1.3 %; wastewater recycle M503 not converged at the maximum-titer edge; TAL_glucose 1.0 % in the original campaign), 0 of the 150 points of TAL_SA_sugarcane re-run with the mitigation |
+
+#### D8 analysis (2026-10-17; development rows only)
+
+* **What y is.** The TAL module's yield specification (`spec.load_yield`)
+  sets one conversion X (fraction of theoretical) for glucose, xylose and
+  acetic acid (`acetate_to_TAL_rxn.X = X`), and the harness passes
+  y = X · 0.4667 g TAL/g glucose. The module's theoretical yields are
+  0.4667 g/g for the sugars (Glucose → 2/3 TAL + 2 CO2; xylose the same mass
+  yield) and 0.700 g/g for acetic acid (AcOH → 1/3 TAL + 3 H2O), so 1 g of
+  acetic acid counts as 1.5 g glucose-eq. The recorded rows confirm
+  F_ferm_product = y · (F_sugar_fed + 1.5 · x_F_acetate_fed): ratio median
+  0.995 (0.975-0.999; the rest is the seed train) over the 3 116 ok points of
+  the development samples of TAL_corn, TAL_cornstover, TAL_glucose,
+  TAL_SA_corn and TAL_SA_cornstover. y is thus the yield on all substrates,
+  glucose-eq. by theoretical TAL yield. That is the module's own definition
+  ("weight fraction of substrates converted to product over theoretical
+  maximum yield") and the TAL axis of the publication's TY maps, and
+  ADAPTERS.md defines y on "the biorefinery's own spec" basis: y is not a
+  recording error. The inconsistent pieces are `F_sugar_fed` (sugars only)
+  and `x_yield_measured` = F_ferm/F_sugar_fed (up to 1.65 y).
+* **A carbon-basis yield is derivable but not better.** Glucose, xylose and
+  acetic acid all hold 40.0 wt% carbon, so y_C = F_ferm_product /
+  (F_sugar_fed + x_F_acetate_fed) is the yield per g of fermentable carbon
+  (glucose-eq.). But y_C/y = 1.00-1.13 on the development rows, set by the
+  acetate share: 1/y_C = 1/y − (a/2)/t, with a = x_F_acetate_fed/V_broth
+  varying between points (1.8-10.4 g/L; 10 g/L AcOH-eq. by default, changed
+  by the module's titer loader for low-titer, high-yield points). In y_C the
+  TY design becomes irregular and the MPSP leaves the unifying form (the
+  substitution adds 1/t² and acetate-loading terms); sampling a carbon-basis
+  yield directly would need a different yield specification in the module.
+  Side note: the acetate reaction is carbon-balanced but creates mass
+  (C2H4O2 → 1/3 C6H6O3 + 3 H2O: 60 g → 96 g), a module quirk akin to D14.
+* **How a user specifies TAL.** A user quotes a yield per sugar consumed (or,
+  like the module, as a fraction of theoretical on all substrates) and
+  treats an acetate co-feed as a separate process choice, which the model
+  has no input for. Under either basis the training rows carry the
+  acetate's sugar substitution: sugar demand per kg TAL is 1/y − 1.5·a/t, a
+  negative titer term in the feedstock channel whose coefficient changes with
+  a between points: the fitted feedstock-channel c′ is negative in every
+  development TAL sample (median −2.7, range −7.3 to −0.7 USD/kg·g/L) and
+  d′ is positive (median 0.29), against c′ ≈ d′ ≈ 0 for the other products
+  (medians 0.000 / 0.002).
+* **Decision.** y semantics unchanged: the recorded y is the module's own and
+  consistent with ADAPTERS.md, and neither the carbon basis nor a sugar-only
+  basis is clearly more correct (both change the functional form or need
+  module changes). The data carry what a mitigation needs
+  (`x_F_acetate_fed`, `F_sugar_fed`, `V_broth` at every point). Left to the
+  model study: mask the TAL / TAL_SA feedstock-channel targets
+  (`ch__feedstock__*`), or normalise that channel by the sugar-equivalent
+  feed F_sugar_fed + 1.5·x_F_acetate_fed, or add an acetate co-feed input.
 
 Minor items, also not corrected: oxalic recoveries slightly above the
 stoichiometric ratio in 26 of 211 samples (max 1.003; lime loading > 1 gives
@@ -101,6 +154,34 @@ than 10 % along titer (TAL_glucose 7, TAL_corn 2, lactic 3, HP_neutral_corn
 samples rejected for too few feasible points are the low-carbohydrate ones
 (retained median carbohydrate content 0.54, rejected 0.25-0.59), so the
 retained data are censored toward carbohydrate-rich feedstock.
+
+### Data set (after the regeneration of 2026-10-17)
+
+Processed tables (`experiments.stage_data`, i.e. `dataset.build` with the
+default filters; data hash c345efda41c4fdca): 1600 samples, 35 583
+feasible points, 41 configurations of 7 biorefineries (HP 464, TAL 232,
+ethanol 327, isobutanol 109, lactic 113, oxalic 211, succinic 144);
+development set 1353 samples / 37 configurations. Every configuration has
+completed the samples planned by `run_all.sh` except
+`lactic_lowpH_SHF_cornstover` (27 of 36); all 23 quality-filter rejections
+are lactic (11 too few points, 9 too few yields, 2 low R², 1 incomplete).
+The v2 models were trained on the tables before the regeneration: 1550
+samples (TAL 185: 47 TAL_SA samples rejected for too few points, the H1
+empty attempts; succinic 141 with the D15 neutral data).
+
+Regenerated configurations (same seed, sample ids and campaign settings as
+`run_all.sh`): `succinic_neutral_{corn, cornstover, glucose, sugarcane}`
+18 / 18 samples each (adapter v3, 288 ok points each, no failed point),
+`TAL_SA_glucose` and `TAL_SA_sugarcane` 29 / 29 (28 and 19 samples re-run).
+Fit MAPE, median per configuration on the development rows: succinic_neutral
+0.86-1.16 % (max 1.53 %; low pH 1.01-1.38 %), TAL_SA_glucose 1.12 % (max
+3.38 %), TAL_SA_sugarcane 0.90 % (other TAL_SA 1.01-1.15 %). Patches: the
+re-run TAL_SA attempts (adapter v2, harness v3) and the succinic_neutral
+v3 rows receive S1 only; the kept original TAL_SA attempts (adapter v1,
+harness v2: 1 + 10 samples) keep D3 / M1 / M3 / M12 / S1. The two TAL_SA
+files now hold an adapter-v1 and an adapter-v2 config record each
+(`stats['config_conflicts']` = 2, expected: each sample uses the record that
+precedes it in its file).
 
 ## 2. Physics layer 1 — exact cost-channel decomposition (system-level data)
 
@@ -636,8 +717,12 @@ where the CHP generates at baseline):
 | oxalic | broth | aqueous_solution | none | centrifugation, acidulation, gypsum_filtration | – | electricity | 0.91 / H2SO4 |
 | IBO_EtOH_corn | 1.0 | liquid | distill_product | centrifugation, decantation, distillation, drying, evaporation, molecular_sieves | – | DDGS, corn_oil, electricity, ethanol | 0 / none |
 
-Known caveat: the succinic_neutral flowsheet acidulates (R401 + S405), but
-its recorded `acid_cost` is 0 (module behaviour; not corrected).
+succinic_neutral: the data of the v2 models did not contain the acidulation
+the table describes (`acid_cost` 0, R401 / S405 bypassed; D15). Since
+succinic adapter v3 the lime forms calcium succinate, R401 acidulates it with
+H2SO4 and S405 filters the gypsum; the four configurations were regenerated
+(baseline product purity unchanged, 0.8486), so table and data agree for
+models trained on the regenerated data.
 
 Derived features (`features.DS_PHYS`): `phys_water_removal_c` = 1000 ×
 [water removed], `phys_water_removal_a` = −(1 − w_f)/w_f × [water removed]

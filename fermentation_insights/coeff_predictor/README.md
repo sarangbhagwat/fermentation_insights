@@ -617,14 +617,16 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   floor (the PI-NN predicts random samples at 3.1 % in random CV, and adding
   the `bp_*` inputs makes the linear baseline worse).
 * **Sample coverage.** Some configurations keep fewer samples than planned
-  (REPORT.md section 1, `tables/data_coverage.csv`): `TAL_SA_glucose` keeps
-  only its baseline sample and `TAL_SA_sugarcane` 10 of 29 (a harness
-  defect recorded later samples without simulated points after a failed
-  reset; fixed, data not regenerated); the lactic SSCF configurations lose a
-  third of their random samples, the low-carbohydrate ones (the retained
-  data are censored toward carbohydrate-rich corn stover);
-  `lactic_lowpH_SHF_cornstover` and `succinic_neutral_cornstover` stopped
-  short of plan (27/36 and 15/18 completed).
+  (REPORT.md section 1, `tables/data_coverage.csv`). The v2 models were
+  trained before two data regenerations (DESIGN.md §1, "Known data
+  defects" D15 and H1): `TAL_SA_glucose` then kept only its baseline sample
+  and `TAL_SA_sugarcane` 10 of 29 (samples recorded without simulated points
+  after a failed reset; both now 29 / 29), and the four `succinic_neutral`
+  configurations lacked the acidulation (regenerated, 18 / 18 each; v2 had
+  15 / 18 for corn stover). The lactic SSCF configurations lose a third of
+  their random samples, the low-carbohydrate ones (the retained data are
+  censored toward carbohydrate-rich corn stover), and
+  `lactic_lowpH_SHF_cornstover` stopped short of plan (27/36 completed).
 * **Primed coefficients, not process detail.** The model predicts costs at
   the biorefineries' own designs. A user recovery is a first-order
   approximation (section 4.7). Price linearity is exact only for the feedstock,
@@ -634,20 +636,23 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     versioned patches (`data_patches.py`: D3 boiler natural gas, D4
     sugarcane RIN credit, D6 HP lime price, D7 HP inflection yield, M1/M3/
     M12/M23 metadata, S1 downstream fields). The D2 corn-ethanol samples
-    were regenerated.
-  - Known data defects that are not corrected (definitions, affected
+    were regenerated, and so were (after the v2 models) the D15
+    succinic_neutral and the H1 TAL_SA samples.
+  - Known data defects not corrected by the patches (definitions, affected
     configurations, effect on the coefficients and status: DESIGN.md §1,
-    "Known data defects"):
+    "Known data defects"; D15 and H1 were fixed by regeneration after the v2
+    models):
 
     | id | configurations | defect | effect |
     |---|---|---|---|
     | D5 | HP low-pH | cation-exchange regeneration H2SO4 not in `acid_cost` | its cost sits in materials_other, not neutralization; channel labels only |
-    | D8 | TAL, TAL_SA | y counts glucose only, but the spiked acetate also makes TAL | y is not the yield on all carbon; TAL's feedstock c′/d′ are distorted (negative c′), which plausibly also biases the shared corn feedstock intensity of other products |
+    | D8 | TAL, TAL_SA | y is the module's yield on all substrates (the spiked acetate counts 1.5 g glucose-eq. per g), but `F_sugar_fed` counts the sugars only | TAL's feedstock channel carries the acetate's sugar substitution (negative c′, positive d′), which plausibly also biases the shared corn feedstock intensity of other products; y kept (a carbon-basis yield is derivable but leaves the unifying form), mitigation left to the model study |
     | D9 | lactic | sampled hydrolysis conversion never applied | one sampled `bp_*` has no effect |
     | D10 | isobutanol | starch-content setter depends on history | sampled and actual starch differ (corr. 0.87); moisture drifts 13-17 % |
     | D13 | oxalic | reagent costs in facilities | channel labels only |
     | D14 | oxalic | fermentation reaction creates mass; no aeration | physically invalid fermentation balance; `aerobic=True` misleading |
-    | D15 | succinic_neutral | no salt formation simulated (module default `base_neutralizes_product=False`) | the downstream table claims acidulation and gypsum, the data have none; only the base cost differs from succinic |
+    | D15 | succinic_neutral | v2 data: no salt formation simulated (module default `base_neutralizes_product=False`) | in the v2 models the downstream table claims acidulation and gypsum that the data lack; fixed by regeneration (adapter v3: MPSP +0.22 USD/kg vs. low pH), models need retraining |
+    | H1 | TAL_SA_glucose, TAL_SA_sugarcane | v2 data: samples after a failed reset recorded without points | fixed by regeneration (harness reload/`retry`, robust evaporator root search in the TAL adapter) |
 
   - TAL's final-product purity varies with titer.
   - Some cost-allocation conventions differ between modules and cannot be
