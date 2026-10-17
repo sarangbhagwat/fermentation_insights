@@ -216,6 +216,20 @@ Totals `a', b', c', d'` = Σ channels. The **equation layer** turns totals into
 MPSP at any (y, t). Raw head outputs are scaled by per-target training
 standard deviations for conditioning.
 
+**Input clipping** (`ModelConfig.clip_inputs` ≥ 0 = margin in training
+standard deviations; default −1 = off; an HPO search dimension): the standardized continuous encoder
+features are clipped to their training range (`x_lo`/`x_hi` in
+`target_scales.json`), so a query whose descriptors lie outside the training
+products' range (e.g. oxalic acid's degree of reduction or pKa when no other
+product is like it) is predicted as at the nearest edge of the training
+range instead of by unbounded linear extrapolation of the encoder.
+Productivity (`log r`, `1/r`) and the price-explicit prices are never
+clipped, so the productivity physics and the exact price linearity are
+unchanged; the applicability-domain report still flags such queries.
+Checkpoints saved before this option existed load with clipping off. In
+the development CV it helped leave-configurations-out (oxalic) but hurt
+leave-one-product-out for HP and ethanol (§6), so it is not the default.
+
 ## 4. Loss
 
     L = w_mpsp · mean_i [(MPSP̂_i − MPSP_i)/MPSP_i]²       (equation layer; simulated points)
@@ -239,6 +253,18 @@ satisfy it, which is checked and reported):
 (productivity log-uniform over a range wider than the data, prices over wide
 ranges); only physics residuals 1–4 are evaluated there (PINN-style), which
 regularizes extrapolation.
+
+Options (`LossConfig`; defaults = the loss above):
+
+* `coef_space='surface'` compares the total and every channel/intensity in
+  *surface* space instead of coefficient space: at each simulated point of
+  the sample, `(N̂ − N)/N` for the total and `Σ_c ((m̂_c − m_c)/N)²` for the
+  channels (price channels as price × intensity), with `N` = target total
+  numerator `g·MPSP_fit`. This is well conditioned (the per-sample OLS
+  estimates of a', b', c', d' are strongly correlated, §6), but in the
+  development CV it made in-family configurations worse (§6), so it is off;
+* `config_balance=α` weights every sample by `n_config^(−α)` (batch-normalized),
+  α = 1 → every configuration counts once (off by default; not better in CV).
 
 ## 5. Features (specifications → vector)
 
@@ -302,6 +328,13 @@ price, so prices outside the training range are reported separately.
   (in-distribution; membership is a function of the sample id, so stable as
   campaigns add samples). `experiments.py` loads the file and the final
   stage fails if a test configuration has no data.
+* HPO (`experiments.py`): `hpo_members` = 2 networks per candidate and fold
+  (full mode), selection by the fold mean of the **configuration-balanced**
+  held-out MPSP MAPE (`mpsp_mape_cfg`: mean over held-out configurations of
+  their point MAPE; `compute_metrics` also reports its geometric mean
+  `mpsp_mape_cfg_gmean`). Reasons (development diagnostics below): the
+  point-weighted fold MAPE is dominated by the fold's largest configuration,
+  and single-member results differ between seeds by up to ~50 % (relative).
 * Baselines: nearest-configuration lookup, ridge, gradient boosting, plain MLP
   (coefficients only); ablations removing each physics component. Baselines
   are fit on exactly the samples the networks train on (same calibration and
@@ -313,6 +346,55 @@ price, so prices outside the training range are reported separately.
 * Metrics: per-coefficient MAE/R² (natural units), MPSP-surface MAPE on held
   out simulated TY points (vs. the irreducible error of the per-sample OLS
   fit), physics-constraint violation rates, interval coverage.
+
+### Development-set diagnostics (2026-10-16; never on test data)
+
+Data: 1102 samples / 29 configurations; development set 911 / 25 (test split
+removed). 5-fold leave-configurations-out (folds stratified by biorefinery),
+one network per fit, default hyperparameters, seed 0:
+
+| method | fold-mean MAPE ± sd | config-mean | config median | config geo-mean |
+|---|---|---|---|---|
+| PI-NN | 61 ± 58 % | 28.5 % | 13.7 % | 16.3 % |
+| plain MLP | 62 ± 40 % | 30.0 % | 14.0 % | 16.4 % |
+| ridge | 124 ± 183 % | 47.5 % | 13.0 % | 16.3 % |
+| HGB | 103 ± 145 % | 41.9 % | 16.8 % | 17.6 % |
+| kNN | 65 ± 60 % | 38.5 % | 17.3 % | 25.0 % |
+
+The per-sample fit floor is 1.5 % (`fit_mape`). Findings:
+
+* Errors are dominated by held-out configurations without a close relative:
+  oxalic (the only fermentation product of its kind; 189 samples; PI-NN 216 %,
+  predicted c′ ≈ 20–25 vs 4.6), IBO (89 %, a′ ≈ 0 vs 0.93) and lactic (66 %,
+  c′ ≈ 6 vs 28, g 1.0 vs 0.63). Configurations within HP/TAL/succinic are
+  typically at 4–20 %. Leave-one-product-out on the families with ≥ 3
+  configurations (PI-NN / HGB / kNN / ridge): succinic 20 / 51 / 67 / 115 %,
+  TAL 64 / 27 / 52 / 68 %, HP 28 / 16 / 33 / 69 %, ethanol 114 / 92 / 137 / 281 %.
+* Conditioning: on the TY domain the basis [1, 1/y, 1/t, 1/(yt)] is
+  collinear (column-normalized condition number median 10, up to 53;
+  lactic, whose domain starts at y = 0.3, t = 40 g/L: 35). The per-sample OLS
+  estimates are strongly correlated (median correlation b′–d′ −0.90, a′–b′
+  −0.79, a′–c′ −0.71), and lactic's d′ reaches 45 with c′ down to −5.4.
+  Out-of-fold R² (PI-NN): a′ 0.55, b′ 0.31, c′ −0.09, d′ −1.11, g 0.59. Models
+  that predict coefficients independently (ridge, HGB) combine them into
+  surfaces that are badly off (oxalic fold: 449 % / 356 %).
+* Channels: RMS error of each predicted channel relative to the total
+  numerator: coproducts 0.47, electricity 0.26, materials_other 0.20,
+  capex_utilities 0.18, natural gas 0.16, feedstock 0.14, the rest < 0.09.
+* Seed variance: a second seed (different initialization and early-stopping
+  hold-out) gave fold MAPEs of 64 / 20 / 208 / 98 % instead of 41 / 21 / 160 /
+  63 % (folds 1–4). Averaging the two seeds (a 2-member ensemble) landed in
+  between (fold 3: 183 %). The large errors are systematic extrapolation bias,
+  not variance.
+* Variants (PI-NN, same folds and seeds; fold-mean / config geo-mean):
+  baseline 61 / 16.3 %; `coef_space='surface'` 52 / 20.9 % (better on oxalic,
+  103 %, worse in-family, stops early: about 83 epochs); w_ch = 0 70 / 16.5 %
+  (channel supervision in coefficient space helps slightly or is neutral);
+  `config_balance=0.5` + early stop on MPSP 76 / 17.9 %; `clip_inputs=0`
+  55 / 16.2 % (oxalic 173 %), but under leave-one-product-out it was worse for
+  HP (63 % vs 28 %) and ethanol (155 % vs 114 %). No variant is clearly better
+  given the seed variance, so the defaults are unchanged. Clipping is an HPO
+  dimension.
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 

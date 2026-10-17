@@ -32,9 +32,11 @@ interrupted run resumes where it stopped)
                data. The rest = development set (``development_set``);
 3. ``hpo``     random search (candidate 0 = package defaults) of width, depth,
                dropout, weight decay, learning rate, w_mpsp, w_ch, w_phys,
-               collocation ratio and early-stopping criterion by K-fold leave-configurations-out CV on the
-               development set (folds stratified by biorefinery), selecting by
-               the mean held-out MPSP-surface MAPE. Full mode sizes the search
+               collocation ratio, early-stopping criterion and input clipping by
+               K-fold leave-configurations-out CV on the development set (folds
+               stratified by biorefinery; ``hpo_members`` networks per fit),
+               selecting by the fold mean of the configuration-balanced held-out
+               MPSP-surface MAPE (``HPO_METRIC``). Full mode sizes the search
                (and, if needed, the number of leave-one-configuration-out folds)
                to ``--budget-hours`` from the measured cost of the first
                candidate (``plan.json``);
@@ -76,7 +78,7 @@ import warnings
 
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 MODULE = 'fermentation_insights.coeff_predictor.experiments'
-CODE_VERSION = '2'
+CODE_VERSION = '3'
 
 DEFAULT_RAW = '/home/user/work/data/raw'
 DEFAULT_PROCESSED = os.path.join(PKG_DIR, 'data', 'processed')
@@ -100,7 +102,13 @@ ABLATION_SCHEMES = ('config', 'product')
 NN_BASES = ('pinn', 'plain')
 
 HP_DEFAULT = dict(width=128, depth=3, dropout=0.05, weight_decay=1e-4, lr=2e-3,
-                  w_mpsp=1.0, w_ch=0.5, w_phys=0.1, colloc_ratio=1.0, early_stop='data')
+                  w_mpsp=1.0, w_ch=0.5, w_phys=0.1, colloc_ratio=1.0, early_stop='data', clip_inputs=-1.0)
+#: HPO selection criterion: fold mean of the configuration-balanced held-out
+#: MPSP MAPE (every held-out configuration counts once). The point-weighted
+#: MAPE of a fold is dominated by its largest configuration (e.g. oxalic: 189
+#: of 911 development samples), so selecting on it selects on one
+#: extrapolation.
+HPO_METRIC = 'mpsp_mape_cfg'
 
 #: colour-blind-safe categorical palette (fixed order; colour follows entity)
 PALETTE = ('#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948')
@@ -733,11 +741,14 @@ class Runner:
 
 def base_plan(a):
     if a.quick:
-        return dict(mode='quick', hpo_k=3, hpo_candidates=3, cv_members=2, final_members=2, release_members=2,
-                    random_k=3, loco_folds=4, epochs=12, patience=6, min_epochs=4, batch_size=128)
-    return dict(mode='full', hpo_k=5, hpo_candidates=None, cv_members=a.members, final_members=5,
-                release_members=5, random_k=5, loco_folds=None, epochs=300, patience=40, min_epochs=20,
-                batch_size=128)
+        return dict(mode='quick', hpo_k=3, hpo_candidates=3, hpo_members=1, cv_members=2, final_members=2,
+                    release_members=2, random_k=3, loco_folds=4, epochs=12, patience=6, min_epochs=4, batch_size=128)
+    # hpo_members: single-member fits differ between seeds by up to ~50 % (relative)
+    # in held-out MAPE on the development folds, so one member per candidate
+    # and fold mostly ranks seeds, not hyperparameters
+    return dict(mode='full', hpo_k=5, hpo_candidates=None, hpo_members=a.hpo_members, cv_members=a.members,
+                final_members=5, release_members=5, random_k=5, loco_folds=None, epochs=300, patience=40,
+                min_epochs=20, batch_size=128)
 
 
 def hpo_candidates(n, seed):
@@ -752,14 +763,15 @@ def hpo_candidates(n, seed):
                  weight_decay=sig(10 ** rng.uniform(-5, -3)), lr=sig(10 ** rng.uniform(np.log10(5e-4), np.log10(5e-3))),
                  w_mpsp=float(rng.choice([0.3, 1., 3.])), w_ch=float(rng.choice([0.1, 0.3, 0.5, 1.])),
                  w_phys=float(rng.choice([0.03, 0.1, 0.3, 1.])), colloc_ratio=float(rng.choice([0.5, 1., 2.])),
-                 early_stop=str(rng.choice(['data', 'mpsp'])))
+                 early_stop=str(rng.choice(['data', 'mpsp'])), clip_inputs=float(rng.choice([-1., 0.])))
         if c not in out:
             out.append(c)
     return out[:n]
 
 
 def hp_kwargs(hp, plan):
-    mk = dict(width=int(hp['width']), depth=int(hp['depth']), dropout=float(hp['dropout']))
+    mk = dict(width=int(hp['width']), depth=int(hp['depth']), dropout=float(hp['dropout']),
+              clip_inputs=float(hp.get('clip_inputs', -1.0)))
     lk = dict(w_mpsp=float(hp['w_mpsp']), w_ch=float(hp['w_ch']), w_phys=float(hp['w_phys']),
               colloc_ratio=float(hp['colloc_ratio']))
     tk = dict(lr=float(hp['lr']), weight_decay=float(hp['weight_decay']), epochs=plan['epochs'],
@@ -791,7 +803,7 @@ def plan_budget(plan, a, pilot, dev, test_n, n_all, seed):
 
     n_dev = len(dev)
     final = fit(n_dev, plan['final_members']) * 2 + fit(n_all, plan['release_members']) + 3 * fit(n_dev, 1, 'hgb')
-    hpo_one = plan['hpo_k'] * fit(n_dev * (plan['hpo_k'] - 1) / plan['hpo_k'], 1)
+    hpo_one = plan['hpo_k'] * fit(n_dev * (plan['hpo_k'] - 1) / plan['hpo_k'], plan.get('hpo_members', 1))
     budget = a.budget_hours * 3600 * max(1, a.threads)
     n_loco = dev['config_id'].nunique()
     n_cand = a.hpo_candidates or 12
@@ -850,7 +862,8 @@ def pooled_rows(scheme, parts, samples_by_id, points_by_id):
         s = samples_by_id.loc[ids].reset_index(drop=True)
         p = pd.concat([points_by_id[i] for i in ids if i in points_by_id], ignore_index=True)
         for metric, target, value in compute_metrics(pred, s, p):
-            if metric in ('MAE', 'RMSE', 'R2', 'mpsp_mape', 'mpsp_mape_median', 'oracle_mape', 'fit_mape'):
+            if metric in ('MAE', 'RMSE', 'R2', 'mpsp_mape', 'mpsp_mape_median', 'mpsp_mape_cfg',
+                          'mpsp_mape_cfg_gmean', 'oracle_mape', 'fit_mape'):
                 rows.append(dict(scheme=scheme, fold=-1, label='pooled', method=meth, n_train=np.nan, n_test=len(s),
                                  seconds=np.nan, metric=metric, target=target, value=value))
         fold = np.concatenate([np.full(len(ev['ids']), ev['_fold']) for ev in evs])
@@ -878,6 +891,8 @@ def headline(res, methods=None):
                    n_folds_common=int(per['fold'].nunique()),
                    mpsp_mape=mp.mean(), mpsp_mape_se=mp.std(ddof=1) / np.sqrt(len(mp)) if len(mp) > 1 else np.nan,
                    mpsp_mape_median=v(per, 'mpsp_mape_median', 'MPSP').mean(),
+                   mpsp_mape_cfg=v(per, 'mpsp_mape_cfg', 'MPSP').mean(),
+                   mpsp_mape_cfg_gmean=v(per, 'mpsp_mape_cfg_gmean', 'MPSP').mean(),
                    mpsp_mape_pooled=v(pool, 'mpsp_mape', 'MPSP').mean(),
                    fit_mape=v(per, 'fit_mape', 'MPSP').mean(), oracle_mape=v(per, 'oracle_mape', 'MPSP').mean())
         for k in TARGETS:
@@ -907,7 +922,8 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
 
     def jobs_for(ci):
         mk, lk, tk = hp_kwargs(cands[ci], plan)
-        return [make_job('hpo', f'cand{ci} {lab}', 'pinn', ids[tr], {'test': ids[te]}, 1, mk, lk, tk, 'config_id',
+        return [make_job('hpo', f'cand{ci} {lab}', 'pinn', ids[tr], {'test': ids[te]}, plan.get('hpo_members', 1),
+                         mk, lk, tk, 'config_id',
                          0.0, a.seed + 101 * ci + f, ctx, meta=dict(cand=ci, fold=f))
                 for f, (tr, te, lab) in enumerate(folds)]
 
@@ -924,7 +940,8 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
             log(f'plan: reusing {pl_path}')
         else:
             ok = [r for r in results.values() if not r['error'] and r.get('n_fit_rows')]
-            per = (sum(r['fit_seconds'] for r in ok) / sum(r['n_fit_rows'] for r in ok)) if ok else 0.05
+            per = (sum(r['fit_seconds'] for r in ok) / sum(r['n_fit_rows'] * len(r['epochs'] or [1]) for r in ok)
+                   if ok else 0.05)
             plan_budget(plan, a, dict(seconds_per_member_sample=per), dev, n_test, n_all, a.seed)
         e = plan['estimate']
         log(f"plan: {plan['hpo_candidates']} HPO candidates, LOCO folds = {plan['loco_folds'] or 'all'}; "
@@ -948,27 +965,35 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
             mm.append(m)
             fold_rows.append(dict(candidate=ci, fold=j['meta']['fold'], error=r['error'],
                                   mpsp_mape=m.get(('mpsp_mape', 'MPSP'), np.nan),
+                                  mpsp_mape_cfg=m.get(('mpsp_mape_cfg', 'MPSP'), np.nan),
+                                  mpsp_mape_cfg_gmean=m.get(('mpsp_mape_cfg_gmean', 'MPSP'), np.nan),
                                   fit_mape=m.get(('fit_mape', 'MPSP'), np.nan), seconds=r['seconds'],
                                   epochs=np.mean(r['epochs']) if r['epochs'] else np.nan,
                                   **{f'R2_{k}': m.get(('R2', k), np.nan) for k in TARGETS}))
         mape = np.array([m.get(('mpsp_mape', 'MPSP'), np.nan) for m in mm])
-        n_ok = int(np.isfinite(mape).sum())
+        crit = np.array([m.get((HPO_METRIC, 'MPSP'), np.nan) for m in mm])
+        n_ok = int(np.isfinite(crit).sum())
         rows.append(dict(candidate=ci, **hp, n_folds_ok=n_ok,
-                         mpsp_mape=float(np.nanmean(mape)) if n_ok == len(mape) else np.inf,
-                         mpsp_mape_se=float(np.nanstd(mape, ddof=1) / np.sqrt(n_ok)) if n_ok > 1 else np.nan,
+                         criterion=float(np.nanmean(crit)) if n_ok == len(crit) else np.inf,
+                         criterion_se=float(np.nanstd(crit, ddof=1) / np.sqrt(n_ok)) if n_ok > 1 else np.nan,
+                         mpsp_mape=float(np.nanmean(mape)) if np.isfinite(mape).all() else np.inf,
+                         mpsp_mape_se=float(np.nanstd(mape, ddof=1) / np.sqrt(len(mape))) if len(mape) > 1 else np.nan,
+                         mpsp_mape_cfg_gmean=float(np.nanmean([m.get(('mpsp_mape_cfg_gmean', 'MPSP'), np.nan)
+                                                               for m in mm])),
                          mpsp_mape_median=float(np.nanmean([m.get(('mpsp_mape_median', 'MPSP'), np.nan) for m in mm])),
                          fit_mape=float(np.nanmean([m.get(('fit_mape', 'MPSP'), np.nan) for m in mm])),
                          seconds_per_fit=float(np.mean([r['seconds'] for r in rs])),
                          epochs=float(np.nanmean([np.mean(r['epochs']) if r['epochs'] else np.nan for r in rs]))))
     tab = pd.DataFrame(rows)
-    best = int(tab.sort_values(['mpsp_mape', 'mpsp_mape_se', 'candidate']).iloc[0]['candidate'])
+    best = int(tab.sort_values(['criterion', 'criterion_se', 'candidate']).iloc[0]['candidate'])
     tab['selected'] = tab['candidate'] == best
-    sel = dict(cands[best]) if np.isfinite(tab.loc[best, 'mpsp_mape']) else dict(HP_DEFAULT)
-    if not np.isfinite(tab.loc[best, 'mpsp_mape']):
+    sel = dict(cands[best]) if np.isfinite(tab.loc[best, 'criterion']) else dict(HP_DEFAULT)
+    if not np.isfinite(tab.loc[best, 'criterion']):
         log('hpo: WARNING every candidate failed in some fold; falling back to the package defaults')
     fold_info = [dict(fold=lab, n_test_configs=int(len(set(dev['config_id'].iloc[te]))), n_test=int(len(te)))
                  for tr, te, lab in folds]
-    log(f'hpo: selected candidate {best}: {sel} (mean held-out MPSP MAPE {tab.loc[best, "mpsp_mape"]:.4f})')
+    log(f'hpo: selected candidate {best}: {sel} (fold-mean configuration-balanced held-out MPSP MAPE '
+        f'{tab.loc[best, "criterion"]:.4f}; point-weighted {tab.loc[best, "mpsp_mape"]:.4f})')
     return dict(table=tab, folds=pd.DataFrame(fold_rows), selected=sel, best=best, fold_info=fold_info)
 
 
@@ -1573,17 +1598,18 @@ def fig_channels(path, ch, made):
 def fig_hpo(path, tab, made):
     import numpy as np
     plt = _style()
-    t = tab[np.isfinite(tab['mpsp_mape'])].sort_values('mpsp_mape')
+    k, kse = ('criterion', 'criterion_se') if 'criterion' in tab else ('mpsp_mape', 'mpsp_mape_se')
+    t = tab[np.isfinite(tab[k])].sort_values(k)
     fig, ax = plt.subplots(figsize=(7, 0.32 * len(t) + 1.4))
     y = np.arange(len(t))[::-1]
     cols = [PALETTE[0] if s else '#b8b7b1' for s in t['selected']]
-    ax.barh(y, 100 * t['mpsp_mape'], 0.7, color=cols, zorder=3)
-    ax.errorbar(100 * t['mpsp_mape'], y, xerr=100 * np.nan_to_num(t['mpsp_mape_se']), fmt='none', ecolor=INK2,
+    ax.barh(y, 100 * t[k], 0.7, color=cols, zorder=3)
+    ax.errorbar(100 * t[k], y, xerr=100 * np.nan_to_num(t[kse]), fmt='none', ecolor=INK2,
                 elinewidth=0.8, capsize=2, zorder=4)
     ax.set_yticks(y)
     ax.set_yticklabels([f"#{int(r.candidate)}  w{int(r.width)} d{int(r.depth)} lr {r.lr:.1e} wd {r.weight_decay:.0e} "
                         f"w_ch {r.w_ch:g} w_phys {r.w_phys:g} ES {r.early_stop}" for r in t.itertuples()], fontsize=7)
-    ax.set_xlabel('mean held-out MPSP MAPE [%] (grouped CV by configuration)')
+    ax.set_xlabel('configuration-balanced held-out MPSP MAPE [%] (fold mean, grouped CV by configuration)')
     ax.set_title('Hyperparameter search (selected in blue)', loc='left')
     ax.grid(axis='y', visible=False)
     fig.tight_layout()
@@ -1703,15 +1729,17 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
     t = hpo['table']
     P('## 3. Hyperparameter selection (development set only)\n')
     P(f'Random search over {len(t)} candidates (candidate 0 = package defaults) with {plan["hpo_k"]}-fold '
-      'leave-configurations-out CV (folds stratified by biorefinery; 1 network per fit, early stopping on held-out '
-      'configurations), criterion = mean held-out MPSP MAPE. '
+      f'leave-configurations-out CV (folds stratified by biorefinery; {plan.get("hpo_members", 1)} network(s) per '
+      'fit, early stopping on held-out configurations), criterion = fold mean of the configuration-balanced '
+      'held-out MPSP MAPE (`criterion`; each held-out configuration counts once). '
       + (f'Search size from the measured cost of candidate 0 and the {a.budget_hours} h budget '
          f'(estimate {plan["estimate"]["total_hours"]:.2f} h for the whole run on {a.threads} workers). '
          if plan.get('estimate') else '') + '\n')
     show = t[['candidate', 'width', 'depth', 'dropout', 'lr', 'weight_decay', 'w_mpsp', 'w_ch', 'w_phys',
-              'colloc_ratio', 'early_stop', 'mpsp_mape', 'mpsp_mape_se', 'fit_mape', 'epochs', 'seconds_per_fit',
-              'selected']]
-    P(md_table(show.sort_values('mpsp_mape'), pct_cols=('mpsp_mape', 'mpsp_mape_se', 'fit_mape'))
+              'colloc_ratio', 'early_stop', 'clip_inputs', 'criterion', 'criterion_se', 'mpsp_mape',
+              'mpsp_mape_cfg_gmean', 'fit_mape', 'epochs', 'seconds_per_fit', 'selected']]
+    P(md_table(show.sort_values('criterion'), pct_cols=('criterion', 'criterion_se', 'mpsp_mape',
+                                                        'mpsp_mape_cfg_gmean', 'fit_mape'))
       + '\n\n(MAPE columns in %.) **Selected:** ' + ', '.join(f'{k}={v}' for k, v in hpo['selected'].items())
       + '. `tables/hpo_candidates.csv`, `figures/hpo_search.png`.\n')
     # cv
@@ -1846,6 +1874,7 @@ def parse_args(argv=None):
     ap.add_argument('--hpo-candidates', type=int, default=0, help='override the budget-derived search size')
     ap.add_argument('--loco-folds', type=int, default=0, help='override: number of LOCO folds (0 = budget / all)')
     ap.add_argument('--members', type=int, default=3, help='full mode: ensemble members in CV (3-5)')
+    ap.add_argument('--hpo-members', type=int, default=2, help='full mode: ensemble members per HPO fit')
     ap.add_argument('--split-file', default=SPLIT_FILE,
                     help='frozen final test split (created from PLANNED_CONFIGS if missing, then never changed)')
     ap.add_argument('--min-test-configs', type=int, default=None,

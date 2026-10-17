@@ -21,7 +21,10 @@ comparable)::
       + w_g    * [(g_hat - g) / s_g]^2
       + w_phys * mean_r mean_i relu(-residual_r)^2  (labelled + collocation)
 
-with AdamW weight decay (on weight matrices only). Physics residuals, each
+with AdamW weight decay (on weight matrices only); ``LossConfig.coef_space =
+'surface'`` compares totals and channels as surfaces at the simulated points
+instead, ``config_balance`` weights samples by n_config**(-alpha) (both off by
+default; DESIGN.md section 4). Physics residuals, each
 normalized by a training scale and evaluated at the simulated TY points of
 the (source) sample:
 
@@ -100,6 +103,18 @@ class LossConfig:
     # outside it. Widen only together with a matching validation.
     colloc_price_range: tuple = (1.0, 1.0)
     colloc_noise: float = 0.1
+    #: how the total and channel/intensity targets are compared: 'coef' =
+    #: coefficient space, each coefficient scaled by its training std (the
+    #: four OLS estimates of a sample are strongly correlated, e.g. b'/d'
+    #: ~ -0.9, because the basis is collinear on the TY domain, so this
+    #: penalizes ill-determined directions as much as well-determined ones);
+    #: 'surface' = the component surfaces at the sample's simulated TY points
+    #: relative to the target total numerator g*MPSP_fit there (well
+    #: conditioned, in MPSP units: channels weigh by their economic size)
+    coef_space: str = 'coef'
+    #: sample weights n_config**(-config_balance) (normalized per batch):
+    #: 0 = every sample counts once, 1 = every configuration counts once
+    config_balance: float = 0.0
 
     def active(self):
         """Residuals actually evaluated."""
@@ -235,10 +250,11 @@ def _robust_std(x, floor):
     return max(s, floor)
 
 
-def fit_target_scales(samples, points, layout, batch):
+def fit_target_scales(samples, points, layout, batch, cont_mask=None):
     """Per-target means/standard deviations and physics-residual scales
     computed on the training rows only. ``batch`` is the FeatureBatch of
-    ``samples`` (for prices, w_sugar and g_max)."""
+    ``samples`` (for prices, w_sugar and g_max); ``cont_mask`` marks its
+    continuous columns (training range ``x_lo``/``x_hi`` for input clipping)."""
     coef, g, ch, q = _targets(samples, layout)
     sc = {}
     cm = np.nanmean(coef, 0)
@@ -280,6 +296,16 @@ def fit_target_scales(samples, points, layout, batch):
     ratio = ratio[np.isfinite(ratio)]
     rmed = float(np.clip(np.median(ratio) if len(ratio) else 0.9, 0.05, 0.995))
     sc['g_logit0'] = float(math.log(rmed / (1 - rmed)))
+    # training range of the continuous encoder features (ModelConfig.clip_inputs)
+    X = np.asarray(batch.X, float)
+    cm = None if cont_mask is None else np.asarray(cont_mask, bool)
+    if len(X):
+        with np.errstate(invalid='ignore'):
+            lo, hi = np.nanmin(X, 0), np.nanmax(X, 0)
+        if cm is None or cm.shape != lo.shape:
+            cm = np.zeros(lo.shape, bool)
+        sc['x_lo'] = np.where(cm & np.isfinite(lo), lo, -np.inf).tolist()
+        sc['x_hi'] = np.where(cm & np.isfinite(hi), hi, np.inf).tolist()
     Y, T, M, _, mask = pad_points(samples, points)
     Mv = M[mask]
     sc['mpsp_scale'] = float(np.median(np.abs(Mv))) if len(Mv) else 1.
@@ -309,8 +335,17 @@ def make_tensors(spec, samples, points, layout, batch=None, max_points=48, dtype
              g=tt(np.nan_to_num(g, nan=1.)), g_m=tt(np.isfinite(g)),
              ch=tt(np.nan_to_num(ch)), ch_m=tt(np.isfinite(ch)),
              q=tt(np.nan_to_num(q)), q_m=tt(np.isfinite(q)),
-             Y=tt(Y), T=tt(T), M=tt(M), mask=tt(mask))
+             Y=tt(Y), T=tt(T), M=tt(M), mask=tt(mask), n_cfg=tt(_config_counts(samples)))
     return d
+
+
+def _config_counts(samples):
+    """Number of rows of each row's configuration in ``samples`` (1 without
+    ``config_id``), for configuration-balanced loss weights."""
+    if 'config_id' not in samples or not len(samples):
+        return np.ones(len(samples))
+    c = samples['config_id'].astype(str)
+    return c.map(c.value_counts()).to_numpy(float)
 
 
 def _index(tb, idx):
@@ -323,31 +358,79 @@ def _mmean(x, m):
     return (torch.where(m > 0, x, torch.zeros_like(x)) * m).sum() / m.sum().clamp(min=1.)
 
 
+def _surface(c, Y, T):
+    """Numerator a + b/y + c/t + d/(y t) of coefficients ``c`` (n, K, 4) at
+    points (n, P) -> (n, K, P)."""
+    Y, T = Y[:, None, :], T[:, None, :]
+    return c[..., 0:1] + c[..., 1:2] / Y + c[..., 2:3] / T + c[..., 3:4] / (Y * T)
+
+
+def _wmean(v, has, w):
+    """Weighted mean over samples of the per-sample values ``v`` (n,)."""
+    ww = w * has
+    return (torch.where(has > 0, v, torch.zeros_like(v)) * ww).sum() / ww.sum().clamp(min=1e-12)
+
+
 def data_loss(model, out, b, lcfg):
     """Data terms of the loss (dict of scalar tensors)."""
     sc = model.scales_np
     dt = out['coef'].dtype
     L = {}
+    n = out['coef'].shape[0]
+    if getattr(lcfg, 'config_balance', 0.) and 'n_cfg' in b:
+        w = b['n_cfg'].clamp(min=1.) ** (-float(lcfg.config_balance))
+    else:
+        w = torch.ones(n, dtype=dt)
     mp = model.mpsp(out, b['Y'], b['T'])
     den = b['M'].abs().clamp(min=0.05 * sc['mpsp_scale'])
     rel2 = ((mp - b['M']) / den) ** 2
     m = b['mask']
-    per = (rel2 * m).sum(1) / m.sum(1).clamp(min=1.)
+    npts = m.sum(1).clamp(min=1.)
+    per = (rel2 * m).sum(1) / npts
     has = (m.sum(1) > 0).to(dt)
-    L['mpsp'] = (per * has).sum() / has.sum().clamp(min=1.)
-    cs = torch.as_tensor(sc['coef_std'], dtype=dt)
-    L['tot'] = _mmean(((out['coef'] - b['coef']) / cs) ** 2, b['coef_m'])
-    L['g'] = _mmean(((out['g'] - b['g']) / sc['g_std']) ** 2, b['g_m'])
-    parts, masks = [], []
-    if 'channels' in out and out['channels'].shape[1]:
-        s = torch.as_tensor(sc['ch_std'], dtype=dt)
-        parts.append((((out['channels'] - b['ch']) / s) ** 2).flatten(1))
-        masks.append(b['ch_m'].flatten(1))
-    if 'intensities' in out and out['intensities'].shape[1]:
-        s = torch.as_tensor(sc['int_std'], dtype=dt)
-        parts.append((((out['intensities'] - b['q']) / s) ** 2).flatten(1))
-        masks.append(b['q_m'].flatten(1))
-    L['ch'] = _mmean(torch.cat(parts, 1), torch.cat(masks, 1)) if parts else torch.zeros((), dtype=dt)
+    L['mpsp'] = _wmean(per, has, w)
+    gm = b['g_m'].to(dt)
+    L['g'] = _wmean(((out['g'] - b['g']) / sc['g_std']) ** 2, gm, w)
+    if getattr(lcfg, 'coef_space', 'coef') == 'surface':
+        # target total numerator at the points (= g * OLS-fitted MPSP)
+        Nt = _surface(b['coef'][:, None], b['Y'], b['T'])[:, 0]
+        nden = Nt.abs().clamp(min=0.05 * sc['num_scale'])
+        ok_t = b['coef_m'].min(1).values * has
+        e = ((_surface(out['coef'][:, None], b['Y'], b['T'])[:, 0] - Nt) / nden) ** 2
+        L['tot'] = _wmean((e * m).sum(1) / npts, ok_t, w)
+        parts, masks = [], []
+        if 'channels' in out and out['channels'].shape[1]:
+            parts.append(_surface(out['channels'], b['Y'], b['T']) - _surface(b['ch'], b['Y'], b['T']))
+            masks.append(b['ch_m'].min(2).values)
+        if 'intensities' in out and out['intensities'].shape[1]:
+            p = b['prices'][:, model.price_index][:, :, None]
+            parts.append(p * (_surface(out['intensities'], b['Y'], b['T']) - _surface(b['q'], b['Y'], b['T'])))
+            masks.append(b['q_m'].min(2).values)
+        if parts:
+            E = torch.cat(parts, 1) / nden[:, None, :]          # (n, K, P), relative to the total
+            Km = torch.cat(masks, 1)                            # (n, K)
+            E2 = torch.where(Km[:, :, None] > 0, E, torch.zeros_like(E)) ** 2
+            per_ch = ((E2 * m[:, None, :]).sum(2) / npts[:, None]).sum(1)   # sum over components
+            L['ch'] = _wmean(per_ch, (Km.sum(1) > 0).to(dt) * has, w)
+        else:
+            L['ch'] = torch.zeros((), dtype=dt)
+    else:
+        # coefficient space; without sample weights exactly the original
+        # element means (_mmean over all valid entries)
+        wm = (lambda x, mm: _mmean(x, mm)) if not getattr(lcfg, 'config_balance', 0.) else \
+            (lambda x, mm: _mmean(x * w[:, None], mm) / _mmean(w[:, None].expand_as(mm), mm).clamp(min=1e-12))
+        cs = torch.as_tensor(sc['coef_std'], dtype=dt)
+        L['tot'] = wm(((out['coef'] - b['coef']) / cs) ** 2, b['coef_m'])
+        parts, masks = [], []
+        if 'channels' in out and out['channels'].shape[1]:
+            s = torch.as_tensor(sc['ch_std'], dtype=dt)
+            parts.append((((out['channels'] - b['ch']) / s) ** 2).flatten(1))
+            masks.append(b['ch_m'].flatten(1))
+        if 'intensities' in out and out['intensities'].shape[1]:
+            s = torch.as_tensor(sc['int_std'], dtype=dt)
+            parts.append((((out['intensities'] - b['q']) / s) ** 2).flatten(1))
+            masks.append(b['q_m'].flatten(1))
+        L['ch'] = wm(torch.cat(parts, 1), torch.cat(masks, 1)) if parts else torch.zeros((), dtype=dt)
     L['data'] = lcfg.w_mpsp * L['mpsp'] + lcfg.w_tot * L['tot'] + lcfg.w_g * L['g'] + lcfg.w_ch * L['ch']
     return L
 
@@ -530,7 +613,7 @@ def train_model(spec, samples, points, mcfg=None, lcfg=None, tcfg=None, val=None
     layout = layout or make_layout(mcfg, samples.columns)
     if scales is None or tensors is None:
         batch = spec.transform(samples) if batch is None else batch
-    scales = scales or fit_target_scales(samples, points, layout, batch)
+    scales = scales or fit_target_scales(samples, points, layout, batch, spec.continuous_mask())
     tb = tensors if tensors is not None else make_tensors(spec, samples, points, layout, batch,
                                                           tcfg.max_points, dt)
     vb = val_tensors
@@ -1034,7 +1117,7 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
     spec = FeatureSpec(price_explicit=mcfg.price_explicit, **(spec_kwargs or {})).fit(s_fit)
     batch = spec.transform(s_fit)
     layout = make_layout(mcfg, samples.columns)
-    scales = fit_target_scales(s_fit, points, layout, batch)
+    scales = fit_target_scales(s_fit, points, layout, batch, spec.continuous_mask())
     dt = _dtype(tcfg.dtype)
     tb_fit = make_tensors(spec, s_fit, points, layout, batch, tcfg.max_points, dt)
     members, hists = [], []

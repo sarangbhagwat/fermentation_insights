@@ -240,6 +240,15 @@ def compute_metrics(pred, samples, points, model=None, fd_delta=0.05, tol=1e-3):
     rows.append(('mpsp_mape', 'MPSP', float(np.nanmean(v)) if len(v) else np.nan))
     rows.append(('mpsp_mape_median', 'MPSP', float(np.nanmedian(v)) if len(v) else np.nan))
     rows.append(('oracle_mape', 'MPSP', float(np.nanmean(vo)) if len(vo) else np.nan))
+    # configuration-balanced summaries (each held-out configuration counts once;
+    # the point-weighted MAPE is dominated by configurations with many samples)
+    if 'config_id' in samples and len(v):
+        cid = np.repeat(samples['config_id'].astype(str).to_numpy()[:, None], mask.shape[1], 1)[mask]
+        per = pd.Series(v).groupby(cid).mean()
+        per = per[np.isfinite(per)]
+        if len(per):
+            rows.append(('mpsp_mape_cfg', 'MPSP', float(per.mean())))
+            rows.append(('mpsp_mape_cfg_gmean', 'MPSP', float(np.exp(np.log(np.maximum(per, 1e-12)).mean()))))
     if 'fit_mape' in samples:
         rows.append(('fit_mape', 'MPSP', float(np.nanmean(pd.to_numeric(samples['fit_mape'], errors='coerce')))))
     # constraint violations of the predictions
@@ -364,7 +373,8 @@ def run_cv(samples, points, scheme='random', methods=METHODS, n_splits=5, max_fo
             s_all = pd.concat([p[1] for p in parts], ignore_index=True)
             p_all = pd.concat([p[2] for p in parts], ignore_index=True)
             for metric, target, value in compute_metrics(pred, s_all, p_all):
-                if metric in ('MAE', 'RMSE', 'R2', 'mpsp_mape', 'mpsp_mape_median', 'oracle_mape', 'fit_mape'):
+                if metric in ('MAE', 'RMSE', 'R2', 'mpsp_mape', 'mpsp_mape_median', 'mpsp_mape_cfg',
+                              'mpsp_mape_cfg_gmean', 'oracle_mape', 'fit_mape'):
                     rows.append(dict(scheme=scheme, fold=-1, label='pooled', method=meth, n_train=np.nan,
                                      n_test=len(s_all), seconds=np.nan, metric=metric, target=target,
                                      value=value))

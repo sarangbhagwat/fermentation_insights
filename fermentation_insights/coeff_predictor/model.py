@@ -28,7 +28,12 @@ Architecture
 * recovery ``g = g_max * sigmoid(z_g)`` with ``g_max`` the stoichiometric mass
   ratio of final to fermentation product (hard upper bound; an optional small
   relative ``g_margin`` absorbs rounding-level excesses found in the data);
-* equation layer: :func:`mpsp_equation`.
+* equation layer: :func:`mpsp_equation`;
+* optional input clipping (``clip_inputs >= 0``; off by default): standardized
+  continuous encoder features are clipped to their training range, which bounds the
+  network's extrapolation to descriptors outside the training products
+  (productivity is never clipped, nor are the prices of the price-explicit
+  channels, which do not enter the encoder; the plain MLP's price features are).
 
 All raw head outputs are affine-scaled by per-target training means and
 standard deviations (buffers), so that the network works on O(1) numbers.
@@ -89,6 +94,13 @@ class ModelConfig:
     g_bound: bool = True         # g = g_max * (1 + g_margin) * sigmoid(.)
     g_margin: float = 0.0        # relative slack of the bound (set from data checks)
     head_init: float = 0.1       # scale of the initial head weights
+    #: clip the standardized continuous encoder features to the training range
+    #: widened by this margin (in training standard deviations); < 0 = off.
+    #: Bounds the network's extrapolation in descriptor space (e.g. a new
+    #: product whose descriptors lie outside the training products'); the
+    #: applicability-domain report still flags such queries. Productivity and
+    #: the price-explicit prices (not encoder inputs) are never clipped.
+    clip_inputs: float = -1.0
 
     def __post_init__(self):
         if self.kind not in ('physics', 'plain'):
@@ -104,6 +116,9 @@ class ModelConfig:
 
     @classmethod
     def from_dict(cls, d):
+        d = dict(d)
+        # checkpoints saved before input clipping existed were trained without it
+        d.setdefault('clip_inputs', -1.0)
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
@@ -177,6 +192,11 @@ class CoefficientNet(nn.Module):
             self.register_buffer(name, t.clone())
 
         rs = r_stats
+        if cfg.clip_inputs >= 0:
+            lo = np.asarray(scales.get('x_lo', np.full(self.n_features, -np.inf)), float)
+            hi = np.asarray(scales.get('x_hi', np.full(self.n_features, np.inf)), float)
+            buf('x_lo', np.where(np.isfinite(lo), lo - cfg.clip_inputs, -1e30))
+            buf('x_hi', np.where(np.isfinite(hi), hi + cfg.clip_inputs, 1e30))
         buf('r_mu', [rs['log_r_mean'], rs['inv_r_mean']])
         buf('r_sd', [rs['log_r_std'], rs['inv_r_std']])
         if cfg.kind == 'plain':
@@ -221,6 +241,8 @@ class CoefficientNet(nn.Module):
         return (torch.stack([log_r, torch.exp(-log_r)], -1) - self.r_mu) / self.r_sd
 
     def encode(self, X, log_r):
+        if self.cfg.clip_inputs >= 0:
+            X = torch.maximum(torch.minimum(X, self.x_hi.to(X.dtype)), self.x_lo.to(X.dtype))
         return self.encoder(torch.cat([X, self.r_features(log_r)], -1))
 
     # ---- forward ----

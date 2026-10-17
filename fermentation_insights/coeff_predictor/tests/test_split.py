@@ -72,3 +72,25 @@ def test_committed_split_follows_rule():
         pytest.skip('no committed split.json')
     fr = E.load_frozen_split()
     assert fr['planned_configs'] == [dict(c) for c in E.PLANNED_CONFIGS]
+
+
+def test_hpo_defaults_and_candidates():
+    cands = E.hpo_candidates(6, 0)
+    assert cands[0] == E.HP_DEFAULT and E.HP_DEFAULT['clip_inputs'] == -1.0
+    assert all(c['clip_inputs'] in (-1.0, 0.0) for c in cands)
+    plan = dict(epochs=10, patience=5, min_epochs=2, batch_size=32)
+    mk, lk, tk = E.hp_kwargs(cands[1], plan)
+    assert mk['clip_inputs'] == cands[1]['clip_inputs'] and tk['early_stop'] in ('data', 'mpsp')
+    assert E.HPO_METRIC == 'mpsp_mape_cfg'
+
+
+def test_config_balanced_metrics():
+    import numpy as np
+    from fermentation_insights.coeff_predictor.evaluate import compute_metrics
+    s = pd.DataFrame(dict(sample_id=['x1', 'x2', 'y1'], config_id=['X', 'X', 'Y'], a=1., b=0., c=0., d=0., g=1.))
+    p = pd.DataFrame(dict(sample_id=['x1', 'x2', 'y1'], y=0.5, t=50., MPSP=1., recovery=1.))
+    pred = dict(coef=np.array([[1.1, 0, 0, 0], [1.1, 0, 0, 0], [1.4, 0, 0, 0]]), g=np.ones(3))
+    m = {(k, t): v for k, t, v in compute_metrics(pred, s, p)}
+    assert abs(m[('mpsp_mape', 'MPSP')] - 0.2) < 1e-9            # point-weighted (0.1, 0.1, 0.4)
+    assert abs(m[('mpsp_mape_cfg', 'MPSP')] - 0.25) < 1e-9       # configuration-balanced (0.1, 0.4)
+    assert abs(m[('mpsp_mape_cfg_gmean', 'MPSP')] - 0.2) < 1e-9  # sqrt(0.1 * 0.4)
