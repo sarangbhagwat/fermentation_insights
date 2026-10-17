@@ -117,6 +117,25 @@ breakdown has a ``ch__rest__<k>`` channel. Intervals are omitted when the
 calibration set was too small for the nominal level
 (``ensemble.conformal['<k>_level']``). With a user recovery, ``g_std`` = 0 and
 ``g_lo`` = ``g_hi`` = ``g`` on that row.
+
+Interval calibration
+--------------------
+``<k>_lo``/``<k>_hi`` = mean -/+ q_k * (spread + eps_k) with the
+split-conformal quantile q_k of ``ensemble.conformal`` (MPSP: relative
+errors, simultaneous over a sample's titer-yield points). The checkpoints of
+the experiment pipeline (``models/final_dev``, ``models/release``; v2) have no
+calibration hold-out: q_k comes from the out-of-fold scores of the
+development leave-one-configuration-out CV of the same training procedure
+and ensemble size (``conformal['source']``, ``['n']``,
+``['n_calib_groups']``, ``['weighting']``), so the intervals target a new
+configuration of known feedstocks / products. ``conformal['coverage_guaranteed']``
+is False (the scores come from the CV fold ensembles), and
+``conformal['crossfit']`` holds a cross-fitted coverage estimate per key
+(mean, pooled, min, q10 over the held-out configurations). Coverage is
+marginal over configurations and varies between them; queries close to the
+training configurations get conservative intervals.
+``ensemble.meta['conformal_random_cv']`` (when present) holds, for
+information only, the quantiles calibrated on the random-CV scores.
 """
 import difflib
 import math

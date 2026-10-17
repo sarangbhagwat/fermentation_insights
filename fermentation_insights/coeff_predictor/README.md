@@ -50,7 +50,14 @@ per-sample least-squares fits of exactly this equation to simulated MPSPs
   gas enter as price × predicted intensity (kg feedstock, kWh, kg gas per kg
   product). The prices are not network inputs, so predictions are exactly
   linear in them. The feedstock intensity is structured as
-  `b'_fs = (1/η)/w_sugar` with η ≤ 1 (sugar reaching fermentation).
+  `b'_fs = (1/η)/w_sugar` (η = sugar reaching fermentation); in the pipeline
+  1/η = (1/s_avail)·exp(Δz), where the composition's sugar availability
+  s_avail (free sugars and starch fully, structural polysaccharides by the
+  saccharification yield) is a physics prior and the network predicts only
+  the residual Δz.
+* **Hard productivity structure (§3).** The fermentation capital and the
+  electricity intensity are θ0(x) + θ1(x)·r_ref/r with θ1 ≥ 0, and no other
+  output sees the productivity, so MPSP never increases with r.
 * **Equation layer and hard bounds (§3, §4).** The equation turns the totals
   into MPSP at the simulated points, and the MPSP error is part of the loss.
   The recovery is bounded, `g = g_max·sigmoid(·)`.
@@ -68,15 +75,27 @@ per-sample least-squares fits of exactly this equation to simulated MPSPs
   operations, coproducts, neutralization degree, acid regeneration. When the
   broth itself is the product (route `none`), the gate sets the
   titer-dependent (c′, d′) parts of the broth-water channels to zero.
+* **Extrapolation safeguards (§3).** The feedstock-composition inputs are
+  clipped to their training range (a new feedstock's minor mass fractions
+  cannot saturate the network), and the neutralization cost is exactly zero
+  for products with nothing to neutralize (no acid group, no neutralizing
+  agent).
 * **Uncertainty (§6).** Deep ensemble, split-conformal intervals calibrated
-  on held-out configurations, and a kNN applicability domain.
+  on the out-of-fold scores of the development leave-one-configuration-out
+  CV of the same training procedure (so they target new configurations), and
+  a kNN applicability domain.
 
 Defaults: the library defaults are `FeatureSpec(downstream=False)` and
-`ModelConfig(water_gate=False, channel_inputs=None)`. The experiment pipeline
-(`experiments.py`), and so the release checkpoint, uses the downstream
-features, the gate and masking (`--no-downstream`, `--no-water-gate`,
-`--no-masking` switch them off); DESIGN.md §3 and §6 have the
-development-set evidence for these choices.
+`ModelConfig(water_gate=False, channel_inputs=None, r_structure=None,
+fs_prior=False, clip_groups=None, neutralization_gate=False)`. The experiment
+pipeline (`experiments.py`, v2), and so the release checkpoint, uses the
+downstream features, the gate, masking with the preset `'physics_v2'` (the
+recovery does not see the reagent prices), the productivity structure and the
+extrapolation safeguards (`--no-downstream`, `--no-water-gate`,
+`--no-masking`, `--v1-g-inputs`, `--no-r-structure`,
+`--no-extrapolation-safeguards` switch them off; `--v1-protocol` restores the
+v1 training protocol); DESIGN.md §3 and §6 have the development-set evidence
+for these choices.
 
 ## 3. Installation
 
@@ -224,12 +243,25 @@ inflection yield or outside the training titer range.
 
 * `<k>_std` is the ensemble spread, and `<k>_lo`/`<k>_hi` the split-conformal
   interval (level `1 − P.ensemble.conformal['alpha']`, default 90 %) for
-  k = a, b, c, d, g. `mpsp()` returns `MPSP_lo`/`MPSP_hi`. Intervals are
-  omitted when the calibration set was too small for the level.
-  `P.ensemble.conformal['coverage_guaranteed']` is True only with ≥ 10
-  calibration groups. It is False for the release checkpoint, whose
-  intervals were transferred from the development-set ensemble (REPORT.md,
-  section 6).
+  k = a, b, c, d, g. `mpsp()` returns `MPSP_lo`/`MPSP_hi` (the MPSP interval
+  is simultaneous over a sample's titer-yield points). Intervals are omitted
+  when the calibration set was too small for the level.
+* The release (and `final_dev`) checkpoints have no calibration hold-out:
+  their quantiles come from the out-of-fold scores of the development
+  leave-one-configuration-out CV of the same training procedure and ensemble
+  size (`P.ensemble.conformal['source']`, `['n']`, `['n_calib_groups']`).
+  `P.ensemble.conformal['coverage_guaranteed']` is therefore False (the
+  scores come from the CV fold ensembles, not from the released one), and
+  `P.ensemble.conformal['crossfit']` holds a cross-fitted estimate of the
+  coverage (per key: mean, pooled, worst and 10 % quantile over the
+  configurations). The coverage is marginal over configurations: it varies
+  widely between configurations, so a new configuration of a family whose
+  errors are larger than usual can be under-covered, while for a query close
+  to the training configurations the intervals are conservative. REPORT.md
+  (section 6) compares the estimate with the realized test coverage; no test
+  sample was used to calibrate. `P.ensemble.meta['conformal_random_cv']` holds,
+  for information only, the quantiles calibrated on the random-CV scores
+  (in-distribution queries).
 * `ad_ratio` is the mean distance to the 5 nearest training rows, divided by
   the 99 % quantile of the training rows' own distances, in the space of the
   encoder features and productivity. `in_domain` = `ad_ratio ≤ 1` and no
@@ -379,6 +411,13 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   (`HP_corn`, `TAL_sugarcane`, `succinic_glucose`,
   `lactic_neutral_SSCF_cornstover`; *test_ood*) and 10 % of the samples of
   the other configurations (*test_id*). These played no role in any choice.
+* **One training procedure everywhere.** Every network fit (hyperparameter
+  search, every CV scheme, `final_dev`, release) trains on all its samples,
+  each ensemble member early-stopping on its own random 15 % sample-level
+  hold-out, without a calibration hold-out. The CV numbers therefore
+  estimate the procedure that made the final models. The intervals of the
+  final models are calibrated from the leave-one-configuration-out
+  out-of-fold scores (section 4.5).
 * **Hyperparameters** are selected by leave-configurations-out CV on the
   development set only, using the configuration-balanced MPSP error.
 * **Generalization CV** (development set; grouped, so the titer-yield points
@@ -412,6 +451,13 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
 * **Release model** (`models/release`). It is trained on all data and has no
   independent test. The CV and final-test estimates (`models/final_dev`)
   measure its accuracy.
+* **Two runs.** The first full run (v1, commit fd3f386; report and headline
+  tables in [`results/v1/`](results/v1/README.md)) was the first use of the
+  test split. Its results led to the round-4 changes (training protocol,
+  interval calibration, recovery inputs, productivity structure,
+  extrapolation safeguards), which were chosen on the development set only
+  (DESIGN.md §6, round 4). The current report (v2) uses the same frozen test
+  split a second time and shows v1 and v2 side by side.
 
 ## 7. Known limitations
 
@@ -426,13 +472,17 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   lactic) have errors several times those of new configurations of a known
   product. The errors come from the recovery g and from the electricity,
   natural-gas and downstream channels, which legitimately depend on the
-  product (DESIGN.md §6, rounds 1–3). Check `in_domain`/`ad_ratio`, and
-  supply a known recovery (section 4.7) where possible.
+  product, and from process structure no training configuration has
+  (coproduct credits of isobutanol and corn ethanol, corn ethanol's missing
+  boiler; DESIGN.md §6, rounds 1–4). The recovery of a new separation train
+  is not predictable from the present descriptors (leave-one-product-out g
+  errors of −23 to +44 % for every input set tried). Check
+  `in_domain`/`ad_ratio`, and supply a known recovery (section 4.7) where
+  possible.
 * **Per-configuration bias.** The remaining error is mostly a systematic
   bias per configuration, not noise. The ensemble spread does not capture
   it, and the conformal intervals cover it only on average over
-  configurations (with few calibration groups the coverage is not
-  guaranteed).
+  configurations (`coverage_guaranteed` is False; section 4.5).
 * **Noise floor.** Random samples differ in biorefinery-specific parameters
   (`bp_*`) that are not model inputs. Even a model that knows the
   configuration exactly cannot predict those samples better than the noise
@@ -519,7 +569,7 @@ script):
    figures → REPORT.md. Every fit is cached, so an interrupted run resumes.
 
    ```bash
-   python -m fermentation_insights.coeff_predictor.experiments --raw /path/to/raw --threads 4 --budget-hours 2.5
+   python -m fermentation_insights.coeff_predictor.experiments --raw /path/to/raw --threads 4 --budget-hours 3 --members 5
    python -m fermentation_insights.coeff_predictor.experiments --quick     # debug run, minutes
    ```
 
@@ -527,7 +577,9 @@ script):
    `--threads` single-threaded workers. The estimate is made from the
    measured cost of the first candidate; `--plan-only` writes the estimate
    to `results/plan.json` and stops. Outputs: `results/` (REPORT.md, tables,
-   figures, log), `models/final_dev` and `models/release`.
+   figures, log), `models/final_dev` and `models/release`. The CV must run
+   before the final stage: the final intervals are calibrated from its
+   leave-one-configuration-out out-of-fold scores.
 
 ## Package layout
 

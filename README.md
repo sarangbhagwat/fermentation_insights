@@ -33,7 +33,9 @@ a', b', c', d' and the recovery g of the unifying equation, MPSP = (a' + b'/y + 
 specification of the feedstock, fermentation product, final product and fermentation regime, without building a process
 model. It is a physics-informed deep ensemble (cost-channel decomposition, price-explicit intensities, equation layer,
 physical constraints, uncertainty intervals and an applicability domain) trained on BioSTEAM simulations of 7
-Bioindustrial-Park biorefineries (41 configurations). It is independent of the publication-reproduction steps above; see
+Bioindustrial-Park biorefineries (41 configurations). Its intervals are split-conformal, calibrated on the
+leave-one-configuration-out cross-validation of the development data (so they target new configurations; coverage is
+an average over configurations, not guaranteed for each). It is independent of the publication-reproduction steps above; see
 its [README](fermentation_insights/coeff_predictor/README.md) for installation, a quickstart, validation and the
 reproduction of its training data, and [DESIGN.md](fermentation_insights/coeff_predictor/DESIGN.md) for the design.
 

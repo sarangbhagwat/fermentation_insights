@@ -341,8 +341,8 @@ recovery g and from electricity / natural gas / downstream channels that
 legitimately depend on the product. Checkpoints saved before the option load
 with one shared encoder.
 
-**Hard productivity structure** (`ModelConfig.r_structure`; off by default;
-experiments CLI `--r-structure`). Each listed output (preset `'physics'`:
+**Hard productivity structure** (`ModelConfig.r_structure`; library default
+off; on in the v2 pipeline, `experiments.R_STRUCTURE`, CLI `--no-r-structure`). Each listed output (preset `'physics'`:
 `capex_fermentation` and the electricity *intensity*; a price-explicit
 channel is structured before the price, so the price linearity is exact)
 has coefficients
@@ -445,7 +445,9 @@ configuration proxy, not as physics. A learned β (bounds 0.5–1.5) stays at
 productivity scheme holds out ~30 % of the configurations from every member
 (calibration + early-stopping groups by configuration), so its error is
 mostly that of unseen configurations (5 % with sample-level hold-outs vs 15
-%); r-extrapolation is measured by the sample-level variant.
+%); r-extrapolation is measured by the sample-level variant (the v2
+protocol of §6 uses sample-level hold-outs in every scheme).
+
 **Extrapolation safeguards** (2026-10-17, round 4; library defaults off,
 `experiments.py` default on, CLI `--no-extrapolation-safeguards`,
 `experiments.EXTRAPOLATION_SAFEGUARDS`; all need `FeatureSpec(downstream=True)`,
@@ -632,19 +634,45 @@ price, so prices outside the training range are reported separately.
 ## 6. Training & validation protocol
 
 * Deep ensemble (M members, different seeds/bootstraps) → mean ± epistemic
-  spread; intervals calibrated by split-conformal scaling on a held-out
-  calibration set of whole groups (configurations by default; in CV the
-  inner calibration / early-stopping splits group like the outer scheme:
-  feedstock, fermentation product or configuration in the library
-  (`train.SCHEME_GROUP`), whereas `experiments.INNER_GROUP` holds out whole
-  configurations for leave-one-feedstock-out and, since round 4, also for
-  leave-one-product-out: product-grouped early stopping on a single unseen
-  product stops the members within the first ~25 epochs, nearly untrained;
-  intervals are then calibrated for new configurations). One score per
-  calibration sample (MPSP: max over its points); if there are too few
-  samples for the level the quantile is +inf (no interval is reported);
-  `ens.conformal` stores n, the guaranteed level, the grouping actually used
-  and `coverage_guaranteed` (needs ≥ 10 calibration groups).
+  spread; split-conformal intervals scale the spread, one nonconformity
+  score per sample (|target − mean| / (std + eps); MPSP: max over its points,
+  so coverage is simultaneous over the sample's surface); if there are too
+  few scores for the level the quantile is +inf (no interval is reported).
+* **Training protocol of the pipeline (v2, `experiments.PROTOCOL`; round 4
+  below):** every network fit -- HPO, every CV scheme (PI-NN, plain MLP,
+  ablations), `models/final_dev`, `models/release` -- uses the same
+  procedure, so the CV estimates the procedure that makes the final models:
+  no calibration hold-out (`calib_frac` 0); every member early-stops on its
+  own random 15 % *sample-level* hold-out (`group_col` None; the hold-outs
+  differ between members, so the ensemble sees every sample; patience 40,
+  20–300 epochs); no refit (`TrainConfig.refit` 'none'). The baselines fit
+  exactly the rows the members train on. CV, final_dev and release ensembles
+  have the same number of members (`--members`, 5), because the scores divide
+  by the member spread.
+* **Intervals of the final models** are calibrated from the out-of-fold
+  scores of the development leave-one-configuration-out CV of that same
+  procedure (`train.conformal_scores` per held-out sample,
+  `train.calibrate_conformal_oof`): one score per development sample, from
+  the fold ensemble that did not see its configuration; `experiments.
+  oof_calibration_scores` refuses a score table that misses or repeats a
+  development sample or contains a test sample. The release ensemble (dev +
+  test samples) uses the same development scores. `ens.conformal` records the
+  source, n, the number of configurations, the weighting ('sample'; 'group'
+  = every configuration weighted equally, pooled-CDF quantile of Dunn et al.
+  2022, available), `coverage_guaranteed = False` (the fold ensembles are not
+  the final ensemble) and a cross-fitted coverage estimate (`crossfit`:
+  quantile of all other LOCO folds applied to each fold; mean, pooled, min,
+  q10). The random-CV calibration is stored for reporting only
+  (`meta['conformal_random_cv']`). The test split is never used to calibrate.
+* v1 protocol (`--v1-protocol`, `experiments.PROTOCOL_V1`, commit fd3f386):
+  calibration on a held-out 15 % of whole groups and early stopping on
+  held-out groups of the same kind (`experiments.INNER_GROUP_V1`: configurations
+  for LOCO, LOFO and productivity, fermentation product for LOPO, samples for
+  random CV; the library default `train.SCHEME_GROUP` groups like the outer
+  scheme); `final_dev` with a configuration-grouped 15 % calibration hold-out.
+  `train.calibrate_conformal` (one hold-out) and `train_ensemble(calib_frac,
+  group_col)` keep supporting it; `coverage_guaranteed` there needs ≥ 10
+  calibration groups.
 * Splits are **grouped** (never split TY points of one sample; MC samples of a
   configuration are correlated):
   - random sample-level K-fold (interpolation);
@@ -665,7 +693,9 @@ price, so prices outside the training range are reported separately.
   campaigns add samples). `experiments.py` loads the file and the final
   stage fails if a test configuration has no data.
 * HPO (`experiments.py`): `hpo_members` = 2 networks per candidate and fold
-  (full mode), selection by the fold mean of the **configuration-balanced**
+  (full mode), trained with the pipeline protocol above (v2: sample-level
+  early stopping, so the selection is for the procedure actually used),
+  selection by the fold mean of the **configuration-balanced**
   held-out MPSP MAPE (`mpsp_mape_cfg`: mean over held-out configurations of
   their point MAPE; `compute_metrics` also reports its geometric mean
   `mpsp_mape_cfg_gmean`). Reasons (development diagnostics below): the
@@ -870,7 +900,100 @@ but extrapolates them to new products (ethanol LOPO 104–110 %). The masked
 model (no residual) is therefore the pipeline default (`experiments.py`; CLI
 `--no-masking`); the library default is unchanged.
 
-### Development-set diagnostics, round 4: inputs of the recovery g (2026-10-17; never on test data)
+### Development-set diagnostics, round 4 (2026-10-17; never on test data)
+
+The v1 run (commit fd3f386, `results/v1/`) was the first use of the frozen
+test split: OOD test PI-NN 14.5 % vs ridge 7.3 %, HGB 10.2 %; in-distribution
+test 9.9 % vs random-CV 4.0 %; recovery g R² 0.04 on the OOD test; LOFO 66 % and
+LOPO 75 % against kNN 36 / 60 %; productivity extrapolation 12.7 % vs HGB 6.8 %.
+Round 4 looked for the causes on the development set only (every diagnostic
+loads the samples and keeps `experiments.development_set(samples,
+path=results/split.json)`; no decision used a test sample) and changed the
+pipeline in four places (4a–4d). 4e validates all changes together; 4f lists
+what was adopted, what was not, and the open issues. Each change has a CLI
+flag that restores v1 (`--v1-protocol`, `--v1-g-inputs`, `--no-r-structure`,
+`--no-extrapolation-safeguards`). The v2 run uses the frozen test split a
+second time.
+
+#### 4a. Training protocol of the final ensembles
+
+Diagnosis. v1 `final_dev` held out 15 % of the configurations (6 of 37) for
+split-conformal calibration and every member early-stopped on another ~15 %
+of the configurations (members stopped at 48–172 epochs). The in-distribution
+test samples of the 6 calibration configurations came from configurations no
+member had trained on, whereas the random CV used sample-level hold-outs:
+hence ID 9.9 % vs random-CV 4.0 %. The baselines were fit on the same rows.
+
+Dev proxy of the frozen test: on each of 6 draws one whole configuration of
+each of HP, TAL, succinic and lactic is held out (OOD proxy, 78–102 samples)
+plus 10 % hashed samples of the other configurations (ID proxy, 108–132); the
+rest (~1100 samples) trains. v1 pipeline settings (selected hyperparameters,
+water gate, 'physics' masking 32/3, downstream features), 3 members, the same
+draws and seeds for every variant; MPSP MAPE %, mean ± sd over draws; `cfg` =
+configuration-balanced; train s = CPU seconds for 3 members:
+
+| variant | protocol | OOD | OOD cfg | ID | ID cfg | g R² OOD | best epoch | epochs run | train s |
+|---|---|---|---|---|---|---|---|---|---|
+| V0 | v1 final: calib 0.15 cfg-grouped + cfg-grouped ES | 11.95 ± 6.87 | 11.16 ± 5.89 | 13.94 ± 5.53 | 10.08 ± 4.15 | 0.58 ± 0.46 | 74 (min 6) | 114 | 50.5 |
+| V1 | calib 0 + cfg-grouped ES | 9.19 ± 1.93 | 9.17 ± 2.87 | 8.15 ± 3.26 | 7.62 ± 3.09 | 0.67 ± 0.24 | 74 (min 6) | 114 | 59.4 |
+| V2t | V1 + refit e* (truncated cosine) | 8.31 ± 2.07 | 7.94 ± 2.64 | 5.93 ± 1.81 | 6.34 ± 2.64 | 0.76 ± 0.16 | 74 | 114+74 | 102 |
+| V2a | V1 + refit e* (annealed over e*) | 8.88 ± 2.40 | 8.48 ± 3.11 | 5.99 ± 1.37 | 6.23 ± 1.64 | 0.71 ± 0.20 | 74 | 114+74 | 102 |
+| V2m | V1 + refit at the members' median e* | 7.86 ± 0.96 | 7.57 ± 1.43 | 4.78 ± 1.37 | 4.58 ± 1.33 | 0.88 ± 0.02 | 74 | 114+63 | 99 |
+| **V3** | calib 0 + sample-level ES | **7.20 ± 1.20** | **6.69 ± 0.75** | **3.94 ± 0.22** | **3.87 ± 0.51** | 0.885 ± 0.02 | 172 (min 80) | 212 | 113 |
+| V3r | V3 + refit e* (truncated) | 7.37 ± 1.33 | 6.80 ± 0.91 | 4.11 ± 0.33 | 3.96 ± 0.50 | 0.883 ± 0.02 | 172 | 212+172 | 210 |
+
+Paired differences (pp, mean ± sd, t over 6 draws): V3 − V0 OOD −4.75 ± 6.37
+(t −1.8), ID −9.99 ± 5.34 (t −4.6); V3 − V1 OOD −1.99 ± 2.79 (t −1.75), ID
+−4.21 ± 3.28 (t −3.1); V3 − V2t ID −1.99 ± 1.84 (t −2.7); V3 − V2m OOD −0.65
+(t −1.0), ID −0.84 (t −1.6); V2t − V1 OOD −0.88 ± 0.49 (t −4.4); V2a − V2t
++0.57 (t 1.3); V3r − V3 +0.16 ± 0.59 (t 0.7). Configuration-balanced OOD per
+draw, V0 / V3: 21.2 / 6.7, 7.5 / 7.4, 15.7 / 7.2, 8.0 / 7.1, 6.9 / 6.4, 7.7 / 5.3.
+Configuration-grouped early stopping chooses e* from about five
+configurations: best epochs 6–226, and in 4 of 6 draws at least one member
+stopped at ≤ 20 epochs, which poisons the ensemble mean. Part of the recovery
+problem (lead's cause 2) is protocol-driven: g R² on the OOD proxy 0.58 →
+0.885. V3 costs 2.2× V0 per fit (212 vs 114 epochs, 932 vs 778 samples per
+member). Pass 1 of a refit run reproduces the plain run exactly (identical
+state_dicts, tested). **Adopted: V3** (`experiments.PROTOCOL`) for every fit
+of the pipeline; the refit code (`TrainConfig.refit`, 'truncate' / 'anneal',
+`refit_epochs` 'member' / 'median') stays as a tested, default-off option.
+
+Intervals without a hold-out (V3 procedure; 3 draws, α = 0.1). Out-of-fold
+scores from an 8-fold configuration-grouped CV (stratified by biorefinery) of
+the same procedure on each draw's training rows calibrate the proxy final
+model; coverage is sample-simultaneous (a sample counts as covered only if all
+its TY points are):
+
+| key | q (sample wt) | cross-fit est. | per-cfg q10 | cov OOD proxy | cov OOD cfg-bal | cov ID proxy | q (group wt) | cov OOD (group wt) | cov ID (group wt) |
+|---|---|---|---|---|---|---|---|---|---|
+| a | 4.89 ± 0.78 | 0.929 | 0.85 | 0.979 ± 0.011 | 0.982 | 0.994 | 4.72 | 0.979 | 0.994 |
+| b | 5.40 ± 1.80 | 0.932 | 0.92 | 0.846 ± 0.116 | 0.850 | 0.992 | 5.09 | 0.832 | 0.992 |
+| c | 3.79 ± 0.34 | 0.926 | 0.76 | 0.919 ± 0.024 | 0.930 | 0.980 | 3.68 | 0.916 | 0.980 |
+| d | 2.80 ± 0.64 | 0.940 | 1.00 | 0.873 ± 0.082 | 0.885 | 0.988 | 1.66 | 0.808 | 0.969 |
+| g | 3.75 ± 0.90 | 0.918 | 0.68 | 0.879 ± 0.043 | 0.894 | 0.963 | 3.63 | 0.879 | 0.963 |
+| MPSP | 8.57 ± 0.41 | 0.901 ± 0.028 | 0.67 | 0.783 ± 0.071 | 0.812 | 0.933 ± 0.045 | 9.16 | 0.808 ± 0.065 | 0.945 |
+
+V0 calibrated on its own 6 calibration configurations covers the OOD proxy at
+0.94 ± 0.10 for MPSP, but with q = 10.4 ± 6.8 (very wide); d 0.72, g 0.75.
+Calibration from random sample-level 5-fold CV scores: MPSP q 7.2, ID 0.93 /
+OOD 0.66 (g ID 0.92 / OOD 0.51). Coverage per configuration is uneven: the TAL
+proxy configurations are under-covered in every draw (TAL_glucose 0.44,
+TAL_corn 0.33) although TAL configurations in the out-of-fold scores are
+covered at 0.85. The 8-fold grouped CV MAPE is 10–12 % (it includes the
+isobutanol, oxalic and ethanol folds) against 6.7–7.4 % on the proxy (four
+large families only). **Adopted:** the final intervals come from the
+leave-one-configuration-out out-of-fold scores of the development CV (same
+procedure, same ensemble size; `experiments.stage_final`), sample weighting;
+`transfer_conformal`, which used the test configurations, is removed.
+
+Cost (per-fit factors from the table: V3 / V0 2.23, V3 / V1 1.90, refit
++0.85×): v1 CV 4.06 CPU-h → about 8.7 CPU-h with V3 everywhere and every
+ablation on every LOCO fold, 5.3 CPU-h with the ablations on 12 stratified
+LOCO folds (`--ablation-loco-folds`, default); HPO 0.58 → ~1.1 CPU-h; final +
+release ~0.2 CPU-h.
+
+#### 4b. Inputs of the recovery g
+
 
 Data (development set: 1306 samples, 37 configurations, 29 284 points;
 scripts in the round-4 scratch directory `g_inputs/`). What drives g:
@@ -994,7 +1117,17 @@ mean ± sd over seeds, paired Δ (t over 3 seeds):
   opt-in titer-domain feature (`FeatureSpec(domain_features=True)`, group
   'titer_domain', `phys_log10_t_ref` = log10 sqrt(t_min·t_max)) is kept for
   reproducibility only.
-### Development-set diagnostics, round 4: catastrophic extrapolation (2026-10-17; never on test data)
+#### 4c. Hard productivity structure
+
+Data analysis and paired CV evidence: §3 ("Hard productivity structure").
+Only the fermentation capital depends materially on r, as 1/r (β = 1.0, R²
+0.9999); with the structure ∂MPSP/∂r ≤ 0 holds by construction (v1: 0.8–8 %
+of held-out samples violated it) and the productivity-extrapolation MAPE falls
+from 5.16 to 4.29 % (t −4.5; low-r side 6.34 → 4.39 %, t −12.5) with
+sample-level hold-outs, LOCO and random unchanged. **Adopted** in the
+pipeline (`R_STRUCTURE = 'physics'`, β fixed at 1).
+
+#### 4d. Catastrophic extrapolation (new feedstocks and products)
 
 Development set 1306 samples / 37 configurations (`experiments.development_set`);
 pipeline settings (downstream features, water gate, masking 'physics' with
@@ -1137,13 +1270,156 @@ not explain the gap to round 3 (masked LOPO ethanol 83 ± 10 %): the inner
 grouping does. With configuration-grouped inner hold-outs (`pgrp`, as in
 round 3) the leave-one-product-out fold mean falls from 81.9 ± 8.8 to 49.7 ±
 10.0 % (−32.2 ± 5.4, t = −10.3; ethanol 161 → 77, IBO 193 → 62, oxalic 49 →
-35, succinic 37 → 50; seeds 0–2), hence
-`experiments.INNER_GROUP['product'] = 'config_id'` (like feedstock). Under
+35, succinic 37 → 50; seeds 0–2). (This diagnosis proposed
+`INNER_GROUP['product'] = 'config_id'`; the v2 protocol, round 4a, goes
+further: sample-level early stopping in every scheme.) Under
 that grouping the safeguards change leave-one-product-out by −2.9 ± 1.9
 (t = −2.7, seeds 0–2) and −1.2 ± 3.2 (t = −0.8, seeds 0–4): neutral to
 slightly better in MAPE, with the feedstock and neutralization channels
 right (above). Seeds 3–4 of `sel` / `pnc` ran after that change, so their
 leave-one-product-out folds count as `pgrp` / `pncg`.
+
+#### 4e. Combined validation of v2 (all changes, corrected protocol)
+
+Setup: development set only (1306 samples, 37 configurations); the
+pipeline's folds (`experiments.scheme_splits` with `results/plan.json`, seed 0:
+random 5-fold, all 37 LOCO folds, 4 LOFO, 7 LOPO, 1 productivity fold) and the
+dev proxy of the frozen test (4a, 6 draws). PI-NN with the **v1 settings**
+(v1 protocol: CV hold-outs grouped by `INNER_GROUP_V1`, calibration 0.15;
+proxy: the v1 final protocol; masking 'physics'; no r-structure; no
+safeguards) vs **v2** (all adopted changes: `PROTOCOL`, 'physics_v2',
+r-structure, safeguards), both with the v1-selected hyperparameters, water
+gate and downstream features, 3 members, paired over 3 training seeds (seed
+1000 s + fold) on identical folds; plain MLP (v2 protocol), ridge, HGB and kNN
+(fit on the same rows as the v2 members) once, for reference. Scripts and raw
+results: round-4 scratch directory `integration/` (`validate.py`,
+`analyze.py`, `tables.md`). MPSP MAPE %, fold mean (pipeline headline),
+mean ± sd over seeds; diff = v2 − v1, paired, t over seeds:
+
+| scheme | folds | v1 | v2 | v2 − v1 (t) | plain | ridge | HGB | kNN |
+|---|---|---|---|---|---|---|---|---|
+| random | 5 | 4.10 ± 0.02 | **3.91 ± 0.03** | −0.20 ± 0.04 (−9.1) | 5.77 | 8.15 | 4.88 | 8.02 |
+| leave-one-configuration-out | 37 | 16.06 ± 0.92 | **9.71 ± 0.25** | −6.35 ± 1.01 (−10.8) | 13.76 | 19.46 | 21.51 | 16.34 |
+| leave-one-feedstock-out | 4 | 64.13 ± 1.43 | 34.89 ± 1.33 | −29.25 ± 2.10 (−24.1) | 71.57 | 141.80 | 73.69 | 34.63 |
+| … configuration-balanced | 4 | 38.98 ± 1.36 | **21.96 ± 0.42** | −17.03 ± 1.67 (−17.6) | 40.64 | 95.54 | 32.92 | 23.77 |
+| leave-one-product-out | 7 | 86.12 ± 9.47 | **50.08 ± 3.51** | −36.03 ± 8.36 (−7.5) | 51.29 | 88.25 | 107.69 | 52.57 |
+| productivity | 1 | 18.30 ± 5.76 | **4.30 ± 0.07** | −13.99 ± 5.71 (−4.2) | 6.86 | 8.92 | 7.26 | 10.64 |
+| LOCO, HP / TAL / succinic / lactic, family-balanced (matched OOD estimate) | 32 | 13.25 ± 1.27 | **6.23 ± 0.02** | −7.02 ± 1.28 (−9.5) | 9.79 | 11.65 | 8.85 | 13.93 |
+
+Per held-out group (v1 → v2; plain / ridge / HGB / kNN): LOFO corn 145.6 →
+50.2 (t −9.0; 165 / 351 / 83 / 52), glucose 29.9 → 5.1 (t −4.4), sugarcane
+46.2 → 41.2 (t −0.6), cornstover 34.9 → 43.1 (t +1.0); LOPO ethanol 157.7 →
+44.4 (t −2.4; seed sd 83 → 1.6), isobutanol 226.9 → 85.1 (t −3.5), HP 18.2 →
+12.7 (t −3.6), lactic 56.6 → 53.5 (t −2.6), oxalic 65.3 → 59.3 (t −0.2), TAL
+49.6 → 44.3 (t −1.9), **succinic 28.4 → 51.4 (t +5.0)**. LOCO per family
+(v1 → v2): HP 5.3 → 2.9, TAL 17.6 → 8.7, succinic 7.2 → 2.9, lactic 22.9 →
+10.4, ethanol 38.8 → 21.8, oxalic 68.3 → 38.8, **isobutanol 87.6 → 99.5**
+(one configuration). The succinic LOPO regression comes with the protocol
+(4d found succinic 37 → 50 % when the product-grouped early stopping was
+replaced by configuration-grouped early stopping): with product-grouped
+hold-outs the v1 members stopped within ~8 epochs (87 % of the LOPO members
+had best epoch ≤ 20) and the nearly untrained members happened to be closer
+for succinic; the v2 LOPO members' best epochs have median 123 (min 54).
+
+Out-of-fold recovery g (pooled R², configuration-mean |ln ĝ/g|), v1 → v2:
+LOCO 0.66 → 0.80 (6.4 → 3.3 %), productivity 0.78 → 0.97 (7.9 → 2.4 %), LOPO
+−0.56 → −0.24 (23.0 → 20.9 %), LOFO 0.50 → 0.39 (7.5 → 6.7 %), random 0.973 both.
+Finite-difference ∂MPSP/∂r > 0 rate of the held-out samples: v2 0 in every
+scheme (v1 0.2–5.9 %, plain MLP 11–36 %). Best epochs, median (min; fraction
+≤ 20) over the members: v1 LOCO 67 (1; 0.27), LOPO 8 (1; 0.87), productivity
+23 (11; 0.44), LOFO 57 (8; 0.17), random 142 (83; 0); v2 121–139 (min 52; 0)
+in every scheme. Seconds per 3-member fit, v1 → v2: LOCO 65 → 126, LOPO 26 →
+100, LOFO 43 → 88, productivity 39 → 79, random 84 → 87.
+
+Cross-fitted coverage of the LOCO out-of-fold scores (nominal 0.90; leave one
+configuration out; seeds 0 / 1 / 2): v2 MPSP mean 0.94 / 0.94 / 0.89, 10 %
+quantile over configurations 0.89 / 0.87 / 0.67, worst 0.0 / 0.21 / 0.19; g
+mean 0.94 / 0.86 / 0.90; a′ 0.93. v1: MPSP 0.94 / 0.95 / 0.94 (worst 0.0–0.03).
+
+Dev proxy of the frozen test (6 draws, MAPE %, mean ± sd; paired over draws):
+
+| variant | OOD | OOD cfg | ID | ID cfg | g R² OOD |
+|---|---|---|---|---|---|
+| PI-NN v1 settings (v1 final protocol) | 11.81 ± 6.61 | 11.02 ± 5.68 | 14.28 ± 6.00 | 10.23 ± 4.15 | 0.58 ± 0.46 |
+| **PI-NN v2** | **7.08 ± 0.96** | **6.56 ± 0.49** | **3.79 ± 0.26** | **3.79 ± 0.46** | 0.88 ± 0.02 |
+| plain MLP (v2 protocol) | 10.30 ± 2.10 | 9.94 ± 1.87 | 6.13 ± 0.70 | 5.85 ± 0.59 | 0.86 ± 0.05 |
+| ridge | 11.44 ± 2.18 | 12.14 ± 3.04 | 7.73 ± 0.98 | 7.66 ± 1.02 | 0.88 ± 0.01 |
+| HGB | 9.22 ± 1.36 | 9.15 ± 1.94 | 4.79 ± 0.51 | 4.91 ± 0.70 | 0.86 ± 0.05 |
+| kNN | 17.29 ± 2.32 | 15.71 ± 1.86 | 7.93 ± 0.70 | 8.41 ± 0.57 | 0.84 ± 0.02 |
+
+v2 − v1: OOD −4.73 ± 6.16 (t −1.9), ID −10.50 ± 5.99 (t −4.3); v2 − HGB: OOD
+−2.14 ± 1.18 (t −4.5), ID −1.01 ± 0.29 (t −8.7); v2 − ridge: OOD −4.36 (t
+−7.5), ID −3.95 (t −12.7); v2 − plain: OOD −3.22 (t −5.1), ID −2.34 (t −8.5).
+Configuration-balanced OOD per draw, v1 / v2: 20.7 / 6.4, 7.7 / 6.8, 15.2 /
+7.2, 7.7 / 6.6, 6.8 / 6.7, 8.0 / 5.7: v2 is never worse and its draw-to-draw
+spread is 12× smaller. On the proxy (unlike the v1 test) v2 beats every
+baseline on both OOD and ID.
+
+#### 4f. Decisions and open issues
+
+Together (4e) the changes improve every CV scheme (t −4.2 to −24) and the
+dev proxy of the frozen test (OOD 11.8 → 7.1 %, ID 14.3 → 3.8 %); the one
+held-out group that got clearly worse is succinic in leave-one-product-out.
+Adopted (each is a protocol correction or a hard physical guarantee, or has a
+paired development benefit beyond the seed noise):
+
+* the training protocol V3 for every fit and the out-of-fold LOCO calibration
+  of the final intervals (4a; protocol corrections; the test split is never
+  used to calibrate);
+* the recovery blind to the reagent prices, preset 'physics_v2' (4b; hard
+  constraint dg/dprice = 0, CV benefit in the right direction but within the
+  noise);
+* the hard productivity structure (4c; dMPSP/dr ≤ 0 by construction,
+  productivity CV −0.9 pp, t −4.5);
+* the sugar-availability prior with feedstock-input clipping (4d; LOFO −29
+  points, t −5.3) and the neutralization gate (4d; hard constraint, verified on
+  the data);
+* equal ensemble sizes for CV / final / release (the scores divide by the
+  member spread), LOCO of the PI-NN and plain MLP on every configuration, the
+  ablations on 12 stratified configurations.
+
+Not adopted: refit after early stopping (V2t / V2a / V2m: better than V1,
+worse than V3; V3r: no gain at twice the cost) and the 'anneal' schedule (the
+code stays, default off); `INNER_GROUP['product'] = 'config_id'` (superseded by
+sample-level early stopping everywhere); feedstock, fermentation, scale or
+titer-domain inputs for g (the titer-domain feature stays as an opt-in
+`FeatureSpec(domain_features=True)`), w_g = 5; a learned β, product groups for
+the electricity head, structuring other channels; re-enabling `fs_eta_bound`,
+data-derived bounds on z or on the channel outputs, default hyperparameters,
+distance-based shrinkage; the configuration-weighted ('group') quantile as the
+default (0.81 vs 0.78 MPSP coverage on the proxy, within the noise; available
+as `weighting='group'`); random-CV calibration for in-distribution queries
+(stored for reporting only: it would need a rule such as the AD distance to
+decide when a query is in distribution).
+
+Open issues:
+
+1. The LOCO-calibrated MPSP intervals under-covered the OOD proxy (0.78–0.81
+   vs nominal 0.90) while the cross-fitted estimate said 0.90–0.92: coverage per
+   configuration is uneven (TAL under-covered in every draw). Untested remedies:
+   scores without the member spread (eps only, relative errors) and Mondrian
+   (per-family) calibration; `conformal_scores` would also need to return the
+   spread and the raw relative error.
+2. The final hyperparameters are re-selected under the new protocol in the v2
+   run; the round-4 diagnostics (and 4e) used the v1-selected ones.
+3. The 300-epoch limit binds for a few members under sample-level early
+   stopping (1 of 18 on the proxy; 13 of 504 v2 members in 4e ran to 300
+   epochs, one with its best epoch at 300; the report counts them per stage).
+   400 epochs would cost little.
+4. Early stopping on 'data' vs 'mpsp' under sample-level hold-outs is left to
+   the hyperparameter search (dimension `early_stop`).
+5. Electricity (with the coproducts) remains the largest error channel (about
+   7 % of the numerator with the configuration in training, ~20 % in LOCO); its
+   inputs need their own study (CHP / boiler inputs, coupling with natural gas).
+6. Data / specification: the saccharification mode (SHF / SSCF, −5 % lactic g)
+   is not in the regime specification; the D8 TAL substrate basis; TAL's ~10 %
+   recovery noise floor from an unobserved `bp_*` parameter.
+7. The g loss weighs absolute errors and the g prior is centred on the
+   sample-weighted median (0.98, dominated by ethanol / oxalic / IBO); a
+   log-space g loss or a configuration-balanced centre is untested.
+8. The recovery of a new separation train is not predictable from the present
+   descriptors (LOPO g errors −23 to +44 % for every input set): a
+   user-supplied recovery or a richer separation vocabulary is needed.
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 
