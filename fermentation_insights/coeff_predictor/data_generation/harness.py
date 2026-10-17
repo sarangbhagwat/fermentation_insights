@@ -569,6 +569,9 @@ def _write_row(fh, row):
 
 
 def _completed_samples(path):
+    """Sample ids with a ``sample_end`` record, except those marked
+    ``retry`` (no point simulated because the system state could not be
+    restored; a resume re-runs them)."""
     done = set()
     if os.path.exists(path):
         with open(path) as fh:
@@ -577,7 +580,7 @@ def _completed_samples(path):
                     rec = json.loads(line)
                 except Exception:
                     continue
-                if rec.get('record') == 'sample_end':
+                if rec.get('record') == 'sample_end' and not rec.get('retry'):
                     done.add(rec['sample_id'])
     return done
 
@@ -662,14 +665,28 @@ def run_campaign(adapter: BiorefineryAdapter, out_dir: str, *,
                 if sample_limit is not None and n_run >= sample_limit:
                     return path
                 sid = f'{adapter.name}|{cid}|s{seed}|{p["index"]}'
-                _run_sample(adapter, fh, sid, config, dom, params, p,
-                            n_y, n_t, point_timeout, verbose)
+                state = _run_sample(adapter, fh, sid, config, dom, params, p,
+                                    n_y, n_t, point_timeout, verbose)
                 n_run += 1
+                if state == 'broken':
+                    # neither reset() nor a reload restored the system: the
+                    # remaining samples of this configuration are left for a
+                    # resume (not written, so not counted as complete)
+                    if verbose:
+                        print(f'=== {adapter.name}: {cid}: system state not restored; remaining samples '
+                              'skipped (resume to retry)', flush=True)
+                    break
     return path
 
 
 def _run_sample(adapter, fh, sid, config, dom, params, plan_item,
                 n_y, n_t, point_timeout, verbose):
+    """Simulate one sample's TY design. Returns 'ok', 'reloaded' (a failed
+    reset was repaired by reloading the configuration) or 'broken' (the
+    system state could not be restored: the caller stops the configuration).
+    A sample none of whose points was simulated because the state could not
+    be restored gets ``retry=True`` in its ``sample_end`` (not complete: a
+    resume re-runs it)."""
     rng = np.random.default_rng(plan_item['seed'])
     # parameter values
     values = {}
@@ -750,14 +767,22 @@ def _run_sample(adapter, fh, sid, config, dom, params, plan_item,
                     reset_failed = f'{type(e2).__name__}: {e2}'[:200]
             row['sim_seconds'] = time.time() - t0
             _write_row(fh, row)
-    if reset_failed:  # try to recover a converged state for the next sample
+    state, reload_error = 'ok', ''
+    if reset_failed:  # recover a converged state for the next sample
         try:
             with _Alarm(point_timeout):
                 adapter.reset()
         except Exception:
-            pass
+            # reset() keeps failing: reload the configuration from scratch
+            try:
+                adapter.load(config)
+                state = 'reloaded'
+            except Exception as e3:
+                state, reload_error = 'broken', f'{type(e3).__name__}: {e3}'[:200]
+    retry = bool(reset_failed and n_ok == 0 and not param_error)
     _write_row(fh, {'record': 'sample_end', 'sample_id': sid, 'n_ok': n_ok,
                     'param_error': param_error, 'reset_failed': reset_failed,
+                    'reloaded': state == 'reloaded', 'reload_error': reload_error, 'retry': retry,
                     'seconds': time.time() - t_sample})
     if verbose:
         print(f'{sid}: {n_ok} ok points in {time.time() - t_sample:.0f} s', flush=True)
@@ -767,3 +792,4 @@ def _run_sample(adapter, fh, sid, config, dom, params, plan_item,
             prm.setter(prm.baseline)
     except Exception:
         pass
+    return state

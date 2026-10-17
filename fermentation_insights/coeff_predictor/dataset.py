@@ -19,7 +19,8 @@ Raw reading
   skipped and counted;
 * a point belongs to the latest ``sample_start`` of its ``sample_id`` in the
   same file (resumed campaigns re-run incomplete samples); an attempt is
-  complete when its ``sample_end`` is seen. If a sample_id is complete in
+  complete when its ``sample_end`` is seen and not marked ``retry`` (the
+  harness could not restore the system state, nothing was simulated). If a sample_id is complete in
   several files (e.g. a ``_smoke`` file and a production file with the same
   seed), non-smoke files win, then the most recently modified file;
 * each sample uses the latest ``config`` record of its configuration that
@@ -251,7 +252,9 @@ def read_raw(raw_dirs, require_complete=True):
                 att = current.get(sid)
                 if att is not None:
                     att['end'] = rec
-                    att['_complete'] = True
+                    # 'retry' (harness >= 3: nothing simulated, the system state
+                    # could not be restored): not complete, a resume re-runs it
+                    att['_complete'] = not rec.get('retry', False)
             else:
                 stats['unknown_records'] += 1
     prod_keys = {k for k, (rank, _) in configs.items() if rank[0]}
