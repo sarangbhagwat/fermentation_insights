@@ -341,7 +341,45 @@ def fit_target_scales(samples, points, layout, batch, cont_mask=None):
         v = np.abs(I[mask])
         ips.append(float(max(v.mean() if len(v) else 0., 1e-6)))
     sc['int_point_scale'] = ips
+    # productivity slopes (ModelConfig.r_structure: initial theta1 of each
+    # coefficient = pooled within-configuration slope on (r_ref / r))
+    lr = np.asarray(batch.log_r, float)
+    grp = samples['config_id'].astype(str).to_numpy() if 'config_id' in samples else np.zeros(len(samples))
+    sc['r_slope_log_r_mean'] = float(np.nanmean(lr)) if np.isfinite(lr).any() else 0.
+    sc['ch_r_slope'] = r_slopes(ch, lr, grp).tolist() if ch.shape[1] else []
+    sc['int_r_slope'] = r_slopes(q, lr, grp).tolist() if q.shape[1] else []
+    sc['rest_r_slope'] = r_slopes(rest[:, None, :], lr, grp)[0].tolist()
     return sc
+
+
+def r_slopes(values, log_r, groups, beta=1.0):
+    """Pooled within-group least-squares slope of every entry of ``values``
+    (n, K, 4) on rho = (r_ref / r)^beta, r_ref = exp(mean log r): the
+    coefficient change per unit rho (= theta1 at r_ref of the hard productivity
+    structure) among samples of one configuration. (K, 4); 0 where undefined."""
+    v = np.asarray(values, float)
+    lr = np.asarray(log_r, float)
+    ok_r = np.isfinite(lr)
+    rho = np.where(ok_r, np.exp(beta * (np.nanmean(lr) - np.where(ok_r, lr, 0.))), np.nan) if ok_r.any() \
+        else np.full(len(lr), np.nan)
+    num = np.zeros(v.shape[1:])
+    den = np.zeros(v.shape[1:])
+    g = np.asarray(groups)
+    for key in pd.unique(g):
+        i = np.flatnonzero(g == key)
+        if len(i) < 2:
+            continue
+        x = rho[i][:, None, None] * np.ones(v.shape[1:])
+        y = v[i]
+        m = np.isfinite(x) & np.isfinite(y)
+        cnt = m.sum(0)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            xm = np.where(cnt > 0, np.where(m, x, 0.).sum(0) / np.maximum(cnt, 1), 0.)
+            ym = np.where(cnt > 0, np.where(m, y, 0.).sum(0) / np.maximum(cnt, 1), 0.)
+        xc = np.where(m, x - xm, 0.)
+        num += (xc * np.where(m, y - ym, 0.)).sum(0)
+        den += (xc ** 2).sum(0)
+    return np.where(den > 0, num / np.where(den > 0, den, 1.), 0.)
 
 
 def make_tensors(spec, samples, points, layout, batch=None, max_points=48, dtype=torch.float32):

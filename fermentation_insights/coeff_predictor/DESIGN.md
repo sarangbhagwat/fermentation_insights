@@ -341,6 +341,112 @@ recovery g and from electricity / natural gas / downstream channels that
 legitimately depend on the product. Checkpoints saved before the option load
 with one shared encoder.
 
+**Hard productivity structure** (`ModelConfig.r_structure`; off by default;
+experiments CLI `--r-structure`). Each listed output (preset `'physics'`:
+`capex_fermentation` and the electricity *intensity*; a price-explicit
+channel is structured before the price, so the price linearity is exact)
+has coefficients
+
+    θ_k(x, r) = θ0_k(x) + θ1_k(x) · (r_ref / r)^β,   k = a′, b′, c′, d′,
+
+with `θ1_k = s_k · softplus(·) ≥ 0`, `β` fixed (`r_beta` = 1) or learned in
+`r_beta_bounds` (one per output), `r_ref` = exp(training mean of log r)
+(`FeatureSpec.r_stats`; only a reparametrization: the head of θ0 gives the
+coefficient at `r_ref`), and θ0, θ1 computed without the productivity inputs
+('productivity' removed from those outputs' groups in the masked model; the
+shared encoder and the hybrid's residual network get no productivity input at
+all). With `g` independent of r (the preset never gives 'productivity' to
+the recovery) every structured term of MPSP = Σ/g falls with r for all y, t
+> 0, so ∂MPSP/∂r ≤ 0 holds by construction, also far outside the training
+range (the soft `mono_r` residual is then identically 0 for the preset; it
+still applies if a custom `channel_inputs` gives another output the
+productivity). θ1 is initialized at the pooled within-configuration slope of
+the training coefficients on `r_ref/r` (target scales `*_r_slope`,
+`train.r_slopes`), at least `r_slope_floor` = 1 % of the target's standard
+deviation, so a coefficient without productivity dependence starts (and,
+without data pressure, stays) with a negligible term: a θ1 of the order of
+the cross-configuration standard deviation is amplified up to (r_ref/r_min)
+≈ 20× at the low-productivity edge (a first prototype initialized at 0.3 σ
+had a much larger out-of-fold electricity error in a single-member run:
+38 vs 23 % of the numerator). The gate multiplies the whole
+structured coefficient (≥ 0, monotonicity kept). The outputs expose
+`r_theta0`, `r_theta1` (n, S, 4; before the gate). Checkpoints saved before
+the option load with it off.
+
+Data (development set only; `sample_kind` productivity/baseline = only r
+differs within a configuration; channel numerators on a 5 × 5 TY grid of the
+configuration, relative to the total numerator):
+
+* `capex_fermentation` is the only channel with material r dependence:
+  range over r/r_base ≈ 0.25–4 of median 13 % (max 41 %, oxalic) of the
+  total numerator, monotone decreasing in 35 of 36 configurations (one
+  step up of 0.04 % of the numerator, lactic). Fitting
+  θ0 + θ1 (r_ref/r)^β per configuration and coefficient gives β = 1.0
+  (IQR 0.95–1.0; a′ 1.0, b′ 0.8, c′ 0.9) with R² ≈ 1.000; a joint fit with
+  one β for the four coefficients: R² 0.9999 at β = 1.0 vs 0.997 at 0.8 /
+  1.2 (RMS error 0.06 % of the numerator vs 0.2–0.3 %). The dependence is
+  almost purely a′ (median a′-term 12 % of the numerator; b′, c′ ≤ 4 %), as
+  V ∝ product rate / r makes the capital per kg ∝ 1/r independently of y
+  and t; β = 1 rather than a capital exponent < 1 because the fermenters
+  are trains of vessels of bounded size. θ1 ≥ 0 for every coefficient (NNLS)
+  costs R² 0.0004 (d′ has a slightly negative slope in 28 / 36
+  configurations, |θ1_d| ≤ 0.4 % of the numerator).
+* Electricity: range ≤ 1.4 % (median 0.4 %), non-monotone between
+  consecutive r in 27 / 36 configurations (per-sample fit noise); its a′
+  follows ~1/r (β ≈ 1.2, R² 0.90, θ1 > 0 in 30 / 36), consistent with
+  agitation / aeration power ∝ V. All other channels ≤ 1.2 % without a
+  consistent sign. The recovery g varies by median 0.2 % (max 4.5 %) and is
+  uncorrelated with r.
+* LHS random samples (r sampled jointly with 17–48 other parameters; ridge on
+  the varying parameters + θ1 (r_ref/r)^β, β by leave-one-out): fermentation
+  capital r effect median 23 % (max 50 %) of the numerator, partial R² 0.99,
+  β median 0.9 (IQR 0.8–1.03), θ1 > 0 in all 28 configurations, a free cubic
+  in log r monotone decreasing in 25 / 28 (in the other 3 the rising part is
+  ≤ 2 % of its range); with θ1 depending on the other parameters
+  (large configurations) β = 1.0 (oxalic), 0.8–0.9 (ethanol, IBO).
+  Electricity: partial R² ≤ 0 in most configurations (r explains nothing
+  beyond the other parameters), median effect 0.5 %. The closure channel
+  depends weakly on r (0.15 % of the numerator; DCF weights on the
+  r-dependent capital) and is left unstructured.
+
+Evidence (development CV, round 4, 2026-10-17; PI-NN with the selected
+hyperparameters, water gate and 'physics' masking, ± r-structure with β = 1;
+paired by seed; MPSP MAPE of `compute_metrics`, pooled / configuration
+balanced; Δ = paired difference, t over seeds):
+
+| scheme (members, seeds) | v1 | + r-structure | Δ (t) |
+|---|---|---|---|
+| productivity, sample-level inner hold-outs, no calibration hold-out (2, 5) | 5.16 / 5.27 | 4.29 / 4.33 | −0.87 (−4.5) / −0.94 (−7.4) |
+| … low-r side, configuration balanced | 6.34 | 4.39 | −1.96 (−12.5) |
+| … high-r side, configuration balanced | 4.22 | 4.20 | −0.01 (−0.1) |
+| productivity, v1 protocol (2, 5) | 15.0 / 11.1 | 15.2 / 9.7 | +0.3 (+0.3) / −1.4 (−2.4) |
+| leave-configurations-out, 5 folds (2, 5) | 32.9 / 17.7 | 33.4 / 17.3 | +0.5 (+0.5) / −0.3 (−0.6) |
+| random 5-fold (1, 5) | 4.34 / 4.27 | 4.27 / 4.18 | −0.07 (−1.1) / −0.09 (−2.1) |
+
+Ridge / HGB on the productivity scheme: 8.9 / 7.5 % (sample-level hold-outs),
+20.9 / 24.3 % (v1 protocol). The finite-difference ∂MPSP/∂r > 0 rate of
+`compute_metrics` is 0 with the structure (v1: 6.4 % of the held-out
+samples in the productivity scheme, 3.8 % LOCO, 0.8 % random). Out-of-fold
+error of the fermentation capital (RMS over the points / RMS total
+numerator, configuration balanced): 1.57 → 1.14 % (productivity, t −13),
+2.27 → 1.96 % (LOCO, t −2.2), 0.90 → 0.95 % (random, t +1.9: the 1/r form
+with θ1 ≥ 0 costs a little in interpolation, cf. β ≈ 0.9 and d′ slopes < 0
+above). Electricity is unchanged where the configurations are in training
+(productivity 7.2 → 7.4 %, t +0.3; random 7.6 → 7.5 %) and not
+significantly worse in LOCO (19.3 → 20.8 %, t +0.9), but worse when
+whole configurations are held out from the members (productivity scheme,
+v1 protocol: 14.1 → 16.6 %, t +5.1, mostly corn ethanol and IBO). The
+same loss appears when the electricity head merely loses its productivity
+inputs without any structure (14.1 → 16.1 %, t +3.7), and adding the
+product groups to the electricity inputs does not recover it (16.3 %):
+r (whose baseline differs per configuration, 0.12–13 g/L/h) acted as a
+configuration proxy, not as physics. A learned β (bounds 0.5–1.5) stays at
+1.01 ± 0.01 and gives the same errors as β = 1. The v1-protocol
+productivity scheme holds out ~30 % of the configurations from every member
+(calibration + early-stopping groups by configuration), so its error is
+mostly that of unseen configurations (5 % with sample-level hold-outs vs 15
+%); r-extrapolation is measured by the sample-level variant.
+
 ## 4. Loss
 
     L = w_mpsp · mean_i [(MPSP̂_i − MPSP_i)/MPSP_i]²       (equation layer; simulated points)
@@ -357,7 +463,8 @@ satisfy it, which is checked and reported):
    (`b' + d'/t ≥ 0`, `c' + d'/y ≥ 0` at domain grid points);
 2. MPSP > 0 over the domain;
 3. ∂MPSP/∂r ≤ 0 (higher productivity → smaller fermenters) via autograd
-   w.r.t. the productivity input;
+   w.r.t. the productivity input (identically satisfied with the hard
+   productivity structure of §3, `ModelConfig.r_structure`);
 4. non-negative feedstock and natural-gas intensities over the domain.
 
 **Collocation points**: unlabeled inputs created by perturbing training inputs

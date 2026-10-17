@@ -1698,7 +1698,10 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
          if ctx.get('mk_extra', {}).get('water_gate') else '')
       + ('; PI-NN with channel-wise input masking (`ModelConfig.channel_inputs='
          f"{ctx['mk_extra']['channel_inputs']!r}`, DESIGN.md section 3)"
-         if ctx.get('mk_extra', {}).get('channel_inputs') else '') + '.\n')
+         if ctx.get('mk_extra', {}).get('channel_inputs') else '')
+      + ('; PI-NN with the hard productivity structure (`ModelConfig.r_structure='
+         f"{ctx['mk_extra']['r_structure']!r}`, DESIGN.md section 3)"
+         if ctx.get('mk_extra', {}).get('r_structure') else '') + '.\n')
     if D['recent_raw_files']:
         P(f'> **Partial data:** {len(D["recent_raw_files"])} raw file(s) were still being written when the tables '
           'were built; the numbers describe the data available at that time.\n')
@@ -1945,6 +1948,10 @@ def parse_args(argv=None):
     ap.add_argument('--no-masking', action='store_true',
                     help="PI-NN with one shared encoder instead of the channel-wise input masking "
                          "(ModelConfig.channel_inputs='physics_v2')")
+    # opt-in (2026-10-17 round 4 development CV, DESIGN.md section 3)
+    ap.add_argument('--r-structure', action='store_true',
+                    help="PI-NN with the hard productivity structure (ModelConfig.r_structure='physics': "
+                         "fermentation capital and electricity intensity = theta0(x) + theta1(x) r_ref/r)")
     ap.add_argument('--split-seed', type=int, default=None, help='only when the split is created (default 2026)')
     ap.add_argument('--replan', action='store_true', help='recompute plan.json from the pilot timings')
     ap.add_argument('--fresh', action='store_true', help='delete the fit cache first')
@@ -1998,6 +2005,8 @@ def main(argv=None):
             mk_extra['water_gate'] = True
     if not a.no_masking:
         mk_extra['channel_inputs'] = 'physics_v2'
+    if getattr(a, 'r_structure', False):
+        mk_extra['r_structure'] = 'physics'
     if mk_extra:
         ctx['mk_extra'] = mk_extra
     T = lambda name, t0: stage_t.__setitem__(name, time.time() - t0)

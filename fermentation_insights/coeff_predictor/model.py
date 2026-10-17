@@ -56,6 +56,17 @@ Architecture
   hybrid (``residual_width > 0``) adds a shared residual network on all
   inputs (zero-initialized head, strong weight decay
   ``residual_weight_decay``).
+* optional hard productivity structure (``r_structure``; off by default):
+  the four coefficients of every listed output (``R_STRUCTURE_PRESETS
+  ['physics']``: fermentation capital and the electricity intensity) are
+  ``theta0(x) + theta1(x) * (r_ref / r)**beta`` with ``theta1 >= 0``
+  (softplus), ``beta`` fixed (``r_beta``) or learned within
+  ``r_beta_bounds``, and ``theta0``, ``theta1`` computed without the
+  productivity inputs (masked model: 'productivity' removed from those
+  outputs' groups; shared encoder: no productivity inputs at all), so that
+  ``dMPSP/dr <= 0`` holds by construction (fermenter volume ~ product rate /
+  r; agitation / aeration power ~ volume). ``r_ref`` = exp(training mean of
+  log r) (``FeatureSpec.r_stats``).
 
 All raw head outputs are affine-scaled by per-target training means and
 standard deviations (buffers), so that the network works on O(1) numbers.
@@ -85,7 +96,7 @@ except Exception:  # pragma: no cover
 
 __all__ = ('ModelConfig', 'CoefficientNet', 'mpsp_equation', 'mpsp_equation_np',
            'make_layout', 'COEFF_KEYS', 'CHANNELS', 'PRICE_CHANNELS', 'INTENSITY_KEYS',
-           'CHANNEL_INPUT_PRESETS', 'resolve_channel_inputs')
+           'CHANNEL_INPUT_PRESETS', 'resolve_channel_inputs', 'R_STRUCTURE_PRESETS', 'resolve_r_structure')
 
 COEFF_KEYS = ('a', 'b', 'c', 'd')
 #: channels / intensities whose c', d' are gated by the water-removal input
@@ -151,6 +162,32 @@ CHANNEL_INPUT_PRESETS['physics_v2'] = {
     **CHANNEL_INPUT_PRESETS['physics'],
     G_KEY: tuple(g for g in CHANNEL_INPUT_PRESETS['physics'][G_KEY] if g != 'reagent_prices'),
 }
+
+
+#: Hard productivity structure presets (``ModelConfig.r_structure``): outputs
+#: (channel names; a price-explicit channel by its channel name = its
+#: intensity) whose coefficients are theta0(x) + theta1(x) (r_ref / r)^beta.
+#: Development data (DESIGN.md section 3): over the productivity samples of a
+#: configuration only the fermentation capital changes materially (13 % of
+#: the total numerator, up to 41 %; exactly ~ 1/r: beta = 1.0, R^2 = 0.9999,
+#: theta1 >= 0 in every coefficient costs R^2 0.0004); the electricity
+#: intensity changes by <= 1.4 % (agitation / aeration power ~ volume ~ 1/r);
+#: every other channel by <= 1.2 % without a consistent sign (noise of the
+#: per-sample fits).
+R_STRUCTURE_PRESETS = {'physics': ('capex_fermentation', 'electricity')}
+
+
+def resolve_r_structure(r_structure):
+    """``ModelConfig.r_structure`` -> tuple of output names (() = off): a
+    preset name of ``R_STRUCTURE_PRESETS`` or a list of output names."""
+    if r_structure in (None, '', False) or (not isinstance(r_structure, str) and not len(r_structure)):
+        return ()
+    if isinstance(r_structure, str):
+        if r_structure not in R_STRUCTURE_PRESETS:
+            raise ValueError(f'unknown r_structure preset {r_structure!r} (known: {sorted(R_STRUCTURE_PRESETS)}); '
+                             'pass a list of output names for a single output')
+        return tuple(R_STRUCTURE_PRESETS[r_structure])
+    return tuple(str(x) for x in r_structure)
 
 
 def _known_group(g):
@@ -230,6 +267,23 @@ class ModelConfig:
     residual_width: int = 0
     residual_depth: int = 2
     residual_weight_decay: float = 1.0
+    #: hard productivity structure (physics model only; None = off): a preset
+    #: name of R_STRUCTURE_PRESETS or a list of output names whose
+    #: coefficients are theta0(x) + theta1(x) * (r_ref / r)^beta, theta1 >= 0,
+    #: theta0 and theta1 without productivity inputs (dMPSP/dr <= 0 by
+    #: construction when no other output sees the productivity)
+    r_structure: object = None
+    #: exponent beta (fixed), or its initial value when ``r_beta_learn``
+    r_beta: float = 1.0
+    #: learn one beta per structured output within ``r_beta_bounds``
+    r_beta_learn: bool = False
+    r_beta_bounds: tuple = (0.5, 1.5)
+    #: initial theta1 at r_ref: the pooled within-configuration slope of the
+    #: training coefficients on (r_ref / r) (target scales ``*_r_slope``), at
+    #: least ``r_slope_floor`` x the target's training std; without slopes in
+    #: the scales ``r_slope_init`` x std
+    r_slope_init: float = 0.3
+    r_slope_floor: float = 0.01
 
     def __post_init__(self):
         if self.kind not in ('physics', 'plain'):
@@ -238,15 +292,32 @@ class ModelConfig:
             self.channels = self.price_explicit = self.structured_fs = False
             self.fs_eta_bound = self.g_bound = False
             self.channel_inputs = None
+            self.r_structure = None
         if not self.price_explicit:
             self.structured_fs = False
         if isinstance(self.channel_inputs, dict):
             self.channel_inputs = {k: (v if k == 'preset' else list(v)) for k, v in self.channel_inputs.items()}
         resolve_channel_inputs(self.channel_inputs)   # validates
+        if self.r_structure is not None and not isinstance(self.r_structure, str):
+            self.r_structure = list(self.r_structure) or None
+        resolve_r_structure(self.r_structure)          # validates
+        self.r_beta_bounds = tuple(float(b) for b in self.r_beta_bounds)
+        lo, hi = self.r_beta_bounds
+        if not 0. < lo <= hi:
+            raise ValueError(f'r_beta_bounds must satisfy 0 < lo <= hi, got {self.r_beta_bounds}')
+        if not self.r_beta > 0.:
+            raise ValueError(f'r_beta must be > 0 (dMPSP/dr <= 0), got {self.r_beta}')
+        if self.r_beta_learn and not lo <= self.r_beta <= hi:
+            raise ValueError(f'r_beta {self.r_beta} outside r_beta_bounds {self.r_beta_bounds}')
 
     @property
     def masked(self):
         return self.kind != 'plain' and resolve_channel_inputs(self.channel_inputs) is not None
+
+    @property
+    def r_structured(self):
+        """Names of the r-structured outputs (() = off)."""
+        return () if self.kind == 'plain' else resolve_r_structure(self.r_structure)
 
     def to_dict(self):
         return asdict(self)
@@ -259,6 +330,8 @@ class ModelConfig:
         d.setdefault('water_gate', False)
         # ... and before channel-wise input masking: one shared encoder
         d.setdefault('channel_inputs', None)
+        # ... and before the hard productivity structure: off
+        d.setdefault('r_structure', None)
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
@@ -334,11 +407,13 @@ class CoefficientNet(nn.Module):
         self.gate_index = None if (gate_index is None or not cfg.water_gate or cfg.kind == 'plain') \
             else int(gate_index)
         self.masked = cfg.masked
+        self._setup_r_structure(layout)
         if self.masked:
             w = None
             body = self._build_masked(enc, input_groups)
         else:
-            layers, d_in = [], len(enc) + 2
+            # hard productivity structure: the shared encoder sees no productivity
+            layers, d_in = [], len(enc) + (0 if self.r_free else 2)
             for _ in range(cfg.depth):
                 layers += [nn.Linear(d_in, cfg.width), nn.LayerNorm(cfg.width), nn.SiLU(),
                            nn.Dropout(cfg.dropout)]
@@ -403,6 +478,10 @@ class CoefficientNet(nn.Module):
                 buf('rest_std', scales['rest_std'])
             if not self.masked:
                 self.g_head = nn.Linear(w, 1)
+                if self.n_rs:
+                    self.r1_head = nn.Linear(w, 4 * self.n_rs)
+            if self.n_rs:
+                self._build_r_buffers(scales, C, J)
             if cfg.g_bound:
                 buf('g_logit0', scales['g_logit0'])
             else:
@@ -417,6 +496,85 @@ class CoefficientNet(nn.Module):
             # the hybrid starts as the purely masked model
             with torch.no_grad():
                 self.resid_head.weight.zero_()
+
+    # ---- hard productivity structure ----
+    def _setup_r_structure(self, layout):
+        """Structured output slots (``rs_slots``, indices into
+        ``_output_names()[:-1]``) of ``cfg.r_structure``. Without resolved
+        channels (``channels=False``) a listed non-price channel structures
+        the 'rest' head."""
+        cfg = self.cfg
+        rs = set(cfg.r_structured)
+        names = self._output_names()[:-1] if cfg.kind != 'plain' else []
+        if rs and 'rest' in names and any(n not in PRICE_CHANNELS for n in rs):
+            rs.add('rest')
+        self.rs_slots = [s for s, nm in enumerate(names) if nm in rs]
+        self.rs_names = [names[s] for s in self.rs_slots]
+        self.n_rs = len(self.rs_slots)
+        # no productivity input anywhere but through the structure (shared encoder / residual network)
+        self.r_free = self.n_rs > 0
+        if rs and not self.n_rs:
+            warnings.warn(f'r_structure: none of {sorted(rs)} is an output of this model; the structure is off')
+        if self.n_rs and cfg.structured_fs and 'fs' in layout['price_keys'] and 'feedstock' in self.rs_names:
+            raise ValueError('r_structure: the feedstock intensity is structured (structured_fs); '
+                             'it cannot also be r-structured')
+
+    def _build_r_buffers(self, scales, C, J):
+        cfg = self.cfg
+        S = self.n_rs
+        scale = []
+        E_int, E_ch = np.zeros((J, S)), np.zeros((max(C, 1), S))
+
+        def pick(std_key, slope_key, shape, row):
+            sd = np.asarray(scales[std_key], float).reshape(shape)[row]
+            sl = scales.get(slope_key)
+            if sl is None or not len(sl):
+                return cfg.r_slope_init * sd
+            sl = np.asarray(sl, float).reshape(shape)[row]
+            return np.maximum(np.nan_to_num(sl), cfg.r_slope_floor * sd)
+
+        for i, s in enumerate(self.rs_slots):
+            if s < J:
+                scale.append(pick('int_std', 'int_r_slope', (J, 4), s))
+                E_int[s, i] = 1.
+            elif C:
+                scale.append(pick('ch_std', 'ch_r_slope', (C, 4), s - J))
+                E_ch[s - J, i] = 1.
+            else:
+                scale.append(pick('rest_std', 'rest_r_slope', (1, 4), 0))
+                E_ch[0, i] = 1.
+        # derived from the config and the target scales: not saved
+        # (theta1 = rs_std * softplus(raw1 + u0) = rs_std at initialization)
+        for name, v in (('rs_std', np.array(scale)), ('rs_E_int', E_int), ('rs_E_ch', E_ch)):
+            self.register_buffer(name, torch.as_tensor(v, dtype=torch.float32), persistent=False)
+        self.rs_u0 = _inv_softplus(1.)
+        lo, hi = cfg.r_beta_bounds
+        if cfg.r_beta_learn:
+            f = min(max((cfg.r_beta - lo) / (hi - lo), 1e-4), 1 - 1e-4) if hi > lo else 0.5
+            self.r_beta_raw = nn.Parameter(torch.full((S,), math.log(f / (1 - f))))
+        else:
+            self.register_buffer('r_beta_fixed', torch.full((S,), float(cfg.r_beta)), persistent=False)
+
+    def r_beta_values(self):
+        """Exponent beta of every structured output, (n_rs,) tensor."""
+        if self.cfg.r_beta_learn:
+            lo, hi = self.cfg.r_beta_bounds
+            return lo + (hi - lo) * torch.sigmoid(self.r_beta_raw)
+        return self.r_beta_fixed
+
+    @property
+    def r_ref(self):
+        """Reference productivity of theta1 (g/L/h): exp(training mean of log r)."""
+        return float(torch.exp(self.r_mu[0]))
+
+    def _r_terms(self, raw1, log_r):
+        """(theta1 (n, S, 4) >= 0 at r_ref, additive term (n, S, 4)): the
+        structured part theta1 * ((r_ref / r)^beta - 1); the '- 1' keeps
+        the raw head of the output equal to the coefficient at r_ref."""
+        th1 = self.rs_std * F.softplus(raw1 + self.rs_u0)
+        beta = self.r_beta_values()
+        rho = torch.exp(beta[None, :] * (self.r_mu[0] - log_r[:, None])) - 1.
+        return th1, th1 * rho[:, :, None]
 
     # ---- channel-wise input masking ----
     def _output_names(self):
@@ -451,6 +609,9 @@ class CoefficientNet(nn.Module):
         n_int = len(self.layout['price_keys'])
         for s, name in enumerate(names):
             gs = set(spec.get(name, every))
+            if s in self.rs_slots:
+                # hard productivity structure: theta0, theta1 without productivity inputs
+                gs.discard(R_GROUP)
             if s >= n_int and name in PRICE_CHANNELS:
                 # a price channel resolved as an ordinary channel (price_explicit=False):
                 # its price is an encoder feature
@@ -474,14 +635,15 @@ class CoefficientNet(nn.Module):
             d_in = len(idx) + 2 * self.sub_r[k]
             net, w = self._block(max(d_in, 1), cfg.masked_width, cfg.masked_depth)
             nets.append(net)
-            n_out = sum(1 if s == self.n_slots else 4 for s in slots[k])
+            n_out = sum(1 if s == self.n_slots else 8 if s in self.rs_slots else 4 for s in slots[k])
             heads.append(nn.Linear(w, n_out))
             for s in slots[k]:
                 self.output_inputs[names[s]] = dict(columns=idx, productivity=self.sub_r[k], groups=list(gs))
         self.sub_nets, self.sub_heads = nn.ModuleList(nets), nn.ModuleList(heads)
         body = {id(m) for net in nets for m in net}
         if cfg.residual_width > 0:
-            self.resid_encoder, w = self._block(len(enc) + 2, cfg.residual_width, cfg.residual_depth)
+            self.resid_encoder, w = self._block(len(enc) + (0 if self.r_free else 2), cfg.residual_width,
+                                                cfg.residual_depth)
             self.resid_head = nn.Linear(w, 4 * self.n_slots + 1)
             body |= {id(m) for m in self.resid_encoder}
         used = {i for v in self.output_inputs.values() for i in v['columns']}
@@ -501,12 +663,14 @@ class CoefficientNet(nn.Module):
 
     def _raw_masked(self, X, log_r):
         """Standardized outputs of the masked model: (n, S, 4) for the slots of
-        ``_output_names`` but the last, and (n,) for the recovery."""
+        ``_output_names`` but the last, (n,) for the recovery and, with the
+        hard productivity structure, (n, n_rs, 4) raw theta1 heads (else None)."""
         n = X.shape[0]
         if self.cfg.clip_inputs >= 0:
             X = torch.maximum(torch.minimum(X, self.x_hi.to(X.dtype)), self.x_lo.to(X.dtype))
         rf = self.r_features(log_r)
         out, zg = [None] * self.n_slots, None
+        out1 = [None] * self.n_rs
         for k, (net, head) in enumerate(zip(self.sub_nets, self.sub_heads)):
             idx = getattr(self, f'sub_index_{k}')
             parts = ([X[:, idx]] if len(idx) else []) + ([rf] if self.sub_r[k] else [])
@@ -517,13 +681,15 @@ class CoefficientNet(nn.Module):
                     zg, j = o[:, j], j + 1
                 else:
                     out[s], j = o[:, j:j + 4], j + 4
+                    if s in self.rs_slots:
+                        out1[self.rs_slots.index(s)], j = o[:, j:j + 4], j + 4
         raw = torch.stack(out, 1)
         if self.cfg.residual_width > 0:
             Xe = X if self.enc_all else X[:, self.enc_index]
-            r = self.resid_head(self.resid_encoder(torch.cat([Xe, rf], -1)))
+            r = self.resid_head(self.resid_encoder(torch.cat([Xe] if self.r_free else [Xe, rf], -1)))
             raw = raw + r[:, :4 * self.n_slots].view(n, self.n_slots, 4)
             zg = zg + r[:, 4 * self.n_slots]
-        return raw, zg
+        return raw, zg, (torch.stack(out1, 1) if self.n_rs else None)
 
     # ---- inputs ----
     def r_features(self, log_r):
@@ -534,6 +700,8 @@ class CoefficientNet(nn.Module):
             X = torch.maximum(torch.minimum(X, self.x_hi.to(X.dtype)), self.x_lo.to(X.dtype))
         if not self.enc_all:
             X = X[:, self.enc_index]
+        if self.r_free:
+            return self.encoder(X)
         return self.encoder(torch.cat([X, self.r_features(log_r)], -1))
 
     def _gate(self, X, ungated):
@@ -550,9 +718,10 @@ class CoefficientNet(nn.Module):
         ``price_channels`` (n, J, 4) = price x intensity and, without channel
         heads, ``rest`` (n, 4) = all non-price costs."""
         n = X.shape[0]
+        raw1 = None
         if self.masked:
             h = None
-            raw_all, zg = self._raw_masked(X, log_r)
+            raw_all, zg, raw1 = self._raw_masked(X, log_r)
             J = self.n_price
             raw_int, raw_ch = raw_all[:, :J], raw_all[:, J:]
         else:
@@ -562,9 +731,18 @@ class CoefficientNet(nn.Module):
             return {'coef': o[:, :4], 'g': o[:, 4]}
         out = {}
         total = 0.
+        if self.n_rs:
+            # hard productivity structure: theta(x, r) = base(x) + theta1(x) ((r_ref/r)^beta - 1)
+            if raw1 is None:
+                raw1 = self.r1_head(h).view(n, self.n_rs, 4)
+            th1, radd = self._r_terms(raw1, log_r)
+            base_rs = 0.
         if self.n_price:
             raw = raw_int if self.masked else self.int_head(h).view(n, self.n_price, 4)
             q = self.int_mean + self.int_std * raw
+            if self.n_rs:
+                base_rs = base_rs + torch.einsum('js,njk->nsk', self.rs_E_int, q)
+                q = q + torch.einsum('js,nsk->njk', self.rs_E_int, radd)
             if self.cfg.structured_fs and self.j_fs >= 0:
                 u = self.fs_u_center + self.fs_u_scale * raw[:, self.j_fs, 1]
                 z = F.softplus(u) if self.cfg.fs_eta_bound else u
@@ -581,6 +759,9 @@ class CoefficientNet(nn.Module):
         if self.n_channels:
             rc = raw_ch if self.masked else self.ch_head(h).view(n, self.n_channels, 4)
             ch = self.ch_mean + self.ch_std * rc
+            if self.n_rs:
+                base_rs = base_rs + torch.einsum('cs,nck->nsk', self.rs_E_ch, ch)
+                ch = ch + torch.einsum('cs,nsk->nck', self.rs_E_ch, radd)
             if self.gate_index is not None:
                 ch = ch * self._gate(X, self.gate_ch)
             out['channels'] = ch
@@ -589,6 +770,9 @@ class CoefficientNet(nn.Module):
             # all non-price costs in one head; returned so that the reported
             # channel breakdown still sums to the totals
             rest = self.rest_mean + self.rest_std * (raw_ch[:, 0] if self.masked else self.rest_head(h))
+            if self.n_rs:
+                base_rs = base_rs + self.rs_E_ch[0][None, :, None] * rest[:, None, :]
+                rest = rest + torch.einsum('s,nsk->nk', self.rs_E_ch[0], radd)
             out['rest'] = rest
             total = total + rest
         if not self.masked:
@@ -599,6 +783,11 @@ class CoefficientNet(nn.Module):
             g = self.g_mean + self.g_std * zg
         out['coef'] = total
         out['g'] = g
+        if self.n_rs:
+            # theta(x, r) = r_theta0 + r_theta1 (r_ref / r)^beta for the outputs ``rs_names``
+            # (before the water gate); both are independent of r by construction
+            out['r_theta1'] = th1
+            out['r_theta0'] = base_rs - th1
         return out
 
     @staticmethod
@@ -617,6 +806,10 @@ class CoefficientNet(nn.Module):
         arch = (f'masked: {len(self.sub_nets)} sub-networks of width {self.cfg.masked_width}, '
                 f'residual width {self.cfg.residual_width}, unused inputs {len(self.unused_inputs)}'
                 if self.masked else f'width={self.cfg.width}, depth={self.cfg.depth}')
+        if self.n_rs:
+            b = [round(float(v), 3) for v in self.r_beta_values().detach()]
+            arch += (f', r-structured {self.rs_names} (beta={b}{" learned" if self.cfg.r_beta_learn else ""}, '
+                     f'r_ref={self.r_ref:.3g} g/L/h)')
         return (f'CoefficientNet(kind={self.cfg.kind}, {arch}, '
                 f'channels={self.layout["channels"]}, price_keys={self.layout["price_keys"]}, '
                 f'params={n})')
