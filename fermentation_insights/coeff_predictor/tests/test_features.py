@@ -138,3 +138,16 @@ def test_nonsugar_solids_not_computed_as_dry(fitted):
     b = spec.transform([rec])
     assert 'fs_w_water' in b.imputed and 'phys_fs_nonsugar_solids' in b.imputed
     assert b.imputed_rows == [b.imputed] and not b.invalid.any()
+
+
+def test_readme_field_reference_matches_field_units():
+    """README.md section 5 is generated from FIELD_UNITS: every field has its
+    row with the current unit text (regenerate the row if this fails)."""
+    import os
+    from fermentation_insights.coeff_predictor import features
+    path = os.path.join(os.path.dirname(features.__file__), 'README.md')
+    with open(path) as fh:
+        text = fh.read()
+    stale = [f'| `{k}` | {u.replace("|", chr(92) + "|")} |' for k, u in features.FIELD_UNITS.items()
+             if f'| `{k}` | {u.replace("|", chr(92) + "|")} |' not in text]
+    assert not stale, 'README field reference out of date; expected rows starting with: ' + '; '.join(stale)

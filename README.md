@@ -25,6 +25,18 @@ and add the 'biosteam' folder to your PYTHONPATH.
 pip install -r requirements.txt
 ```
 
+Coefficient predictor (physics-informed deep learning)
+------------------------------------------------------
+
+[`fermentation_insights/coeff_predictor`](fermentation_insights/coeff_predictor/README.md) predicts the coefficients
+a', b', c', d' and the recovery g of the unifying equation, MPSP = (a' + b'/y + c'/t + d'/(y·t))/g, directly from a
+specification of the feedstock, fermentation product, final product and fermentation regime, without building a process
+model. It is a physics-informed deep ensemble (cost-channel decomposition, price-explicit intensities, equation layer,
+physical constraints, uncertainty intervals and an applicability domain) trained on BioSTEAM simulations of 7
+Bioindustrial-Park biorefineries (41 configurations). It is independent of the publication-reproduction steps above; see
+its [README](fermentation_insights/coeff_predictor/README.md) for installation, a quickstart, validation and the
+reproduction of its training data, and [DESIGN.md](fermentation_insights/coeff_predictor/DESIGN.md) for the design.
+
 Documentation & Tutorials
 -------------------------
 

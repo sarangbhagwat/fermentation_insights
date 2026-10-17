@@ -130,7 +130,8 @@ G_MAX = 'final_product_stoich_mass_ratio'
 REQUIRED_FIELDS = ('r', 'theoretical_yield', 'inflection_yield', G_MAX, W_SUGAR,
                    'feedstock_price')
 
-#: Units / basis of user-facing input fields (see predict.py).
+#: Units / basis of user-facing input fields (see predict.py; the field
+#: reference of README.md is generated from this dict).
 FIELD_UNITS = {
     'r': 'g/L/h (fermentation productivity, > 0)',
     'feedstock_price': 'USD/kg wet (as-received) feedstock',
@@ -147,6 +148,39 @@ FIELD_UNITS = {
     'y': 'g fermentation product / g glucose-eq. sugar',
     't': 'g/L',
     'MPSP': 'USD/kg final product',
+    'recovery': 'kg final product / kg fermentation product (optional known recovery g, replaces the '
+                'predicted g; 0 < g <= final_product_stoich_mass_ratio)',
+    # names (registry keys) and chemical IDs
+    'feedstock': 'name; a known one fills composition, type and baseline capacity',
+    'fermentation_product': 'name; a known one fills yields and acid properties',
+    'final_product': 'name; a known product pair fills the stoichiometric ratio, the regime where unique '
+                     'and the contextual baselines',
+    'config_id': 'name of a known configuration (downstream.TABLE); fills the downstream fields',
+    'ferm_product_chemical': 'chemical ID of the fermentation-product descriptors (registry/chemicals.json, '
+                             'register_chemical or descriptors=)',
+    'final_product_chemical': 'chemical ID of the final-product descriptors',
+    # fermentation regime
+    'feedstock_type': 'pure_sugar, starch, sugar_juice or lignocellulose',
+    'n_acid_groups': 'carboxylic acid groups per molecule of fermentation product (0 if not an acid)',
+    'pKa1': 'first pKa of the fermentation product (NaN if not an acid)',
+    'product_water_solubility': 'g/L water at 25 C (1000 if miscible)',
+    'neutralization': 'bool: pH control by base addition in fermentation',
+    'neutralizing_agent': "base dosed in fermentation, e.g. 'Ca(OH)2', 'NaOH'; 'none' if none",
+    'upgrading': 'bool: chemical conversion of the fermentation product after fermentation',
+    'aerobic': 'bool',
+    'fermentation_mode': 'batch, fed-batch or continuous',
+    'separation_principle': 'free text; used only by checkpoints trained without the downstream fields',
+    # contextual parameters (omitted: product-pair baseline, else training baseline)
+    'p_operating_days': 'd/yr',
+    'p_IRR': 'fraction (internal rate of return)',
+    'p_income_tax': 'fraction',
+    'p_boiler_efficiency': 'fraction',
+    'p_turbogenerator_efficiency': 'fraction',
+    'p_cell_mass_yield': 'g cell mass / g sugar (biorefinery convention)',
+    'p_base_price': 'USD/kg base',
+    'p_acid_price': 'USD/kg acid',
+    'p_enzyme_loading': 'biorefinery-specific units',
+    'p_saccharification_yield': 'fraction',
     **_ds.FIELDS,
 }
 

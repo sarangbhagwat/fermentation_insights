@@ -12,11 +12,14 @@ User-facing prediction of the unifying-equation coefficients.
 Example
 -------
 >>> from fermentation_insights.coeff_predictor.predict import CoefficientPredictor
->>> P = CoefficientPredictor.load('checkpoints/ensemble')            # doctest: +SKIP
+>>> P = CoefficientPredictor.load('models/release')                 # doctest: +SKIP
 >>> spec = dict(feedstock='cornstover', fermentation_product='HP',
 ...             final_product='AcrylicAcid', r=0.5, feedstock_price=0.08)
 >>> P.predict(spec)[['a', 'b', 'c', 'd', 'g']]                      # doctest: +SKIP
 >>> P.mpsp(spec, y=[0.3, 0.5], t=[50, 100])                         # doctest: +SKIP
+>>> P.mpsp(spec, y=0.5, t=100, recovery=0.7)   # known g            # doctest: +SKIP
+
+See ``README.md`` (quickstart) and ``examples/quickstart.py``.
 
 Input units and basis (``CoefficientPredictor.field_units``,
 ``features.FIELD_UNITS``)
@@ -67,10 +70,40 @@ matches). New chemicals are described by passing
 ``features.register_chemical`` or ``features.describe_new_chemical`` (needs
 thermosteam), or by ``fp_*``/``pp_*`` fields in the spec. Omitted
 categorical regime fields that cannot be filled are encoded as 'unknown'.
+Regime fields that vary for the product pair in training should be given
+(else they are encoded as unknown and a UserWarning names them); fields the
+checkpoint does not use (the downstream
+fields without ``FeatureSpec(downstream=True)``, else the free-text
+``separation_principle``) are not asked for.
+
+User-supplied recovery (``recovery=`` argument or ``recovery`` spec field)
+--------------------------------------------------------------------------
+If the recovery of the downstream process is known, pass it as
+``recovery=`` (a scalar for every row, or one value per row; None/NaN = use
+the prediction) or as a ``recovery`` field of the spec (the argument takes
+precedence). It replaces the predicted g in ``g``, in the MPSP and in
+:meth:`CoefficientPredictor.unprimed`, while the predicted primed
+coefficients a', b', c', d' (and their channels and intervals) are kept.
+It must satisfy 0 < g <= g_max = ``final_product_stoich_mass_ratio`` (the
+stoichiometric ratio, after the registry fill), else ValueError.
+
+Approximation: g * MPSP = (a' + b'/y + c'/t + d'/(y*t)) is the cost per kg of
+*fermentation product*, which, at a fixed process design, does not depend on
+how much of that product is recovered downstream; to first order, a
+different recovery only changes the mass of final product over which the
+same costs are spread, MPSP = N(y, t) / g. Not captured: costs that scale
+with the recovered product mass (product purification / drying / upgrading
+reagents, storage), the design changes (and their costs) that a different
+recovery would need, and changes of coproduct credits from unrecovered
+product. The MPSP intervals with a user recovery reflect the coefficient
+uncertainty only (their conformal calibration included the predicted g's
+error); they are not calibrated for this approximation.
 
 Output columns of :meth:`CoefficientPredictor.predict`
 ------------------------------------------------------
-``a, b, c, d, g`` (ensemble mean; primed basis, a' = g*A), ``<k>_std``
+``a, b, c, d, g`` (ensemble mean; primed basis, a' = g*A; ``g`` = the
+user-supplied recovery where given), ``g_predicted`` (the model's g, ensemble
+mean), ``g_source`` ('predicted' or 'user'), ``<k>_std``
 (ensemble spread), ``<k>_lo``/``<k>_hi`` (split-conformal interval at level
 1 - alpha), ``ch__<channel>__<k>`` (per-channel breakdown, sums to the
 totals), ``int__<fs|el|ng>__<k>`` (intensities of price-explicit channels),
@@ -82,9 +115,11 @@ given by the user: product baseline or training baseline) and
 ``filled_from_registry``. Without per-channel heads (``channels=False``) the
 breakdown has a ``ch__rest__<k>`` channel. Intervals are omitted when the
 calibration set was too small for the nominal level
-(``ensemble.conformal['<k>_level']``).
+(``ensemble.conformal['<k>_level']``). With a user recovery, ``g_std`` = 0 and
+``g_lo`` = ``g_hi`` = ``g`` on that row.
 """
 import difflib
+import math
 import warnings
 
 import numpy as np
@@ -92,8 +127,8 @@ import pandas as pd
 
 from . import downstream
 from .features import (MissingSpecError, ApplicabilityWarning, REQUIRED_FIELDS, FIELD_UNITS,
-                       PRICE_ALIASES, W_SUGAR, W_SUGAR_MAX, G_MAX, apply_spec_registry,
-                       warn_if_outside, _as_frame)
+                       PRICE_ALIASES, W_SUGAR, W_SUGAR_MAX, G_MAX, DOWNSTREAM_FIELDS,
+                       FREE_TEXT_CATEGORICAL, apply_spec_registry, warn_if_outside, _as_frame)
 from .model import COEFF_KEYS, mpsp_equation_np
 from .train import Ensemble, setup_torch
 
@@ -149,6 +184,8 @@ class CoefficientPredictor:
         df = _as_frame(spec).reset_index(drop=True)
         reg = self.spec.spec_registry or {}
         params = [d for d in self.spec.numeric if d['kind'] == 'param' and d['name'].startswith('p_')]
+        # regime fields this checkpoint does not use are never reported as ambiguous
+        unused = set(FREE_TEXT_CATEGORICAL) if self.spec.downstream else set(DOWNSTREAM_FIELDS)
         rows, det = [], []
         for rec in df.to_dict('records'):
             info = {}
@@ -169,7 +206,8 @@ class CoefficientPredictor:
                 ctx.append('feedstock_capacity')
                 extra.append('feedstock_capacity')
             rows.append(rec)
-            det.append(dict(filled=list(f), unknown=info.get('unknown', []), ambiguous=info.get('ambiguous', []),
+            det.append(dict(filled=list(f), unknown=info.get('unknown', []),
+                            ambiguous=[c for c in info.get('ambiguous', []) if c not in unused],
                             contextual=sorted(set(ctx)), imputed_extra=extra))
         out = pd.DataFrame(rows)
         return (out, det) if details else (out, [d['filled'] for d in det])
@@ -251,12 +289,72 @@ class CoefficientPredictor:
             warnings.warn('contextual parameters not specified, assumed baseline values: ' + ', '.join(ctx),
                           UserWarning, stacklevel=stacklevel)
 
+    @staticmethod
+    def _user_recovery(df, batch, recovery=None):
+        """Per-row user-supplied recovery g (NaN = use the prediction) from the
+        ``recovery=`` argument (scalar or one value per row) or else the
+        ``recovery`` spec field. Raises ValueError unless 0 < g <= g_max
+        (``final_product_stoich_mass_ratio`` of the row, after the registry fill)."""
+        n = len(df)
+        if recovery is None:
+            if 'recovery' not in df:
+                return np.full(n, np.nan)
+            vals, src = list(df['recovery']), "spec field 'recovery'"
+        else:
+            arr = np.asarray(recovery, dtype=object)
+            if arr.ndim == 0:
+                vals = [arr.item()] * n
+            elif arr.ndim == 1 and len(arr) == n:
+                vals = list(arr)
+            else:
+                raise ValueError(f'recovery= must be a scalar or one value per spec row ({n} rows); '
+                                 f'got shape {arr.shape}')
+            src = 'recovery argument'
+        g = np.full(n, np.nan)
+        for i, v in enumerate(vals):
+            if v is None or (isinstance(v, str) and v.strip() == ''):
+                continue
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                raise ValueError(f'{src}: recovery of row {i} must be a number in (0, g_max] '
+                                 f'[{FIELD_UNITS["recovery"]}]; got {v!r}') from None
+            if math.isnan(x):
+                continue                  # not given: predicted g
+            g[i] = x
+        given = ~np.isnan(g)
+        gmax = np.asarray(batch.g_max, float)
+        with np.errstate(invalid='ignore'):
+            bad = given & ~(np.isfinite(g) & (g > 0) & (g <= gmax * (1. + 1e-9)))
+        if bad.any():
+            names = lambda i: f"{df['fermentation_product'].iloc[i]} -> {df['final_product'].iloc[i]}" \
+                if {'fermentation_product', 'final_product'} <= set(df) else ''
+            rows = '; '.join(f'row {i}: g = {g[i]:.6g}, g_max = {gmax[i]:.6g}'
+                             + (f' ({names(i)})' if names(i) else '') for i in np.flatnonzero(bad)[:10])
+            raise ValueError(
+                f'{src}: the recovery g must satisfy 0 < g <= g_max, where g_max = '
+                f'final_product_stoich_mass_ratio is the stoichiometric mass ratio of final to fermentation '
+                f'product [kg final product / kg fermentation product]; {rows}')
+        return g
+
+    @staticmethod
+    def _g_source(g_user):
+        return np.where(np.isnan(g_user), 'predicted', 'user')
+
     # ---- predictions ----
-    def predict(self, spec, descriptors=None, warn=True):
+    def predict(self, spec, descriptors=None, warn=True, recovery=None):
         """Predict coefficients for one spec (dict) or many (DataFrame / list
-        of dicts). Returns a DataFrame with one row per spec."""
+        of dicts). Returns a DataFrame with one row per spec.
+
+        ``recovery``: optional known recovery g [kg final / kg fermentation
+        product] (scalar, or one value per row; None/NaN = predicted); else a
+        ``recovery`` spec field is used where given. It replaces the predicted
+        g (kept as ``g_predicted``) and leaves a', b', c', d' unchanged (a
+        first-order approximation, see the module docstring)."""
         ens = self.ensemble
         df, batch, det = self._batch(spec, descriptors, warn)
+        g_user = self._user_recovery(df, batch, recovery)
+        user = ~np.isnan(g_user)
         outs = ens.member_outputs(batch)
         conf = ens.conformal or {}
         res = {}
@@ -278,6 +376,14 @@ class CoefficientPredictor:
             if ens.mcfg.g_bound:
                 hi = np.minimum(hi, batch.g_max * (1. + ens.mcfg.g_margin))
             res['g_hi'] = hi
+        res['g_predicted'] = mu.copy()
+        if user.any():
+            res['g'] = np.where(user, g_user, mu)
+            res['g_std'] = np.where(user, 0., sd)
+            for k in ('g_lo', 'g_hi'):
+                if k in res:
+                    res[k] = np.where(user, g_user, res[k])
+        res['g_source'] = self._g_source(g_user)
         if 'channels' in outs:
             for c, name in enumerate(ens.channel_names()):
                 for k, key in enumerate(COEFF_KEYS):
@@ -331,17 +437,21 @@ class CoefficientPredictor:
             warnings.warn('; '.join(msgs), ApplicabilityWarning, stacklevel=3)
         return impossible
 
-    def mpsp(self, spec, y, t, descriptors=None, warn=True):
+    def mpsp(self, spec, y, t, descriptors=None, warn=True, recovery=None):
         """MPSP [USD/kg] at yields ``y`` [g/g] and titers ``t`` [g/L]
         (broadcast against each other) for each spec row. Returns a long
         DataFrame with ``row, y, t, MPSP`` (ensemble mean of the members'
-        MPSP), ``MPSP_std`` and the calibrated ``MPSP_lo``/``MPSP_hi``.
-        Raises ValueError for y <= 0 or t <= 0; yields above the row's
-        theoretical yield give NaN (with an ApplicabilityWarning)."""
+        MPSP), ``MPSP_std``, the calibrated ``MPSP_lo``/``MPSP_hi`` and
+        ``g_source``. Raises ValueError for y <= 0 or t <= 0; yields above the
+        row's theoretical yield give NaN (with an ApplicabilityWarning).
+        ``recovery`` as in :meth:`predict`: every member's MPSP is then
+        (a' + b'/y + c'/t + d'/(y t)) / recovery (intervals: coefficient
+        uncertainty only)."""
         ens = self.ensemble
         y, t = np.broadcast_arrays(np.atleast_1d(np.asarray(y, float)), np.atleast_1d(np.asarray(t, float)))
         y, t = y.ravel(), t.ravel()
         df, batch, det = self._batch(spec, descriptors, warn)
+        g_user = self._user_recovery(df, batch, recovery)
         if warn and ens.ad is not None:
             ratio, oor = self._ad(batch)
             warn_if_outside(ratio, oor)
@@ -351,7 +461,8 @@ class CoefficientPredictor:
         outs = ens.member_outputs(batch)
         n = len(batch)
         Y, T = np.tile(y, (n, 1)), np.tile(t, (n, 1))
-        mm = mpsp_equation_np(outs['coef'][:, :, None, :], outs['g'][:, :, None], Y[None], T[None])
+        g = np.where(np.isnan(g_user)[None, :], outs['g'], g_user[None, :])
+        mm = mpsp_equation_np(outs['coef'][:, :, None, :], g[:, :, None], Y[None], T[None])
         mm = np.where(impossible[None], np.nan, mm)
         mu, sd = mm.mean(0), mm.std(0)
         rows = dict(row=np.repeat(np.arange(n), len(y)), y=Y.ravel(), t=T.ravel(),
@@ -360,10 +471,12 @@ class CoefficientPredictor:
         if q is not None and np.isfinite(q):
             hw = q * (sd + ens.conformal.get('mpsp_eps_rel', 0.01) * np.abs(mu))
             rows['MPSP_lo'], rows['MPSP_hi'] = (mu - hw).ravel(), (mu + hw).ravel()
+        rows['g_source'] = np.repeat(self._g_source(g_user), len(y))
         return pd.DataFrame(rows)
 
     def unprimed(self, spec, **kw):
-        """MPSP-level coefficients A, B, C, D = a'/g, ... (ensemble means)."""
+        """MPSP-level coefficients A, B, C, D = a'/g, ... (ensemble means; g =
+        the user-supplied ``recovery`` where given, see :meth:`predict`)."""
         p = self.predict(spec, **kw)
         return pd.DataFrame({k.upper(): p[k] / p['g'] for k in COEFF_KEYS})
 

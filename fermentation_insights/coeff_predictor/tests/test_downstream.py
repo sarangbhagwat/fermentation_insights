@@ -222,6 +222,14 @@ def test_water_gate(broth_tables, tmp_path):
         P.predict(dict(new, separation_ops='evaporation+magic'))
     assert P.known_downstream('ethanol_corn')['water_removal_route'] == 'distill_product'
     assert set(P.downstream_vocabulary['water_removal_route']) == set(ds.ROUTES)
+    # an omitted regime field that varies in training is reported unless the checkpoint does not use it
+    reg = P.spec.spec_registry['regime']['HP|AcrylicAcid']
+    reg['varying'] = ['separation_principle', 'neutralization', 'separation_ops']
+    for c in reg['varying']:
+        reg['fields'].pop(c, None)
+    q = dict(feedstock='glucose', fermentation_product='HP', final_product='AcrylicAcid', r=0.4, feedstock_price=0.3)
+    _, det = P._frame(q, details=True)
+    assert det[0]['ambiguous'] == ['neutralization', 'separation_ops']
 
 
 def test_gram_errors_and_split_metrics(broth_tables):

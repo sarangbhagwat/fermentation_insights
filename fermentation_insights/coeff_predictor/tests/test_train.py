@@ -289,3 +289,82 @@ def test_no_channels_breakdown_sums_to_totals(tables):
     for k in 'abcd':
         ch = [c for c in p if c.startswith('ch__') and c.endswith(f'__{k}')]
         assert len(ch) == 4 and np.isclose(sum(p[c].iloc[0] for c in ch), p[k].iloc[0], rtol=1e-6)
+
+
+def test_user_recovery_overrides_g_keeps_primed_coefficients(ensemble, tables):
+    samples, _, _ = tables
+    P = CoefficientPredictor(ensemble)
+    rec = samples.iloc[3].to_dict()
+    assert 'recovery' not in rec
+    gmax = rec['final_product_stoich_mass_ratio']
+    gu, gu2 = 0.5 * gmax, 0.7 * gmax
+    y, t = [0.3, 0.5], [40., 100.]
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        p0, p1 = P.predict(rec), P.predict(rec, recovery=gu)
+        m0, m1 = P.mpsp(rec, y=y, t=t), P.mpsp(rec, y=y, t=t, recovery=gu)
+        u1 = P.unprimed(rec, recovery=gu)
+    keep = [c for c in p0 if c[0] in 'abcd' and (len(c) == 1 or c[1] == '_')] + \
+        [c for c in p0 if c.startswith(('ch__', 'int__'))] + ['ad_ratio']
+    np.testing.assert_allclose(p1[keep].to_numpy(float), p0[keep].to_numpy(float), rtol=1e-12)
+    assert p0['g_source'].iloc[0] == 'predicted' and np.isclose(p0['g_predicted'].iloc[0], p0['g'].iloc[0])
+    assert p1['g_source'].iloc[0] == 'user' and p1['g'].iloc[0] == gu and p1['g_std'].iloc[0] == 0.
+    assert np.isclose(p1['g_predicted'].iloc[0], p0['g'].iloc[0])
+    assert p1['g_lo'].iloc[0] == p1['g_hi'].iloc[0] == gu
+    np.testing.assert_allclose(u1.to_numpy(float)[0], p0[list('abcd')].to_numpy(float)[0] / gu, rtol=1e-12)
+    # MPSP = numerator of the predicted primed coefficients / user recovery
+    a, b, c, d = (p0[k].iloc[0] for k in 'abcd')
+    Y, T = m1['y'].to_numpy(), m1['t'].to_numpy()
+    np.testing.assert_allclose(m1['MPSP'], (a + b / Y + c / T + d / (Y * T)) / gu, rtol=1e-9)
+    assert (m1['g_source'] == 'user').all() and (m0['g_source'] == 'predicted').all()
+    assert (m1['MPSP_lo'] <= m1['MPSP']).all() and (m1['MPSP'] <= m1['MPSP_hi']).all()
+    assert not np.allclose(m0['MPSP'], m1['MPSP'])
+    # spec field 'recovery' (the argument takes precedence), per-row values, None/NaN = predicted
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        p2 = P.predict(dict(rec, recovery=gu))
+        p3 = P.predict(dict(rec, recovery=gu), recovery=gu2)
+        p4 = P.predict([rec, rec, rec], recovery=[None, gu, float('nan')])
+        p5 = P.predict([dict(rec, recovery=None), dict(rec, recovery=gu)])
+        p6 = P.predict(rec, recovery=gmax)                         # bound itself is allowed
+    assert p2['g'].iloc[0] == gu and p3['g'].iloc[0] == gu2
+    assert list(p4['g_source']) == ['predicted', 'user', 'predicted'] and p4['g'].iloc[1] == gu
+    assert np.isclose(p4['g'].iloc[0], p0['g'].iloc[0]) and np.isclose(p4['g'].iloc[2], p0['g'].iloc[0])
+    assert list(p5['g_source']) == ['predicted', 'user'] and p6['g'].iloc[0] == gmax
+
+
+@pytest.mark.parametrize('bad', [0., -0.2, 'gmax*1.01', float('inf'), 'abc', [0.5, 0.5]])
+def test_user_recovery_validation(ensemble, tables, bad):
+    samples, _, _ = tables
+    P = CoefficientPredictor(ensemble)
+    rec = samples.iloc[3].to_dict()
+    if bad == 'gmax*1.01':
+        bad = 1.01 * rec['final_product_stoich_mass_ratio']
+    match = 'one value per spec row' if isinstance(bad, list) else 'g_max'
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        with pytest.raises(ValueError, match=match):
+            P.predict(rec, recovery=bad)
+        with pytest.raises(ValueError, match=match):
+            P.mpsp(rec, y=0.3, t=50., recovery=bad)
+        if not isinstance(bad, list):
+            with pytest.raises(ValueError, match="spec field 'recovery'"):
+                P.predict(dict(rec, recovery=bad))
+    assert 'recovery' in P.field_units
+
+
+def test_unused_regime_fields_not_reported_as_ambiguous(ensemble):
+    import copy
+    ens = copy.copy(ensemble)
+    ens.spec = copy.deepcopy(ensemble.spec)
+    P = CoefficientPredictor(ens)
+    assert not P.spec.downstream
+    reg = P.spec.spec_registry['regime']['HP|AcrylicAcid']
+    reg['varying'] = ['separation_principle', 'neutralization', 'separation_ops', 'water_removal_route']
+    for c in reg['varying']:
+        reg['fields'].pop(c, None)
+    q = dict(feedstock='corn', fermentation_product='HP', final_product='AcrylicAcid', r=0.5, feedstock_price=0.2)
+    _, det = P._frame(q, details=True)
+    assert det[0]['ambiguous'] == ['separation_principle', 'neutralization']
+    with pytest.warns(UserWarning, match='not unique'):
+        P.predict(dict(q, recovery=None))
