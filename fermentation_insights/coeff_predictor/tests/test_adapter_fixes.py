@@ -78,7 +78,70 @@ def test_adapter_versions_and_descriptors():
     assert tal_m._CANONICAL_LC['fermentation y. lipolytica yield'] == 'p_cell_mass_yield'
     _, su = _configs('succinic')
     for c in su.values():
-        assert c['adapter_version'] == 2 and c['neutralizing_agent'] == 'Ca(OH)2'
+        neutral = c['config_id'].startswith('succinic_neutral_')
+        assert c['neutralization'] == neutral and c['neutralizing_agent'] == 'Ca(OH)2'
+        # v3 (D15): only the neutral configurations changed (salt formation, acidulation)
+        assert c['adapter_version'] == (3 if neutral else 2)
+        assert c['separation_principle'].startswith('acidulation(H2SO4)+gypsum_filtration+') == neutral
+        assert c['separation_principle'].endswith('evaporation+crystallization')
     assert not su['succinic_corn']['neutralization'] and su['succinic_neutral_corn']['neutralization']
     _, et = _configs('ethanol')
     assert all(c['adapter_version'] == 2 for c in et.values())
+
+
+def test_succinic_neutral_lime_forms_the_salt(monkeypatch):
+    """D15 (adapter v3): loading a neutral configuration makes the fermenter's
+    lime neutralize the product (calcium succinate), which switches on the
+    acidulation R401 / R401_P and the gypsum filter S405 (their bypass
+    specifications read ``R302.base_neutralizes_product``); the low-pH
+    configurations keep the module default (no salt, R401/S405 bypassed),
+    also when switched within one process."""
+    from types import SimpleNamespace as NS
+    from fermentation_insights.coeff_predictor import synthetic
+    m, su = _configs('succinic')
+    ad = m.Adapter()
+    ad._feedstock_loaded = 'corn'           # skip the Bioindustrial-Park import
+    ad.spec = NS(neutralization=None)
+    ad.R302 = NS(base_neutralizes_product=None, neutralization=None, T=303.15)
+    ad.model = NS(metrics_at_baseline=lambda: None)
+    ad.system = NS(converge_method=None)
+    ad._converge_method = 'wegstein'
+    monkeypatch.setattr(ad, '_make_unit_groups', lambda bst: [])
+    with synthetic.biosteam_stub():
+        ad.load(su['succinic_neutral_corn'])
+        assert ad.R302.base_neutralizes_product is True and ad.spec.neutralization is True
+        ad.load(su['succinic_corn'])
+        assert ad.R302.base_neutralizes_product is False and ad.spec.neutralization is False
+        ad.load(su['succinic_neutral_corn'])
+        assert ad.R302.base_neutralizes_product is True
+        with pytest.raises(RuntimeError, match='one feedstock'):
+            ad.load(su['succinic_neutral_glucose'])
+
+
+def test_tal_multi_effect_evaporator_root_search_is_robust():
+    """H1: in the region where an effect evaporates all of the chemical left
+    (superheated vapor; the next effect fails evaluating its enthalpy of
+    vaporization above Tc), the overall evaporated fraction is exactly 1;
+    other errors still propagate."""
+    m, _ = _configs('TAL')
+    msg = "Failed to extrapolate enthalpy of vaporization method 'DIPPR_PERRY_8E' at T=1207.2 K"
+
+    def V_overall(v):  # monotonic; crashes inside the all-evaporated region (v > 0.15)
+        if 0.2 < v < 0.9:
+            raise RuntimeError(msg)
+        return min(1., 0.3728 + 4.05 * v)
+
+    f = m._robust_V_overall(V_overall)
+    assert f(0.05) == pytest.approx(0.5753)
+    assert f(0.5) == 1. and f(1.) == 1.
+    # bisection on the wrapped objective finds the root left of the crash region
+    lo, hi = 0., 1.
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if f(mid) < 0.65 else (lo, mid)
+    assert lo == pytest.approx((0.65 - 0.3728) / 4.05, abs=1e-9)
+
+    def other(v):
+        raise RuntimeError('could not converge')
+    with pytest.raises(RuntimeError, match='could not converge'):
+        m._robust_V_overall(other)(0.5)

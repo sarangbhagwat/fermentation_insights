@@ -38,7 +38,7 @@ find a bug there, work around it in your adapter and report it.
 | `V_broth`, `F_water_broth` | m3/h and kg/h water of the broth leaving fermentation |
 | `V_fermenters` | m3 total volume of all main fermentation vessels |
 | `tau_fermentation` | h |
-| `base_cost`, `acid_cost` | USD/h of base dosed in fermentation (neutralization *or* pH control, at its purchase price: the purchased feed, not an intermediate stream) and of acid used for acidulation/regeneration (0 if none). With `neutralization=False` `base_cost` can still be nonzero: TAL (NaOH pH control), succinic low-pH (partial lime pH control), HP low-pH (medium lime bought although it never enters the broth); `neutralizing_agent` names that base |
+| `base_cost`, `acid_cost` | USD/h of base dosed in fermentation (neutralization *or* pH control, at its purchase price: the purchased feed, not an intermediate stream) and of acid used for acidulation/regeneration (0 if none). With `neutralization=False` `base_cost` can still be nonzero: TAL (NaOH pH control), succinic low-pH (partial lime pH control), HP low-pH (medium lime bought although it never enters the broth); `neutralizing_agent` names that base. With `neutralization=True` the base must actually convert the product to its salt and the salt must be acidulated downstream where the biorefinery does so (succinic v3: lime -> calcium succinate -> H2SO4 acidulation + gypsum filtration) |
 | `heating_duty`, `cooling_duty` | GJ/h, sums over process units (exclude utility-producing facilities such as the boiler) |
 | `electricity_consumption`, `electricity_production` | MW |
 | `natural_gas_flow` | kg/h purchased natural gas (0 if none) |
@@ -99,6 +99,28 @@ Changes so far:
   case-insensitively), `neutralizing_agent='NaOH'`, and
   `product_water_solubility` is 9.8 g/L (experimental data).
 * succinic v2: `neutralizing_agent='Ca(OH)2'` also in the low-pH configurations.
+* succinic v3 (neutral configurations only; the low-pH ones stay v2): the
+  fermenter's lime neutralizes the product (`R302.base_neutralizes_product
+  = True`): calcium succinate (and acetate) in the broth, acidulation with
+  H2SO4 in R401 (`acid_cost` = the purchased 93 wt% `sulfuric_acid_acidulation`)
+  and gypsum filtration in S405 (stream `gypsum`, at the sampled gypsum
+  price, 0 at baseline; a negative price is a disposal cost and lands in
+  `coproduct_sales`). `F_ferm_product`, the titer and the recovery stay on
+  the acid-equivalent basis (calcium succinate counted as succinic acid).
+  New per-point columns `x_calcium_succinate_broth`, `x_gypsum_flow`;
+  `separation_principle` starts with 'acidulation(H2SO4)+gypsum_filtration+'.
+  v2 only set `spec.neutralization`, so the purchased lime was discarded and
+  R401 / R401_P / S405 were bypassed (DESIGN.md D15): such rows are rejected
+  (`unpatchable_D15`), and the four configurations were regenerated.
+* TAL, no version change (recorded semantics unchanged): the root search of
+  every MultiEffectEvaporator is robust (`TAL._robust_V_overall`). The KSA
+  systems' IPA evaporator F407 used to fail ("Failed to extrapolate enthalpy
+  of vaporization ... at T=1207 K") whenever a trial first-effect fraction
+  made one effect evaporate all the IPA left (from a guess far from the new
+  solution, or from the bounds once `reset()` had cleared the guess, so the
+  reset and the reload failed the same way; DESIGN.md H1). The overall
+  fraction there is exactly 1, which the wrapper now returns; converged
+  points are unchanged.
 * ethanol v2: the corn yeast growth now conserves mass (BIP fi-ethanol).
   Corn `natural_gas_flow`/`natural_gas_price` cover all natural-gas
   utilities at the price BioSTEAM charges. There is a new corn

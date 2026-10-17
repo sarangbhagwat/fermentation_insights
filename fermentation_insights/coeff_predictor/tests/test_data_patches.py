@@ -164,6 +164,13 @@ def test_config_patches_and_unpatchable():
                                        product_water_solubility=9.8), {}, [dict(y=0.2, t=20.)]),
         ('ethanol', 'ethanol_corn', 2, {}, {}, [dict(y=0.2, t=20.)]),
         ('ethanol', 'ethanol_corn', 3, {'adapter_version': 2}, {}, [dict(y=0.2, t=21.)]),
+        # D15: succinic_neutral before adapter v3 (no salt formation / acidulation)
+        ('succinic', 'succinic_neutral_corn', 3, dict(adapter_version=2, neutralization=True,
+                                                      neutralizing_agent='Ca(OH)2'), {}, [dict(y=0.2, t=20.)]),
+        ('succinic', 'succinic_neutral_corn', 3, dict(adapter_version=3, neutralization=True,
+                                                      neutralizing_agent='Ca(OH)2'), {}, [dict(y=0.2, t=22.)]),
+        ('succinic', 'succinic_glucose', 3, dict(adapter_version=2, neutralization=False,
+                                              neutralizing_agent='Ca(OH)2'), {}, [dict(y=0.2, t=23.)]),
     ])
     c, s, p, n = _apply_twice(cfg, starts, points)
     C = c.set_index('config_id')
@@ -180,9 +187,14 @@ def test_config_patches_and_unpatchable():
     assert set(S.loc[t0, dp.MARK].split(';')) == {'M1', 'M3', 'M12', 'S1'}   # S1: downstream spec
     assert S['_unpatchable'].tolist().count('D2') == 1
     assert S.loc['ethanol|ethanol_corn|s1|5', '_unpatchable'] == 'D2'
+    assert S['_unpatchable'].tolist().count('D15') == 1
+    assert S.loc['succinic|succinic_neutral_corn|s1|7', '_unpatchable'] == 'D15'
+    assert S.loc['succinic|succinic_neutral_corn|s1|8', '_unpatchable'] == ''   # adapter v3
+    assert S.loc['succinic|succinic_glucose|s1|9', '_unpatchable'] == ''        # low pH: unaffected
     assert n['M1']['configs'] == ['TAL|TAL_corn', 'succinic|succinic_corn']
     assert n['M23']['configs'] == ['HP|HP_corn'] and n['M3']['samples'] == 1
     assert n['D2']['samples_unpatchable'] == 1
+    assert n['D15']['samples_unpatchable'] == 1
 
 
 def _write(path, recs):

@@ -24,6 +24,19 @@ Notes
 * Yield convention of the biorefinery: fraction of the theoretical maximum
   (2*MW_SA/MW_glucose = 1.311 g/g, same mass yield from xylose); the harness
   passes absolute g/g which are divided by 1.311 in ``set_try``.
+* Neutral configurations (adapter_version 3): ``R302.base_neutralizes_product
+  = True``, so the lime (1 mol Ca(OH)2/mol SA + 0.5 mol/mol acetic acid)
+  forms calcium succinate (and acetate) in the broth, which the acidulation
+  reactor R401 converts back to succinic acid with H2SO4 (93 wt%,
+  ``sulfuric_acid_acidulation``, priced) before the gypsum filter S405
+  removes the CaSO4 (stream ``gypsum``, priced at the module's gypsum price,
+  0 at baseline: neither sold nor charged). Adapter v2 set only
+  ``spec.neutralization`` (as the publication's TRY script), which with the
+  module default ``base_neutralizes_product=False`` discards the purchased
+  lime and bypasses R401 / R401_P / S405 (DESIGN.md defect D15). The low-pH
+  configurations keep the module default (``base_neutralizes_product=False``:
+  the partial pH-control lime is bought, but no salt forms and nothing is
+  acidulated; adapter_version 2).
 * MPSP = tea.solve_price(product) / purity (USD/kg pure succinic acid) and
   recovery = SA in product / SA(acid-eq.) in fermentation broth, as in
   ``analyses/TRY_analysis_*.py``. Points whose heat exchanger network energy
@@ -118,7 +131,9 @@ class Adapter(BiorefineryAdapter):
                     final_product='SuccinicAcid',
                     ferm_product_chemical='SuccinicAcid',
                     final_product_chemical='SuccinicAcid',
-                    adapter_version=2,
+                    # 3 (neutral only): lime neutralizes the product, acidulation + gypsum
+                    # filtration run (D15); 2: neutralizing_agent of the low-pH case (M1)
+                    adapter_version=3 if neutral else 2,
                     neutralization=neutral,
                     # base dosed in fermentation (base_cost = its cost); the low-pH case
                     # still doses lime for partial pH control (0.42 mol-OH-eq/mol SA
@@ -131,7 +146,9 @@ class Adapter(BiorefineryAdapter):
                     final_product_stoich_mass_ratio=1.0,
                     upgrading=False,
                     separation_variant='',
-                    separation_principle='evaporation+crystallization',
+                    separation_principle=(
+                        ('acidulation(H2SO4)+gypsum_filtration+' if neutral else '')
+                        + 'evaporation+crystallization'),
                     aerobic=True,  # model sparges air (3.57 mol/mol SA) and fixes CO2
                     co2_fixation=True,
                     fermentation_mode='batch',
@@ -153,7 +170,12 @@ class Adapter(BiorefineryAdapter):
         import biosteam as bst
         self.config = config
         spec = self.spec
-        spec.neutralization = bool(config['neutralization'])
+        neutral = bool(config['neutralization'])
+        spec.neutralization = neutral
+        # neutral: the lime forms calcium succinate, acidulated by R401 (H2SO4) and
+        # gypsum-filtered by S405 (their bypass specifications read this flag);
+        # low pH: module default (partial pH-control lime, no salt, R401/S405 bypassed)
+        self.R302.base_neutralizes_product = neutral
         # baseline parameter values from the default distribution file, as in the TRY scripts
         self.model.metrics_at_baseline()
         self.system.converge_method = self._converge_method
@@ -177,6 +199,7 @@ class Adapter(BiorefineryAdapter):
         s, u = models.s, models.u
         self.base_stream = s.base_fermentation
         self.acid_stream = s.sulfuric_acid_acidulation
+        self.gypsum_stream = s.gypsum
         self.CO2_purchased_stream = s.CO2_fermentation
         self.natural_gas_drying = s.natural_gas_drying
         self.M304 = u.M304
@@ -425,6 +448,9 @@ class Adapter(BiorefineryAdapter):
             x_cell_mass=broth.imass['FermMicrobe'],
             x_base_flow=self.base_stream.F_mass,
             x_acid_flow=self.acid_stream.F_mass,
+            # adapter v3: salt formed in the broth and gypsum filtered off (0 in the low-pH case)
+            x_calcium_succinate_broth=broth.imass['CalciumSuccinate'],
+            x_gypsum_flow=self.gypsum_stream.F_mass,
             x_CO2_purchased=self.CO2_purchased_stream.F_mass,
             x_CO2_recycled=R302.ins[5].F_mass,
             x_air_fermentation=R302.ins[8].F_mass,

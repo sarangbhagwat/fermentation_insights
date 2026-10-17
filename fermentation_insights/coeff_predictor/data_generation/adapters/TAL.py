@@ -41,6 +41,17 @@ is not neutralized; ``base_cost`` is this NaOH); ``product_water_solubility``
 = 9.8 g/L water at 25 C from experimental data instead of the fitted model's
 5.41 g/L. Rows of earlier versions are corrected by
 ``coeff_predictor/data_patches.py``.
+
+Robust multi-effect evaporators (data regeneration of 2026-10-17, H1; no
+change of recorded semantics, so no version bump): the IPA evaporator F407 of
+the KSA systems failed at some points ("Failed to extrapolate enthalpy of
+vaporization ... at T=1207 K") when BioSTEAM's root search for its
+first-effect evaporation tried a fraction at which an effect evaporates all
+the IPA left and superheats the vapor: from a guess (the previous solution,
+``_V_first_effect``) far from the new solution, or from the bounds once
+reset() had cleared the guess, so that reset() and the reload failed the
+same way. Every MultiEffectEvaporator's ``_V_overall`` now returns the exact
+value 1 in that region (:func:`_robust_V_overall`).
 """
 from __future__ import annotations
 
@@ -153,6 +164,31 @@ def _natural_gas_price_setter(setter):
         setter(value)
         bst.stream_prices['Natural gas'] = value
     return set_price
+
+
+def _robust_V_overall(V_overall):
+    """Wrap a MultiEffectEvaporator's ``_V_overall`` (overall fraction of its
+    ``chemical`` evaporated, as a function of the first-effect fraction, solved
+    by IQ interpolation on [0, 1]). For a trial first-effect fraction at which
+    one effect evaporates all of the chemical left in its liquid (V > 1),
+    BioSTEAM's Evaporator superheats that effect's vapor to absorb the excess
+    heat (e.g. IPA at 1200 K, far above its critical temperature of 508 K), and
+    the next effect then fails evaluating the enthalpy of vaporization of that
+    vapor at its temperature. The overall fraction there is exactly 1 (the
+    remaining effects receive no chemical), so return 1 instead of failing.
+    V_overall is monotonic in the first-effect fraction and the solution
+    (V_overall = V < 1) lies outside that region, so converged results are
+    unchanged; only the root search no longer crashes (TAL_SA F407, defect H1:
+    the IQ interpolation from the bounds, i.e. without a previous solution as
+    the guess, lands in that region for some feeds)."""
+    def V_overall_robust(V_first_effect):
+        try:
+            return V_overall(V_first_effect)
+        except RuntimeError as e:
+            if 'enthalpy of vaporization' not in str(e).lower():
+                raise
+            return 1.
+    return V_overall_robust
 
 
 def _is_infeasible_error(e):
@@ -271,6 +307,7 @@ class Adapter(BiorefineryAdapter):
 
         # Unit groups for the harness (copies; TAL's own groups are untouched)
         self.unit_groups = self._make_unit_groups(models.unit_groups)
+        self._make_evaporators_robust()
 
         # Baseline state as in the TRY scripts: baseline parameter values, baseline TRY
         for p in self.model.parameters:
@@ -386,6 +423,19 @@ class Adapter(BiorefineryAdapter):
                 last = MPSP
         self._n_simulations = n
         self._MPSP_rel_change = rel
+
+    def _make_evaporators_robust(self):
+        """Robust root search of every MultiEffectEvaporator (see
+        :func:`_robust_V_overall`); idempotent (a reload of the same module
+        does not wrap twice)."""
+        from biosteam.units import MultiEffectEvaporator
+        self.robust_evaporators = []
+        for unit in self.system.units:
+            if isinstance(unit, MultiEffectEvaporator):
+                if not unit.__dict__.get('_fi_robust_V_overall'):
+                    unit._V_overall = _robust_V_overall(unit._V_overall)
+                    unit._fi_robust_V_overall = True
+                self.robust_evaporators.append(unit.ID)
 
     def _run_evaporators(self):
         from biosteam.units import MultiEffectEvaporator

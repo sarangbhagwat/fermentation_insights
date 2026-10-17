@@ -74,20 +74,16 @@ Sources
 Notes: TAL's w_f varies with titer (baseline samples 0.60-0.93; the value is
 the baseline median per feedstock).
 
-Known mismatch (DESIGN.md section 1, "Known data defects", D15): the table
-describes succinic_neutral as the intended neutral design (salt formation,
-acidulation with H2SO4, gypsum filtration: neutralization_degree 1,
-acid_regeneration 'H2SO4'), but the simulated succinic_neutral systems do NOT
-form the salt: the adapter only sets ``spec.neutralization`` (as the
-publication's TRY script does), while the reactor keeps the module default
-``base_neutralizes_product=False``, which removes the purchased lime from the
-broth and bypasses R401 / R401_P / S405 (acidulation and gypsum filtration).
-The recorded acid, gypsum and acidulation costs are therefore 0 and the
-separation costs equal those of succinic (low pH); only the base cost differs.
-The structured fields (and the derived phys_acid_per_product /
-phys_gypsum_per_product features) of these 4 training configurations thus
-claim an acidulation that their data do not contain. Correcting it needs new
-data or a new table version and retraining (not done for the v2 models).
+succinic_neutral (DESIGN.md section 1, "Known data defects", D15): the table
+describes the neutral design (salt formation, acidulation with H2SO4, gypsum
+filtration: neutralization_degree 1, acid_regeneration 'H2SO4'). The data of
+the v2 models did NOT contain it (succinic adapter v2 left the module default
+``base_neutralizes_product=False``: the purchased lime was discarded and
+R401 / R401_P / S405 bypassed, so acid, gypsum and acidulation costs were 0).
+Adapter v3 simulates the salt formation and the acidulation; the four
+configurations were regenerated (v2 rows are rejected, ``unpatchable_D15``),
+so the table and the data now agree (product purity at baseline unchanged,
+0.8486). Models trained before the regeneration (v2) still carry the mismatch.
 """
 from __future__ import annotations
 

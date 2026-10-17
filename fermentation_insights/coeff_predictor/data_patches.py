@@ -9,7 +9,8 @@ columns are corrected here, when :func:`dataset.build` loads the raw JSONL
 
 * harness fixes by ``harness_version`` (``sample_start`` record; v3 fixes D3);
 * adapter fixes by ``adapter_version`` (configuration dict, written into the
-  ``config`` record; v2 fixes D2/D4/D6/D7/D11/D12/M1/M3/M12/M23). A sample's
+  ``config`` record; v2 fixes D2/D4/D6/D7/D11/D12/M1/M3/M12/M23, succinic v3
+  fixes D15 in the neutral configurations). A sample's
   configuration is the latest ``config`` record preceding its
   ``sample_start`` in its own file (:func:`dataset.read_raw`), so resumed files
   that mix versions are patched row by row.
@@ -66,6 +67,13 @@ D2  (ethanol_corn, adapter v1): molar yeast growth destroyed sugar mass; not
     patchable -- samples are flagged ``_unpatchable = 'D2'`` and rejected by
     :func:`dataset.build` (``unpatchable_D2``); the configuration was
     regenerated with adapter v2.
+D15 (succinic_neutral, adapter < 3): the lime was removed from the broth
+    instead of forming calcium succinate, and the acidulation (R401, H2SO4)
+    and gypsum filtration (S405) were bypassed (``base_neutralizes_product``
+    left False); not patchable (the acid, gypsum and acidulation costs and
+    capital were never simulated) -- samples are flagged ``_unpatchable =
+    'D15'`` and rejected (``unpatchable_D15``); the four configurations were
+    regenerated with adapter v3 (old files in ``raw_archive/succinic_neutral_v2``).
 M1  config: TAL ``neutralizing_agent = 'NaOH'`` (pH-control base; its cost is
     ``base_cost``), succinic low-pH ``neutralizing_agent = 'Ca(OH)2'`` (partial
     pH control); ``neutralization`` unchanged (False).
@@ -104,7 +112,7 @@ import pandas as pd
 
 from . import downstream
 
-__all__ = ('MARK', 'FIXED_HARNESS_VERSION', 'FIXED_ADAPTER_VERSION', 'apply',
+__all__ = ('MARK', 'FIXED_HARNESS_VERSION', 'FIXED_ADAPTER_VERSION', 'D15_FIXED_ADAPTER_VERSION', 'apply',
            'sample_versions', 'POINT_PATCHES', 'CONFIG_PATCHES', 'SPEC_PATCHES')
 
 #: field holding the ';'-joined ids of the patches applied to a row/record
@@ -113,6 +121,9 @@ MARK = 'data_patches'
 FIXED_HARNESS_VERSION = 3
 #: adapter version that contains the adapter-level fixes
 FIXED_ADAPTER_VERSION = 2
+#: succinic adapter version whose neutral configurations form the salt and
+#: acidulate it (D15); older succinic_neutral samples are rejected
+D15_FIXED_ADAPTER_VERSION = 3
 
 POINT_PATCHES = ('D3', 'D4', 'D6', 'D7')
 CONFIG_PATCHES = ('M1', 'M3', 'M12', 'M23')
@@ -454,8 +465,14 @@ def apply(cfg, starts, points):
     unpatchable = (ver['biorefinery'] == 'ethanol') & (ver['config_id'] == 'ethanol_corn') & \
         (ver['adapter_version'] < FIXED_ADAPTER_VERSION)
     up = set(ver.index[unpatchable.to_numpy()])
-    starts['_unpatchable'] = ['D2' if sid in up else '' for sid in starts['sample_id']]
+    d15 = (ver['biorefinery'] == 'succinic') & \
+        ver['config_id'].astype(str).str.startswith('succinic_neutral_') & \
+        (ver['adapter_version'] < D15_FIXED_ADAPTER_VERSION)
+    up15 = set(ver.index[d15.to_numpy()])
+    starts['_unpatchable'] = ['D2' if sid in up else 'D15' if sid in up15 else ''
+                              for sid in starts['sample_id']]
     counts['D2'] = {'samples_unpatchable': len(up)}
+    counts['D15'] = {'samples_unpatchable': len(up15)}
     # point-level fields
     if len(points):
         points = points.reset_index(drop=True)
