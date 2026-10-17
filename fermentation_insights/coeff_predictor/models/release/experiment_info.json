@@ -1,0 +1,38 @@
+{
+ "job_key": "98552351fca1bc21bfe57635",
+ "tag": "release(all data)",
+ "method": "pinn",
+ "members": 5,
+ "mk": {
+  "width": 64,
+  "depth": 4,
+  "dropout": 0.1,
+  "clip_inputs": -1.0,
+  "water_gate": true,
+  "channel_inputs": "physics",
+  "masked_width": 32,
+  "masked_depth": 3
+ },
+ "lk": {
+  "w_mpsp": 1.0,
+  "w_ch": 1.0,
+  "w_phys": 0.03,
+  "colloc_ratio": 0.5
+ },
+ "tk": {
+  "lr": 0.0012,
+  "weight_decay": 0.00089,
+  "epochs": 300,
+  "patience": 40,
+  "min_epochs": 20,
+  "batch_size": 128,
+  "threads": 1,
+  "early_stop": "data"
+ },
+ "seed": 0,
+ "group_col": "config_id",
+ "calib_frac": 0.0,
+ "n_train_samples": 1550,
+ "data_hash": "51d0efe2b4f517a4",
+ "saved": "2026-10-17 06:39:58"
+}
