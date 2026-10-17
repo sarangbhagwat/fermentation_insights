@@ -244,6 +244,101 @@ Checkpoints saved before this option existed load with clipping off. In
 the development CV it helped leave-configurations-out (oxalic) but hurt
 leave-one-product-out for HP and ethanol (§6), so it is not the default.
 
+**Channel-wise input masking** (`ModelConfig.channel_inputs`; library default
+`None` = one shared encoder; `experiments.py` default `'physics'` since
+2026-10-17, CLI `--no-masking`). With a shared encoder every channel can
+depend on every product-identity proxy, including channels whose process
+area never handles the product (feedstock purchase, feedstock handling and
+pretreatment, labor). With masking, every feature column belongs to a
+process-area group (`features.feature_group`, `FeatureSpec.column_groups`):
+
+| group | columns |
+|---|---|
+| feedstock | `fs_w_*`, `feedstock_type`, `phys_fs_nonsugar_solids` |
+| pretreatment | `p_enzyme_loading`, `p_saccharification_yield` |
+| scale / financial | `phys_log10_capacity`, `p_operating_days` / `p_IRR`, `p_income_tax` |
+| fermentation | `T_fermentation`, `aerobic`, `fermentation_mode`, `p_cell_mass_yield`, `phys_inflection_over_theoretical` |
+| neutralization | neutralization flag / agent / degree, `n_acid_groups`, `pKa1`, `phys_{base,acid,gypsum}_per_product`, `p_{base,acid}_price`, `ds_sep__acidulation`, `ds_sep__gypsum_filtration` |
+| product | `fp_*`, `phys_fp_*`, theoretical / inflection yield, `phys_ty_over_*`, solubility |
+| final_product | `pp_*`, `phys_pp_*`, stoichiometric ratio, phase, broth flag, `phys_log10_w_final` |
+| upgrading | `upgrading`, `ds_upg__*`, `phys_n_upgrading_ops` |
+| separation | `ds_sep__*` (the operations, which identify the product), `phys_n_separation_ops` |
+| water_route | `water_removal_route`, `phys_water_removal_{a,c}`, `phys_evap_water_c`, `phys_distill_c` |
+| coproducts / utilities | `ds_cop__*` / boiler and turbogenerator efficiencies |
+
+(missing indicators and one-hot levels go with their field; unknown columns
+are 'other', used by no preset output, with a warning; `struct_*` never). Each
+distinct set of groups gets its own sub-network (`masked_width` 64,
+`masked_depth` 2; the pipeline uses width/2 and depth − 1 of the HPO
+candidate) fed only those columns, plus log r and 1/r for the pseudo-group
+'productivity'; every output (intensity, channel, g) is a head on the
+sub-network of its groups (`CHANNEL_INPUT_PRESETS['physics']`):
+
+| output | groups |
+|---|---|
+| feedstock intensity | feedstock, pretreatment |
+| capex_upstream | feedstock, pretreatment, scale, financial |
+| fixed, closure | feedstock, scale, financial |
+| capex_fermentation | fermentation, productivity, neutralization, feedstock, scale, financial |
+| neutralization | neutralization |
+| capex_downstream | product, final_product, upgrading, separation, water_route, neutralization, scale, financial |
+| utilities_other | product, final_product, upgrading, separation, water_route, fermentation, utilities, scale |
+| natural-gas intensity | product, final_product, upgrading, separation, water_route, feedstock, utilities, scale |
+| materials_other | feedstock, pretreatment, fermentation, product, final_product, upgrading, separation, water_route, scale |
+| capex_wastewater | feedstock, fermentation, water_route, coproducts, scale, financial |
+| capex_utilities | feedstock, water_route, upgrading, coproducts, utilities, scale, financial |
+| electricity intensity | feedstock, fermentation, productivity, water_route, upgrading, coproducts, utilities, scale |
+| coproducts | feedstock, fermentation, coproducts, scale |
+| g | product, final_product, upgrading, separation, water_route, neutralization |
+
+An excluded input has exactly zero influence on an output (∂output/∂input = 0,
+tested); the water gate, the structured feedstock intensity, the g bound and
+the sum identity apply unchanged. A price channel resolved as an ordinary
+channel (`price_explicit=False`) also sees its price. The hybrid
+(`residual_width > 0`, `residual_depth`) adds the standardized outputs of a
+shared residual network on all inputs (zero-initialized head; its weights
+get the AdamW weight decay `residual_weight_decay`).
+
+Data checks (development set, configuration medians of each channel's
+numerator at y = 0.2, t = 50 g/L; R² of the across-configuration variance
+explained by the feedstock alone / by the product family alone): feedstock
+intensity 0.99 / 0.27, capex_upstream 0.90 / 0.16, capex_utilities 0.73 /
+0.13, versus capex_downstream 0.03 / 0.91, neutralization 0.03 / 1.00,
+natural gas 0.09 / 0.90, capex_fermentation 0.09 / 0.79, materials_other 0.25 /
+0.82; electricity 0.53 / 0.43 and capex_wastewater 0.51 / 0.56 depend on both.
+Over the productivity samples of a configuration (only r varies) only
+capex_fermentation changes materially (range up to 47 % of the total
+numerator) and electricity ≤ 1.8 %, every other channel ≤ 1.1 %, hence
+'productivity' goes to those two only. Product-specific exceptions that the
+masked channels cannot represent (modelling conventions or known defects):
+TAL's feedstock intensity has c′ = −17 … −90 (substrate basis, D8) and HP's a
+d′ of 0.8–5 (all others ≈ pure b′ = 1/(η w_sugar)); the cellulosic and
+sugarcane ethanol modules book less / more capital in the upstream areas
+(0.15 / 0.17 vs 0.27 / 0.06 USD/kg for the other products); labor is set per
+module (TAL ≈ 1/3 of HP at the same capacity, succinic corn / cornstover
+1.8·10⁷ USD/yr vs 1.1·10⁶ for succinic sugarcane); the neutralization channel
+of HP (also non-neutral) and lactic has a broth-volume term c′ ≈ 2.5–3 that
+the stoichiometric features do not explain.
+
+Evidence (§6, round 3; 5 seeds): leave-one-product-out improves for HP
+(24 → 15 %) and TAL (61 → 42 %), paired over seeds beyond the seed noise
+(t = −2.6, −10), the other families are unchanged within noise (ethanol 74 →
+83 %, IBO 86 → 96 %, oxalic 74 → 79 %, succinic 33 → 35 %, lactic 56 → 54 %);
+leave-configurations-out is not worse (configuration mean 29.5 → 27.9 %,
+geo-mean 21.2 → 18.4 %, better on 4 of 5 seeds). The channels whose
+physics the masks encode transfer better to held-out products (out-of-fold
+error relative to the total numerator, LOPO): feedstock 11.3 → 7.1 %,
+capex_upstream 3.3 → 1.7 %, coproducts 29.6 → 13.0 %, materials_other 16.5 →
+13.4 %, capex_fermentation 5.0 → 4.3 %, fixed 4.6 → 3.9 %; neutralization
+gets worse (6.7 → 9.2 %: its broth-volume term above), electricity, natural
+gas and the other capital channels are unchanged. The hybrid (residual width
+32, weight decay 1 or 10) is not better than pure masking (ethanol LOPO 104 /
+110 %), so it stays opt-in. Products without a close relative (ethanol, IBO,
+oxalic, lactic) are not helped by masking; their errors come from the
+recovery g and from electricity / natural gas / downstream channels that
+legitimately depend on the product. Checkpoints saved before the option load
+with one shared encoder.
+
 ## 4. Loss
 
     L = w_mpsp · mean_i [(MPSP̂_i − MPSP_i)/MPSP_i]²       (equation layer; simulated points)
@@ -553,6 +648,68 @@ downstream features and the gate by default (`--no-downstream`,
 `ModelConfig(water_gate=False)`) are unchanged. Seed 0 of the previous round
 was favourable: its single-seed PI-NN geo-mean 16.3 % compares with 20.7 ±
 4.6 % over three seeds.
+
+### Development-set diagnostics, round 3: channel-wise input masking (2026-10-17; never on test data)
+
+Same development tables, folds and protocol as round 2 (downstream features;
+PI-NNs with the water gate; one network per fit, default hyperparameters,
+masked sub-networks of width 64 and depth 2), seeds 0–4 for the shared and
+the masked PI-NN, 0–2 otherwise; leave-one-product-out now over all seven
+families (inner validation by configuration). Leave-configurations-out
+(5-fold, stratified by biorefinery), mean ± sd over seeds:
+
+| method | seeds | fold | cfg mean | cfg geo-mean | spec | random | oxalic | IBO | lactic | ethanol |
+|---|---|---|---|---|---|---|---|---|---|---|
+| PI-NN shared encoder | 5 | 48.6 ± 8.5 | 29.5 ± 3.9 | 21.2 ± 3.8 | 19.8 | 22.6 | 61 ± 31 | 92 ± 31 | 56 ± 12 | 59 ± 16 |
+| PI-NN masked ('physics') | 5 | 45.7 ± 5.4 | 27.9 ± 5.8 | 18.4 ± 6.2 | 16.7 | 19.5 | 65 ± 14 | 96 ± 26 | 56 ± 7 | 51 ± 9 |
+| shared, seeds 0–2 | 3 | 42.9 ± 4.6 | 26.9 ± 2.3 | 18.9 ± 2.5 | 17.6 | 21.1 | 53 ± 37 | 74 ± 17 | 63 ± 2 | 51 ± 17 |
+| masked, seeds 0–2 | 3 | 43.1 ± 5.6 | 24.2 ± 3.7 | 14.5 ± 1.8 | 12.6 | 15.8 | 68 ± 16 | 93 ± 29 | 57 ± 9 | 48 ± 9 |
+| hybrid, residual weight decay 1 | 3 | 46.8 ± 2.3 | 25.7 ± 1.8 | 15.1 ± 0.6 | 13.4 | 16.7 | 65 ± 20 | 104 ± 14 | 56 ± 9 | 56 ± 12 |
+| hybrid, residual weight decay 10 | 3 | 43.5 ± 3.5 | 24.3 ± 3.2 | 14.4 ± 1.4 | 12.1 | 15.5 | 66 ± 17 | 94 ± 3 | 55 ± 10 | 51 ± 8 |
+| plain MLP | 3 | 47.1 ± 11.4 | 26.4 ± 5.0 | 18.0 ± 3.0 | 16.2 | 19.4 | 95 ± 18 | 60 ± 23 | 70 ± 3 | 55 ± 25 |
+| kNN | 3 | 39.8 ± 17.4 | 24.7 ± 6.3 | 18.7 ± 1.7 | 18.5 | 19.4 | 49 | 34 | 59 ± 15 | 61 ± 51 |
+
+Masked − shared, paired by seed (same folds and inner splits): fold −2.9
+(t = −0.8), configuration mean −1.7 (t = −1.5), geo-mean −2.8 points (t =
+−1.5; better on 4 of 5 seeds, seed 3 is an outlier with TAL_SA at 60–70 %).
+Leave-one-product-out (point MAPE of the held-out family):
+
+| method | seeds | ethanol | HP | IBO | lactic | oxalic | succinic | TAL | mean of 4 | mean of 7 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| PI-NN shared encoder | 5 | 74 ± 37 | 24 ± 5 | 86 ± 46 | 56 ± 6 | 74 ± 40 | 33 ± 15 | 61 ± 3 | 48.2 ± 10.0 | 58.3 ± 10.6 |
+| PI-NN masked | 5 | 83 ± 10 | 15 ± 7 | 96 ± 30 | 54 ± 6 | 79 ± 27 | 35 ± 15 | 42 ± 2 | 43.6 ± 7.1 | 57.5 ± 9.0 |
+| hybrid, weight decay 1 | 3 | 104 ± 19 | 15 ± 2 | 81 ± 4 | 53 ± 11 | 76 ± 20 | 32 ± 15 | 48 ± 2 | 49.9 ± 3.0 | 58.6 ± 3.9 |
+| hybrid, weight decay 10 | 3 | 110 ± 25 | 15 ± 2 | 87 ± 19 | 53 ± 10 | 84 ± 10 | 31 ± 14 | 44 ± 2 | 50.2 ± 3.3 | 60.6 ± 1.3 |
+| plain MLP | 3 | 108 ± 37 | 35 ± 8 | 82 ± 71 | 66 ± 2 | 138 ± 115 | 53 ± 15 | 53 ± 11 | 62.4 ± 12.2 | 76.4 ± 20.2 |
+| kNN | 3 | 164 ± 53 | 32 ± 1 | 87 ± 93 | 62 ± 12 | 48 ± 0 | 54 ± 1 | 34 ± 2 | 71.0 ± 12.1 | 68.9 ± 19.2 |
+
+Paired masked − shared: TAL −19.4 (t = −10.2), HP −9.4 (t = −2.6), ethanol
++8.9, IBO +10.3, oxalic +5.2, succinic +1.3, lactic −2.1 (all |t| ≤ 1.1),
+mean of 4 −4.7 (t = −1.0), mean of 7 −0.7. The seed spread of ethanol drops
+from 37 to 10 points.
+
+Per-channel out-of-fold error (RMS over a sample's points of the channel
+error, relative to the RMS target numerator; configuration-balanced; shared →
+masked, 5 seeds), leave-configurations-out / leave-one-product-out: feedstock
+11.1 → 7.0 / 11.3 → 7.1, capex_upstream 3.7 → 2.0 / 3.3 → 1.7, coproducts
+15.4 → 13.7 / 29.6 → 13.0, materials_other 11.7 → 9.5 / 16.5 → 13.4,
+capex_fermentation 4.5 → 3.5 / 5.0 → 4.3, capex_wastewater 2.1 → 1.7 / 2.3 →
+2.0, fixed 3.7 → 3.8 / 4.6 → 3.9, electricity 15.3 → 15.7 / 16.4 → 14.6,
+natural gas 5.6 → 6.2 / 8.2 → 7.2, capex_utilities 8.2 → 7.6 / 7.1 → 7.7,
+capex_downstream 2.8 → 2.8 / 5.1 → 4.6, neutralization 3.9 → 3.3 / 6.7 → 9.2.
+
+Findings: the masks transfer what is physically product-independent
+(feedstock, upstream, fermentation and coproduct channels), which helps the
+families that share feedstocks and process areas with others (HP, TAL). The
+errors of the products without close relatives come from g (e.g. LOPO:
+lactic ĝ 0.99 vs 0.63, TAL 1.02 vs 0.71, oxalic 0.86 vs 0.997) and from
+electricity, natural gas and the downstream channels, which legitimately
+depend on the product, so masking cannot help them; the remaining bias of the
+masked feedstock intensity (≈ 7 %) is the product-specific structure listed
+in §3. The hybrid's residual absorbs these product-specific effects in-family
+but extrapolates them to new products (ethanol LOPO 104–110 %). The masked
+model (no residual) is therefore the pipeline default (`experiments.py`; CLI
+`--no-masking`); the library default is unchanged.
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 

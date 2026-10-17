@@ -90,7 +90,7 @@ __all__ = (
     'build_spec_registry', 'apply_spec_registry', 'register_chemical',
     'describe_new_chemical', 'psat_water', 'PRICE_COLUMNS', 'PRICE_KEYS',
     'PRICE_ALIASES', 'REQUIRED_FIELDS', 'FIELD_UNITS', 'REGIME_FIELDS',
-    'DS_PHYS', 'DS_CATEGORICAL', 'STRUCTURAL', 'DOWNSTREAM_FIELDS',
+    'DS_PHYS', 'DS_CATEGORICAL', 'STRUCTURAL', 'DOWNSTREAM_FIELDS', 'FEATURE_GROUPS', 'feature_group',
 )
 
 try:
@@ -182,6 +182,63 @@ CHEM_FEATURES = ('n_C', 'n_H', 'n_O', 'n_N', 'dor', 'Ymax_carbon', 'Ymax_electro
                  'Ymax_stoich', 'Tm', 'log10_alpha_inf')
 CHEM_KEYS = {'fp': ('ferm_product_chemical', 'fermentation_product'),
              'pp': ('final_product_chemical', 'final_product')}
+
+#: Process-area groups of the feature columns (:func:`feature_group`), used by
+#: the channel-wise input masking of the model (``ModelConfig.channel_inputs``):
+#: every cost channel only sees the groups that can physically affect it.
+FEATURE_GROUPS = ('feedstock', 'pretreatment', 'scale', 'financial', 'fermentation', 'neutralization',
+                  'product', 'final_product', 'upgrading', 'separation', 'water_route', 'coproducts', 'utilities',
+                  'prices', 'structural', 'other')
+_GROUP_EXACT = {
+    'feedstock_type': 'feedstock', 'feedstock': 'feedstock', 'phys_fs_nonsugar_solids': 'feedstock',
+    'p_enzyme_loading': 'pretreatment', 'p_saccharification_yield': 'pretreatment',
+    'phys_log10_capacity': 'scale', 'p_feedstock_capacity': 'scale', 'p_operating_days': 'scale',
+    'p_IRR': 'financial', 'p_income_tax': 'financial',
+    'T_fermentation': 'fermentation', 'aerobic': 'fermentation', 'fermentation_mode': 'fermentation',
+    'p_cell_mass_yield': 'fermentation', 'phys_inflection_over_theoretical': 'fermentation',
+    'neutralization': 'neutralization', 'neutralizing_agent': 'neutralization',
+    'neutralization_degree': 'neutralization', 'n_acid_groups': 'neutralization', 'pKa1': 'neutralization',
+    'phys_base_per_product': 'neutralization', 'phys_acid_per_product': 'neutralization',
+    'phys_gypsum_per_product': 'neutralization', 'p_base_price': 'neutralization',
+    'p_acid_price': 'neutralization', 'acid_regeneration': 'neutralization',
+    'ds_sep__acidulation': 'neutralization', 'ds_sep__gypsum_filtration': 'neutralization',
+    # the theoretical yield / inflection yield identify the product (stoichiometry)
+    'theoretical_yield': 'product', 'inflection_yield': 'product', 'phys_log10_solubility': 'product',
+    'fermentation_product': 'product',
+    G_MAX: 'final_product', 'phys_pp_fp_MW_ratio': 'final_product', 'final_product_phase': 'final_product',
+    'final_product_is_broth': 'final_product', 'phys_log10_w_final': 'final_product',
+    'final_product': 'final_product',
+    'upgrading': 'upgrading', 'phys_n_upgrading_ops': 'upgrading',
+    # the separation operations (multi-hot) identify the product; the water-removal route does not
+    'phys_n_separation_ops': 'separation', 'separation_principle': 'separation',
+    'water_removal_route': 'water_route', 'phys_water_removal_c': 'water_route',
+    'phys_water_removal_a': 'water_route', 'phys_evap_water_c': 'water_route', 'phys_distill_c': 'water_route',
+    'p_boiler_efficiency': 'utilities', 'p_turbogenerator_efficiency': 'utilities',
+}
+_GROUP_PREFIX = (('fs_w_', 'feedstock'), ('phys_ty_over_', 'product'), ('fp_', 'product'),
+                 ('phys_fp_', 'product'), ('pp_', 'final_product'), ('phys_pp_', 'final_product'),
+                 ('ds_upg__', 'upgrading'), ('ds_sep__', 'separation'), ('ds_cop__', 'coproducts'),
+                 ('struct_', 'structural'))
+
+
+def feature_group(column):
+    """Process-area group (one of ``FEATURE_GROUPS``) of a FeatureSpec column:
+    missing indicators and one-hot levels belong to the group of their field;
+    the prices (``price_explicit=False`` only) form the group 'prices';
+    unknown columns (e.g. a non-canonical ``p_*`` parameter) are 'other'."""
+    c = str(column)
+    if c.startswith('missing__'):
+        c = c[len('missing__'):]
+    c = c.split('==', 1)[0]
+    if c in _GROUP_EXACT:
+        return _GROUP_EXACT[c]
+    if c in PRICE_COLUMNS:
+        return 'prices'
+    for pre, grp in _GROUP_PREFIX:
+        if c.startswith(pre):
+            return grp
+    return 'other'
+
 
 OTHER = '__other__'
 _T_REF = 310.15
@@ -832,6 +889,15 @@ class FeatureSpec:
         """Columns of ``X`` fed to the network encoder (all but the raw
         structural inputs)."""
         return list(range(self.n_features - len(self.structural)))
+
+    def column_groups(self):
+        """{group: [column indices of X]} over the encoder columns
+        (:func:`feature_group`; structural inputs excluded)."""
+        cols = self.columns
+        out = {}
+        for i in self.encoder_index():
+            out.setdefault(feature_group(cols[i]), []).append(i)
+        return out
 
     @property
     def n_features(self):

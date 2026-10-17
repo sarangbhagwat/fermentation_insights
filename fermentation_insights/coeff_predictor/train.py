@@ -584,7 +584,8 @@ def build_model(spec, layout, scales, mcfg, dtype=torch.float32):
     m = CoefficientNet(spec.n_features, mcfg, layout, scales, spec.r_stats,
                        enc_index=spec.encoder_index() if hasattr(spec, 'encoder_index') else None,
                        gate_index=spec.structural_index('struct_water_removal')
-                       if hasattr(spec, 'structural_index') else None).to(dtype)
+                       if hasattr(spec, 'structural_index') else None,
+                       input_groups=spec.column_groups() if mcfg.masked else None).to(dtype)
     m.scales_np = scales
     return m
 
@@ -626,11 +627,16 @@ def train_model(spec, samples, points, mcfg=None, lcfg=None, tcfg=None, val=None
         vb = None
     model = build_model(spec, layout, scales, mcfg, dt)
     info = _spec_info(spec, tb, dt)
-    decay, no_decay = [], []
+    decay, no_decay, resid = [], [], []
+    rid = {id(p) for p in model.residual_parameters()} if hasattr(model, 'residual_parameters') else set()
     for name, p in model.named_parameters():
-        (decay if p.ndim >= 2 else no_decay).append(p)
-    opt = torch.optim.AdamW([{'params': decay, 'weight_decay': tcfg.weight_decay},
-                             {'params': no_decay, 'weight_decay': 0.}], lr=tcfg.lr)
+        (no_decay if p.ndim < 2 else resid if id(p) in rid else decay).append(p)
+    groups = [{'params': decay, 'weight_decay': tcfg.weight_decay},
+              {'params': no_decay, 'weight_decay': 0.}]
+    if resid:
+        # hybrid masked model: the shared residual network is strongly decayed
+        groups.append({'params': resid, 'weight_decay': float(mcfg.residual_weight_decay)})
+    opt = torch.optim.AdamW(groups, lr=tcfg.lr)
     n = len(tb['X'])
     steps_per_epoch = max(1, math.ceil(n / tcfg.batch_size))
     total = steps_per_epoch * tcfg.epochs

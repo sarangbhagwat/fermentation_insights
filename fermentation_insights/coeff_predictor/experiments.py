@@ -639,11 +639,19 @@ def make_job(stage, tag, method, train_ids, evals, members, mk, lk, tk, group_co
     """One fit + evaluation. ``spec_kw``: FeatureSpec options of every method
     (e.g. ``{'downstream': True}``; default ``ctx['spec_kw']``, off with CLI
     ``--no-downstream``; part of the cache key only when non-empty).
-    ``ctx['mk_extra']`` (water gate; off with CLI ``--no-water-gate``) is merged into ``mk``."""
+    ``ctx['mk_extra']`` (water gate, off with CLI ``--no-water-gate``; channel-wise
+    input masking, off with ``--no-masking``) is merged into ``mk``. A masked
+    PI-NN without explicit sub-network sizes gets ``masked_width = width // 2``
+    and ``masked_depth = depth - 1`` (64 / 2 for the defaults, as in the
+    development CV), so that the HPO dimensions width and depth still apply."""
     if spec_kw is None:
         spec_kw = ctx.get('spec_kw')
     if ctx.get('mk_extra'):
         mk = {**mk, **ctx['mk_extra']}
+    if mk.get('channel_inputs') and method.split('-')[0] == 'pinn':
+        mk = dict(mk)
+        mk.setdefault('masked_width', max(8, int(mk.get('width', 128)) // 2))
+        mk.setdefault('masked_depth', max(1, int(mk.get('depth', 3)) - 1))
     spec = dict(v=CODE_VERSION, data=ctx['data_hash'], split=ctx['split_hash'], stage=stage, tag=tag,
                 method=method, members=members, mk=mk, lk=lk, tk=tk, group_col=group_col, calib_frac=calib_frac,
                 seed=seed, train=_sha(list(train_ids)), evals={k: _sha(list(v)) for k, v in evals.items()},
@@ -1686,8 +1694,11 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       f'{a.threads} worker(s). Command: `{" ".join(ctx["argv"])}`.\n')
     P('Features: ' + ('structured downstream specification (`FeatureSpec(downstream=True)`, DESIGN.md section 5)'
                       if ctx.get('spec_kw', {}).get('downstream') else 'without the downstream specification')
-      + ('; PI-NN with the water-removal gate (`ModelConfig.water_gate`).\n'
-         if ctx.get('mk_extra', {}).get('water_gate') else '.\n'))
+      + ('; PI-NN with the water-removal gate (`ModelConfig.water_gate`)'
+         if ctx.get('mk_extra', {}).get('water_gate') else '')
+      + ('; PI-NN with channel-wise input masking (`ModelConfig.channel_inputs='
+         f"{ctx['mk_extra']['channel_inputs']!r}`, DESIGN.md section 3)"
+         if ctx.get('mk_extra', {}).get('channel_inputs') else '') + '.\n')
     if D['recent_raw_files']:
         P(f'> **Partial data:** {len(D["recent_raw_files"])} raw file(s) were still being written when the tables '
           'were built; the numbers describe the data available at that time.\n')
@@ -1930,6 +1941,10 @@ def parse_args(argv=None):
                          '(FeatureSpec(downstream=True); implies --no-water-gate)')
     ap.add_argument('--no-water-gate', action='store_true',
                     help='PI-NN without the water-removal gate (ModelConfig.water_gate)')
+    # on by default since the 2026-10-17 masking CV (DESIGN.md section 3)
+    ap.add_argument('--no-masking', action='store_true',
+                    help="PI-NN with one shared encoder instead of the channel-wise input masking "
+                         "(ModelConfig.channel_inputs='physics')")
     ap.add_argument('--split-seed', type=int, default=None, help='only when the split is created (default 2026)')
     ap.add_argument('--replan', action='store_true', help='recompute plan.json from the pilot timings')
     ap.add_argument('--fresh', action='store_true', help='delete the fit cache first')
@@ -1976,10 +1991,15 @@ def main(argv=None):
     ctx = dict(argv=['python -m ' + MODULE] + (sys.argv[1:] if argv is None else list(argv)),
                versions=f'torch {torch.__version__}, numpy {np.__version__}, pandas {pd.__version__}, '
                         f'scikit-learn {sklearn.__version__}, matplotlib {matplotlib.__version__}')
+    mk_extra = {}
     if not a.no_downstream:
         ctx['spec_kw'] = {'downstream': True}
         if not a.no_water_gate:
-            ctx['mk_extra'] = {'water_gate': True}
+            mk_extra['water_gate'] = True
+    if not a.no_masking:
+        mk_extra['channel_inputs'] = 'physics'
+    if mk_extra:
+        ctx['mk_extra'] = mk_extra
     T = lambda name, t0: stage_t.__setitem__(name, time.time() - t0)
 
     t0 = time.time()
