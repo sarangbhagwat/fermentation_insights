@@ -667,7 +667,7 @@ def neutralization_factor(df):
     agent = _strings(df, 'neutralizing_agent')
     neut = _strings(df, 'neutralization')
     has_agent = np.array([a is not None and str(a).strip().lower() not in ('', 'none', 'nan') for a in agent])
-    neut_on = np.array([v is not None and str(v).strip().lower() in ('true', '1', '1.0') for v in neut])
+    neut_on = np.array([v is not None and BOOL_STRINGS.get(str(v).strip().lower(), False) for v in neut])
     with np.errstate(invalid='ignore'):
         f = np.where((nag > 0) | has_agent | neut_on | (np.nan_to_num(deg) > 0), 1., 0.)
     return np.where(np.isfinite(nag) | has_agent | neut_on, f, np.nan) if n else np.zeros(0)
@@ -862,7 +862,39 @@ def build_spec_registry(samples):
             base = _baseline_rows(grp)
             reg['feedstock_context'][str(name)] = {c: _mode_or_median(_to_float(base[c]))
                                                    for c in FEEDSTOCK_DEPENDENT if c in base}
+    reg['baseline'] = _baseline_extras(samples)
     return reg
+
+
+#: baseline values of a training configuration that are not spec inputs of
+#: the registry entries but complete a by-name query (registry key
+#: 'baseline'): the baseline titer (reference titer of the w_f of a broth
+#: product, :func:`downstream_features`) and the electricity and natural-gas
+#: prices of the baseline sample
+BASELINE_EXTRAS = ('baseline_titer', 'electricity_price', 'natural_gas_price')
+
+
+def _baseline_extras(samples):
+    """{'config': {config_id: {col: baseline value}}, 'pair_feedstock':
+    {'fp|pp|feedstock': {col: value where every configuration of the
+    combination agrees}}} for :data:`BASELINE_EXTRAS` (None = NaN)."""
+    cols = [c for c in BASELINE_EXTRAS if c in samples]
+    out = {'config': {}, 'pair_feedstock': {}}
+    if not cols or 'config_id' not in samples:
+        return out
+    for cid, grp in samples.groupby('config_id'):
+        base = _baseline_rows(grp)
+        out['config'][str(cid)] = {c: _mode_or_median(_to_float(base[c])) for c in cols}
+    if all(c in samples for c in _NAME_COLS):
+        for (a, b, f), grp in samples.groupby(list(_NAME_COLS[1:]) + ['feedstock']):
+            vals = [out['config'][str(cid)] for cid in grp['config_id'].unique()]
+            e = {}
+            for c in cols:
+                u = {None if v[c] is None else round(float(v[c]), 9) for v in vals}
+                if len(u) == 1 and None not in u:
+                    e[c] = vals[0][c]
+            out['pair_feedstock'][f'{a}|{b}|{f}'] = e
+    return out
 
 
 def _missing(v):
@@ -933,6 +965,7 @@ def apply_spec_registry(spec, reg, info=None):
 
     # 1. a known configuration
     cid = None if _missing(spec.get('config_id')) else str(spec['config_id'])
+    custom_fs = []
     if cid is not None:
         ce = reg.get('config', {}).get(cid)
         ds_e = _ds.spec_for(cid)
@@ -945,8 +978,20 @@ def apply_spec_registry(spec, reg, info=None):
             if bad:
                 conflict.append((cid, [(k, str(spec[k]), str(names[k])) for k in bad]))
             else:
+                # a custom feedstock (no feedstock name, but a composition or
+                # type that differs from the configuration's): the
+                # configuration fills the process, product and downstream
+                # fields only, never the feedstock's identity, composition,
+                # capacity or feedstock-dependent parameters
+                if not given('feedstock'):
+                    custom_fs = _custom_feedstock_fields(spec, names)
+                skip = _FEEDSTOCK_FIELDS(names) if custom_fs else set()
                 for k, v in names.items():
-                    put(k, v, f'configuration {cid}')
+                    if k not in skip:
+                        put(k, v, f'configuration {cid}')
+                for k, v in reg.get('baseline', {}).get('config', {}).get(cid, {}).items():
+                    if v is not None and not _price_given(spec, k):
+                        put(k, v, f'configuration {cid}')
         if ds_e is not None:
             for k in DOWNSTREAM_FIELDS:
                 if not _omitted(ds_e.get(k)):
@@ -963,6 +1008,9 @@ def apply_spec_registry(spec, reg, info=None):
         if pfe is not None:
             for k, v in pfe.get('values', {}).items():
                 put(k, v, f'{fp} -> {pp} on {fs} (training baseline)')
+            for k, v in reg.get('baseline', {}).get('pair_feedstock', {}).get(f'{key}|{fs}', {}).items():
+                if v is not None and not _price_given(spec, k):
+                    put(k, v, f'{fp} -> {pp} on {fs} (training baseline)')
             varying = list(pfe.get('varying', []))
     # 3. the pair's unique regime fields
     pair_e = None
@@ -1013,17 +1061,80 @@ def apply_spec_registry(spec, reg, info=None):
         info['source'] = source
         info['cross_feedstock'] = cross
         info['conflict'] = conflict
+        info['custom_feedstock'] = [(cid, custom_fs)] if custom_fs else []
     return spec, filled
 
 
+def _FEEDSTOCK_FIELDS(values):
+    """Fields of a configuration entry that describe its feedstock."""
+    return {k for k in values if k.startswith('fs_')} | {'feedstock', 'feedstock_type', 'p_feedstock_capacity'} \
+        | set(FEEDSTOCK_DEPENDENT)
+
+
+def _custom_feedstock_fields(spec, values, rtol=1e-6):
+    """Feedstock fields (``fs_w_*``, ``feedstock_type``) the spec gives with a
+    value different from the configuration entry ``values``."""
+    out = []
+    for k, v in spec.items():
+        if not (k.startswith('fs_w_') or k == 'feedstock_type') or _missing(v):
+            continue
+        ref = values.get(k)
+        if k == 'feedstock_type':
+            if ref is None or _feedstock_type(v) != _feedstock_type(ref):
+                out.append(k)
+            continue
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            out.append(k)
+            continue
+        if ref is None or not math.isclose(x, float(ref), rel_tol=rtol, abs_tol=1e-9):
+            out.append(k)
+    return sorted(out)
+
+
+def _price_given(spec, k):
+    """A registry value of ``k`` must not override a value given by the user
+    (for prices: under the canonical name or an alias)."""
+    names = (k,) + tuple(PRICE_ALIASES.get(k, ()))
+    return any(not _missing(spec.get(n)) for n in names)
+
+
 # %% Feature spec
+
+#: accepted string spellings of a boolean spec field (case-insensitive)
+BOOL_STRINGS = {'true': True, 'false': False, 'yes': True, 'no': False, '1': True, '0': False,
+                '1.0': True, '0.0': False}
+
+
+def parse_bool(v, name='value'):
+    """A boolean spec value (bool, 0/1 or one of :data:`BOOL_STRINGS`) as a
+    bool; None for an omitted value (None, NaN, ''). Raises ValueError for
+    anything else (e.g. 'maybe', 2)."""
+    if v is None or (isinstance(v, float) and not math.isfinite(v)):
+        return None
+    if isinstance(v, (bool, np.bool_)):
+        return bool(v)
+    if isinstance(v, str):
+        k = v.strip().lower()
+        if k == '':
+            return None
+        if k in BOOL_STRINGS:
+            return BOOL_STRINGS[k]
+        raise ValueError(f'{name}={v!r}; expected a bool (True/False, yes/no or 1/0)')
+    if isinstance(v, (int, float, np.integer, np.floating)) and float(v) in (0., 1.):
+        return bool(float(v))
+    raise ValueError(f'{name}={v!r}; expected a bool (True/False, yes/no or 1/0)')
+
 
 def _to_float(s):
     """Coerce booleans/strings/numbers to float (NaN if not convertible)."""
     if pd.api.types.is_bool_dtype(s):
         return s.astype(float)
-    if s.dtype == object:
-        m = {'true': 1., 'false': 0., 'yes': 1., 'no': 0.}
+    if s.dtype == object or pd.api.types.is_string_dtype(s):
+        # (pandas >= 3 stores strings in a 'str' dtype, not object)
+        s = s.astype(object)
+        m = {k: float(v) for k, v in BOOL_STRINGS.items() if not k[0].isdigit()}
         s = s.map(lambda v: m.get(v.strip().lower(), v) if isinstance(v, str) else v)
         s = s.map(lambda v: float(v) if isinstance(v, (bool, np.bool_)) else v)
     return pd.to_numeric(s, errors='coerce').astype(float)

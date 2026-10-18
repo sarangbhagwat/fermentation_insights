@@ -164,11 +164,17 @@ def example_new_feedstock(P, p_known):
     spec = dict(KNOWN, feedstock_type='lignocellulose', feedstock_price=0.0595, p_feedstock_capacity=1.0e5,
                 **comp)
     spec.pop('feedstock')          # a new feedstock needs no name (it is not a model input)
+    # config_id with a composition of its own and no feedstock name: the
+    # configuration's process, product and downstream design with a NEW
+    # feedstock (its composition is never filled from corn stover)
     print(f'fs_w_fermentable_sugar_eq = {comp[W_SUGAR]:.4f} kg glucose-eq. / kg wet straw')
     p = P.predict(spec)
     out = pd.concat([p_known[COEF + ['ch__feedstock__b']], p[COEF + ['ch__feedstock__b']]])
     out.index = ['corn stover', 'wheat straw']
     print(fmt(out))
+    print(f"wheat straw: intervals_calibrated={bool(p['intervals_calibrated'].iloc[0])} (a feedstock not in "
+          f"training), in_domain={bool(p['in_domain'].iloc[0])} (outside range: "
+          f"{p['outside_range'].iloc[0] or '-'})")
     return spec
 
 

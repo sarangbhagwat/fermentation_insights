@@ -158,9 +158,9 @@ import pandas as pd
 from . import downstream
 from .features import (MissingSpecError, ApplicabilityWarning, REQUIRED_FIELDS, FIELD_UNITS,
                        PRICE_ALIASES, PRICE_COLUMNS, W_SUGAR, W_SUGAR_MAX, G_MAX, DOWNSTREAM_FIELDS,
-                       FREE_TEXT_CATEGORICAL, LIGNOCELLULOSE_ONLY, SPEC_REGISTRY_VERSION,
-                       FeatureSpec, apply_spec_registry, build_spec_registry, is_not_applicable, warn_if_outside,
-                       _as_frame, _feedstock_type, _jsonable)
+                       FREE_TEXT_CATEGORICAL, LIGNOCELLULOSE_ONLY, SPEC_REGISTRY_VERSION, SPEC_BOOLEAN,
+                       FeatureSpec, apply_spec_registry, build_spec_registry, is_not_applicable, parse_bool,
+                       warn_if_outside, _as_frame, _feedstock_type, _jsonable, _omitted)
 from .model import COEFF_KEYS, mpsp_equation_np
 from .train import Ensemble, setup_torch
 
@@ -237,7 +237,18 @@ class CoefficientPredictor:
         for rec in _records(df):
             info = {}
             rec.update(downstream.validate(rec))     # vocabulary / range check (ValueError)
+            for c in SPEC_BOOLEAN:                   # True/False, yes/no, 1/0 (else ValueError)
+                if c in rec:
+                    rec[c] = parse_bool(rec[c], c)
             rec, f = apply_spec_registry(rec, reg, info)
+            # no neutralization (or nothing to neutralize) and no agent given:
+            # 'none', as the training rows encode a missing agent
+            if _omitted(rec.get('neutralizing_agent')) and (
+                    rec.get('neutralization') is False or rec.get('neutralization') == 0
+                    or (not _bad(rec.get('n_acid_groups')) and float(rec['n_acid_groups']) == 0)):
+                rec['neutralizing_agent'] = 'none'
+                f = list(f) + ['neutralizing_agent']
+                info.setdefault('source', {})['neutralizing_agent'] = 'none (no neutralization / no acid group)'
             src = dict(info.get('source', {}))
             na = set(info.get('not_applicable', []))
             ctx, extra = [c for c in f if c.startswith('p_') and c != 'p_feedstock_capacity'], []
@@ -278,6 +289,8 @@ class CoefficientPredictor:
                             not_applicable=sorted(c for c in na if c.startswith('p_')),
                             cross_feedstock=list(info.get('cross_feedstock', [])),
                             conflict=list(info.get('conflict', [])), imputed_extra=extra,
+                            custom_feedstock=list(info.get('custom_feedstock', [])),
+                            config_id=None if _bad_name(rec.get('config_id')) else str(rec['config_id']),
                             calibrated=bool(fs_known and fp_known and pair in reg.get('pair', {})) if reg else True))
         out = pd.DataFrame(rows)
         return (out, det) if details else (out, [d['filled'] for d in det])
@@ -345,6 +358,23 @@ class CoefficientPredictor:
                           'please specify (or give config_id): '
                           + '; '.join(f'row {i}: {", ".join(a)}' for i, a in amb[:6])
                           + " (treated as unknown)", UserWarning, stacklevel=3)
+        cust = [(i, cid, ks) for i, d in enumerate(det) for cid, ks in d['custom_feedstock']]
+        if warn and cust:
+            warnings.warn('; '.join(f'row {i}: config_id {cid!r} with its own feedstock composition / type '
+                                    f'({", ".join(ks[:4])}{" ..." if len(ks) > 4 else ""}) and no feedstock name'
+                                    for i, cid, ks in cust[:6])
+                          + ' -- treated as a NEW feedstock: the configuration fills only its process, product, '
+                          'regime and downstream fields; feedstock components left out are imputed (training '
+                          'median), not taken from the configuration\'s feedstock', UserWarning, stacklevel=3)
+        twins = [(i, d['config_id'], self._config_twins().get(d['config_id']))
+                 for i, d in enumerate(det) if d.get('config_id') and not d['conflict']]
+        twins = [t for t in twins if t[2]]
+        if warn and twins:
+            warnings.warn('; '.join(f'row {i}: config_id {cid!r} encodes identically to {", ".join(map(repr, tw))}'
+                                    for i, cid, tw in twins[:6])
+                          + ' -- these training configurations differ only in settings that are not model inputs '
+                          '(e.g. the saccharification mode SHF vs. SSCF of the lactic configurations), so the '
+                          'model predicts the same coefficients for them', UserWarning, stacklevel=3)
         cross = [(i, d['cross_feedstock']) for i, d in enumerate(det) if d['cross_feedstock']]
         if warn and cross:
             warnings.warn('feedstock-dependent contextual parameter(s) taken from the training baseline of OTHER '
@@ -382,11 +412,41 @@ class CoefficientPredictor:
     def _warn_uncalibrated(self, det, stacklevel=4):
         bad = [i for i, d in enumerate(det) if not d['calibrated']]
         if bad and (self.ensemble.conformal or {}):
+            cov = (self.ensemble.meta or {}).get('coverage_unseen') or {}
+            num = '; '.join(f"{lab}: MPSP {cov[k]['mpsp']:.2f}, g {cov[k]['g']:.2f}"
+                            for k, lab in (('feedstock', 'new feedstock'), ('product', 'new product'))
+                            if isinstance(cov.get(k), dict) and {'mpsp', 'g'} <= set(cov[k]))
+            nominal = 1 - (self.ensemble.conformal or {}).get('alpha', 0.1)
             warnings.warn(f'rows {bad[:10]}: feedstock, fermentation product or product pair not in training -- the '
                           'intervals are calibrated for new configurations of KNOWN feedstocks and products; for an '
-                          'unseen feedstock or product family their coverage is far below nominal (development '
-                          'CV: about 0.75 for a new feedstock, 0.56 for a new product; REPORT.md section 6)',
-                          ApplicabilityWarning, stacklevel=stacklevel)
+                          'unseen feedstock or product family their coverage is far below nominal'
+                          + (f' (coverage of these quantiles in leave-one-feedstock-out / leave-one-product-out '
+                             f'development CV, nominal {nominal:.2f}: {num})' if num else '')
+                          + '; REPORT.md section 6', ApplicabilityWarning, stacklevel=stacklevel)
+
+    def _config_twins(self):
+        """{config_id: [other training configurations whose by-name query
+        encodes to the same model input]} (computed once per predictor)."""
+        tw = getattr(self, '_twins', None)
+        if tw is not None:
+            return tw
+        self._twins = {}
+        cids = sorted((self.spec.spec_registry or {}).get('config', {}))
+        if len(cids) < 2:
+            return self._twins
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                df, _ = self._frame([dict(config_id=c, r=1., feedstock_price=1.) for c in cids])
+                X = self.spec.transform(df, strict=False, missing_categorical='other').X
+        except Exception:
+            return self._twins
+        keys = [np.round(x, 9).tobytes() for x in X]
+        for i, c in enumerate(cids):
+            others = [cids[j] for j in range(len(cids)) if j != i and keys[j] == keys[i]]
+            if others:
+                self._twins[c] = others
+        return self._twins
 
     @staticmethod
     def _user_recovery(df, batch, recovery=None):
@@ -524,11 +584,11 @@ class CoefficientPredictor:
         impossible = y[None, :] > ty[:, None] * (1 + 1e-9)
         msgs = []
         if impossible.any():
-            msgs.append(f'y above the theoretical yield (MPSP set to NaN): rows {sorted(set(np.nonzero(impossible)[0]))[:10]}')
+            msgs.append(f'y above the theoretical yield (MPSP set to NaN): rows {sorted({int(i) for i in np.nonzero(impossible)[0]})[:10]}')
         above = (y[None, :] > infl[:, None] * (1 + 1e-9)) & ~impossible
         if above.any():
             msgs.append(f'y above the inflection yield (outside the fitted domain): rows '
-                        f'{sorted(set(np.nonzero(above)[0]))[:10]}')
+                        f'{sorted({int(i) for i in np.nonzero(above)[0]})[:10]}')
         dom = (self.spec.spec_registry or {}).get('domain', {})
         tout = []
         for i, rec in enumerate(df.to_dict('records')):
