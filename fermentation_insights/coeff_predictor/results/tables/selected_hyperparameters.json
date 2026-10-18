@@ -64,11 +64,11 @@
    "ablation_loco_folds": 12
   },
   "estimate": {
-   "seconds_per_member_sample": 0.017257547071892348,
-   "hpo_hours": 0.20755076611795864,
-   "cv_hours": 1.2496375234791877,
-   "final_hours": 0.02692992975401682,
-   "total_hours": 1.4841182193511633,
+   "seconds_per_member_sample": 0.02429597040013688,
+   "hpo_hours": 0.2921995373456462,
+   "cv_hours": 1.751694613615042,
+   "final_hours": 0.03745335018853799,
+   "total_hours": 2.081347501149226,
    "budget_hours": 3.0,
    "threads": 4,
    "fits_budget": true

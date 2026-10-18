@@ -461,8 +461,8 @@
    "kind": "feedstock",
    "log": false,
    "fill": 0.0,
-   "mean": 0.16323224136042283,
-   "std": 0.27063875417692096
+   "mean": 0.16319772781171316,
+   "std": 0.2705846181491992
   },
   {
    "name": "fs_w_xylan",
@@ -501,16 +501,16 @@
    "kind": "feedstock",
    "log": false,
    "fill": 0.0327609828294848,
-   "mean": 0.0451505392363565,
-   "std": 0.05166413702446774
+   "mean": 0.04515053923635651,
+   "std": 0.051664137024467746
   },
   {
    "name": "fs_w_ash",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0139999999999999,
-   "mean": 0.016442224953170895,
-   "std": 0.014820944228458529
+   "mean": 0.016443470287402687,
+   "std": 0.014820812697047334
   },
   {
    "name": "fs_w_protein",
@@ -533,32 +533,32 @@
    "kind": "feedstock",
    "log": false,
    "fill": 0.0,
-   "mean": 0.02848511736572112,
-   "std": 0.04724146393717495
+   "mean": 0.028494608591616274,
+   "std": 0.04725851756558774
   },
   {
    "name": "fs_w_water",
    "kind": "feedstock",
    "log": false,
    "fill": 0.2021541546721867,
-   "mean": 0.3399885729065381,
-   "std": 0.25718928781591693
+   "mean": 0.34000191577330724,
+   "std": 0.2571799185228816
   },
   {
    "name": "fs_w_other",
    "kind": "feedstock",
    "log": false,
    "fill": 0.0150004500135003,
-   "mean": 0.040254659134820577,
-   "std": 0.04679668002051826
+   "mean": 0.0402650932566341,
+   "std": 0.046815492907988636
   },
   {
    "name": "fs_w_fermentable_sugar_eq",
    "kind": "feedstock",
    "log": false,
    "fill": 0.5289707505922392,
-   "mean": 0.5272763169394648,
-   "std": 0.22125171564450216
+   "mean": 0.5272379686939171,
+   "std": 0.22122992431286914
   },
   {
    "name": "phys_fp_log10_MW",
@@ -709,8 +709,8 @@
    "kind": "derived",
    "log": false,
    "fill": 0.17000251632838062,
-   "mean": 0.1327351101539971,
-   "std": 0.11225548928282722
+   "mean": 0.13276011553277556,
+   "std": 0.11226771202131862
   },
   {
    "name": "phys_log10_w_final",
@@ -1651,7 +1651,7 @@
      "fs_w_sucrose": 0.0062263479639033,
      "fs_w_starch": 0.0,
      "fs_w_xylose": 0.0,
-     "fs_w_xylan": 0.1578823947989779,
+     "fs_w_xylan": 0.15788239479897787,
      "fs_w_arabinose": 0.0,
      "fs_w_arabinan": 0.0192450755247921,
      "fs_w_galactose": 0.0,
@@ -1659,7 +1659,7 @@
      "fs_w_mannose": 0.0,
      "fs_w_mannan": 0.0048516997121324,
      "fs_w_fructose": 0.0,
-     "fs_w_lignin": 0.1274379791053465,
+     "fs_w_lignin": 0.12743797910534654,
      "fs_w_ash": 0.0398647993013552,
      "fs_w_protein": 0.0250671151793511,
      "fs_w_extractives": 0.1184623346379014,
@@ -1667,7 +1667,7 @@
      "fs_w_fiber": 0.0,
      "fs_w_water": 0.2021541546721868,
      "fs_w_other": 0.0146359607982663,
-     "fs_w_fermentable_sugar_eq": 0.5289707505922392,
+     "fs_w_fermentable_sugar_eq": 0.5289707505922391,
      "feedstock_type": "lignocellulose",
      "p_feedstock_capacity": 85940.0,
      "fs_F_mass": 85940.0,
@@ -3356,8 +3356,8 @@
      "fs_w_extractives": 0.0,
      "fs_w_lipid": 0.0,
      "fs_w_fiber": 0.0,
-     "fs_w_water": 0.7000210006300189,
-     "fs_w_other": 0.0150004500135003,
+     "fs_w_water": 0.7000210006300187,
+     "fs_w_other": 0.0150004500135005,
      "fs_w_fermentable_sugar_eq": 0.2651369714859219,
      "feedstock_type": "sugar_juice",
      "p_feedstock_capacity": 479343.0,
@@ -6548,8 +6548,8 @@
      "fs_w_extractives": 0.0,
      "fs_w_lipid": 0.0,
      "fs_w_fiber": 0.0,
-     "fs_w_water": 0.7000210006300189,
-     "fs_w_other": 0.0150004500135003,
+     "fs_w_water": 0.7000210006300187,
+     "fs_w_other": 0.0150004500135005,
      "fs_w_fermentable_sugar_eq": 0.2651369714859219,
      "feedstock_type": "sugar_juice",
      "p_feedstock_capacity": 479343.0,
@@ -7114,12 +7114,12 @@
     "HP_hexanol_cornstover": {
      "baseline_titer": 62.5,
      "electricity_price": 0.07,
-     "natural_gas_price": 0.2765000000000001
+     "natural_gas_price": 0.2765
     },
     "HP_hexanol_glucose": {
      "baseline_titer": 62.5,
      "electricity_price": 0.07,
-     "natural_gas_price": 0.2765000000000001
+     "natural_gas_price": 0.2764999999999999
     },
     "HP_hexanol_sugarcane": {
      "baseline_titer": 62.5,
@@ -7134,17 +7134,17 @@
     "HP_neutral_cornstover": {
      "baseline_titer": 62.5,
      "electricity_price": 0.07,
-     "natural_gas_price": 0.2765
+     "natural_gas_price": 0.2765000000000001
     },
     "HP_neutral_glucose": {
      "baseline_titer": 62.5,
      "electricity_price": 0.07012299732071965,
-     "natural_gas_price": 0.2765
+     "natural_gas_price": 0.2765000000000001
     },
     "HP_neutral_hexanol_corn": {
      "baseline_titer": 62.5,
      "electricity_price": 0.07,
-     "natural_gas_price": 0.2765
+     "natural_gas_price": 0.2765000000000001
     },
     "HP_neutral_hexanol_cornstover": {
      "baseline_titer": 62.5,

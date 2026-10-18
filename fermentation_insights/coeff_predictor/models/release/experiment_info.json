@@ -1,5 +1,5 @@
 {
- "job_key": "51b14164119ddfa039ce2e92",
+ "job_key": "c2e0fa667e5ef82e317835be",
  "tag": "release(all data)",
  "method": "pinn",
  "members": 5,
@@ -55,13 +55,13 @@
   "method_scores": "pinn"
  },
  "best_epochs": [
-  58,
-  28,
-  43,
+  112,
+  125,
+  223,
   81,
   68
  ],
  "n_train_samples": 1600,
- "data_hash": "c345efda41c4fdca",
- "saved": "2026-10-18 07:03:33"
+ "data_hash": "ae69af98b3ba4561",
+ "saved": "2026-10-18 20:58:45"
 }

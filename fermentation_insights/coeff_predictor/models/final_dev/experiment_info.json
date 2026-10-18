@@ -1,5 +1,5 @@
 {
- "job_key": "04c197fdf3e1503e14c95f9d",
+ "job_key": "eb704f264fc40101a2657e82",
  "tag": "final(dev->test)",
  "method": "pinn",
  "members": 5,
@@ -56,12 +56,12 @@
  },
  "best_epochs": [
   84,
-  74,
-  159,
-  46,
-  162
+  139,
+  107,
+  102,
+  94
  ],
  "n_train_samples": 1353,
- "data_hash": "c345efda41c4fdca",
- "saved": "2026-10-18 07:04:00"
+ "data_hash": "ae69af98b3ba4561",
+ "saved": "2026-10-18 20:58:00"
 }

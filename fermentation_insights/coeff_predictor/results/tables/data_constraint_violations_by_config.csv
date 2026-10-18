@@ -1,4 +1,4 @@
 constraint,config_id,n_violating,n_samples,n_samples_all_configs,max_g_over_gmax
-mono_y,IBO_EtOH_corn,108,109,1600,0.9867294955610186
+mono_y,IBO_EtOH_corn,108,109,1600,0.9867397856018144
 mono_t,oxalic_neutral_sugarcane,30,211,1600,1.0028727702950126
 g_le_gmax,oxalic_neutral_sugarcane,26,211,1600,1.0028727702950126
