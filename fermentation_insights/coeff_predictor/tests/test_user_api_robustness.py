@@ -150,3 +150,49 @@ def test_warning_texts_have_plain_row_numbers(shipped):
     _, P = shipped
     _, msgs = _caught(P.mpsp, KNOWN, y=[0.5, 0.9, 1.5], t=50.)
     assert any('rows [0]' in m for m in msgs) and not any('np.int64' in m for m in msgs)
+
+
+def test_unknown_fields_and_alias_conflicts_are_reported(shipped):
+    s, P = shipped
+    base = dict(config_id='HP_corn', r=0.3, feedstock_price=0.2)
+    ref = _quiet(P.predict, base)[K].to_numpy()
+    # a misspelled price is ignored (baseline electricity price) -- with a warning and a suggestion
+    out, msgs = _caught(P.predict, dict(base, electricty_price=0.2))
+    np.testing.assert_allclose(out[K].to_numpy(), ref)
+    assert any("'electricty_price'" in m and "did you mean 'electricity_price'" in m for m in msgs)
+    _, msgs = _caught(P.predict, dict(base, foo=1))
+    assert any('IGNORED' in m and "'foo'" in m for m in msgs)
+    # a price and its alias with different values: the canonical name wins, with a warning
+    out, msgs = _caught(P.predict, dict(base, fs_price=0.5))
+    np.testing.assert_allclose(out[K].to_numpy(), ref)
+    assert any('feedstock_price=0.2 vs. fs_price=0.5' in m for m in msgs)
+    _, msgs = _caught(P.predict, dict(base, fs_price=0.2))
+    assert not any('alias' in m for m in msgs)
+    # training rows (all columns of the processed table) and predict() outputs pass silently
+    rows = s.groupby('config_id').head(1).reset_index(drop=True)
+    out, msgs = _caught(P.predict, rows)
+    assert not any('IGNORED' in m or 'alias' in m for m in msgs), msgs
+    _, msgs = _caught(P.predict, pd.concat([rows[['config_id', 'r', 'feedstock_price']], out[K]], axis=1))
+    assert not any('IGNORED' in m for m in msgs)
+
+
+def test_regime_vocabularies_are_validated_and_normalized(shipped):
+    _, P = shipped
+    ref = _quiet(P.predict, KNOWN)[K].to_numpy()
+    for k, v in (('feedstock_type', 'Lignocellulose'), ('feedstock_type', ' lignocellulose '),
+                 ('fermentation_mode', 'BATCH'), ('neutralizing_agent', 'ca(oh)2')):
+        out, msgs = _caught(P.predict, dict(KNOWN, **{k: v}))
+        np.testing.assert_allclose(out[K].to_numpy(), ref, err_msg=f'{k}={v!r}')
+        assert out['in_domain'].iloc[0] and not any('not seen in training' in m for m in msgs)
+    fed = _quiet(P.predict, dict(KNOWN, fermentation_mode='Fed-batch'))[K].to_numpy()
+    np.testing.assert_allclose(fed, _quiet(P.predict, dict(KNOWN, fermentation_mode='fed-batch'))[K].to_numpy())
+    for k, v, hint in (('feedstock_type', 'lignocellulosic', 'lignocellulose'), ('fermentation_mode', 'foo', None),
+                       ('feedstock_type', 'Lignocellulose-rich', None)):
+        with pytest.raises(ValueError, match=k) as e:
+            _quiet(P.predict, dict(KNOWN, **{k: v}))
+        if hint:
+            assert hint in str(e.value)
+    # documented / new values not seen in training: unknown level, with a warning naming them
+    for k, v in (('fermentation_mode', 'continuous'), ('neutralizing_agent', 'KOH')):
+        _, msgs = _caught(P.predict, dict(KNOWN, **{k: v}))
+        assert any(f'{k}={v!r} was not seen in training' in m for m in msgs)

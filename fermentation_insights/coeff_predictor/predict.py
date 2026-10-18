@@ -136,8 +136,8 @@ Interval calibration
 ``<k>_lo``/``<k>_hi`` = mean -/+ q_k * (spread + eps_k) with the
 split-conformal quantile q_k of ``ensemble.conformal`` (MPSP: relative
 errors, simultaneous over a sample's titer-yield points). The checkpoints of
-the experiment pipeline (``models/final_dev``, ``models/release``; v2) have no
-calibration hold-out: q_k comes from the out-of-fold scores of the
+the experiment pipeline (``models/final_dev``, ``models/release``; protocol v2
+and later) have no calibration hold-out: q_k comes from the out-of-fold scores of the
 development leave-one-configuration-out CV of the same training procedure
 and ensemble size (``conformal['source']``, ``['n']``,
 ``['n_calib_groups']``, ``['weighting']``), so the intervals target a new
@@ -165,12 +165,46 @@ from . import downstream
 from .features import (MissingSpecError, ApplicabilityWarning, REQUIRED_FIELDS, FIELD_UNITS,
                        PRICE_ALIASES, PRICE_COLUMNS, W_SUGAR, W_SUGAR_MAX, G_MAX, DOWNSTREAM_FIELDS,
                        FREE_TEXT_CATEGORICAL, LIGNOCELLULOSE_ONLY, SPEC_REGISTRY_VERSION, SPEC_BOOLEAN,
+                       SPEC_CATEGORICAL, SPEC_NUMERIC, CANONICAL_PARAMETERS, EXCLUDED_ALWAYS, FEEDSTOCK_TYPES,
                        FeatureSpec, apply_spec_registry, build_spec_registry, is_not_applicable, parse_bool,
                        warn_if_outside, _as_frame, _feedstock_type, _jsonable, _omitted)
 from .model import COEFF_KEYS, mpsp_equation_np
 from .train import Ensemble, setup_torch
 
-__all__ = ('CoefficientPredictor', 'MissingSpecError', 'ApplicabilityWarning', 'refresh_spec_registry')
+__all__ = ('CoefficientPredictor', 'MissingSpecError', 'ApplicabilityWarning', 'refresh_spec_registry',
+           'FERMENTATION_MODES')
+
+#: documented values of ``fermentation_mode`` (README section 5); like
+#: ``feedstock_type`` (``features.FEEDSTOCK_TYPES``) it is checked on user
+#: input with case, blanks and '-' / '_' / ' ' ignored (ValueError with close
+#: matches otherwise). A documented value not seen in training (e.g.
+#: 'continuous') is encoded as the unknown level, with a warning.
+FERMENTATION_MODES = ('batch', 'fed-batch', 'continuous')
+#: price relative difference above which a price and its alias conflict
+_ALIAS_RTOL = 1e-3
+#: column prefixes of the training tables and of derived features that a
+#: spec may carry without being user fields (never reported as unknown)
+_PASS_PREFIXES = ('m__', 'q__', 'int__', 'ch__', 'x_', 'bp_', 'c__', 'fp_', 'pp_', 'phys_', 'ds_', 'fs_w_', 'diag_')
+#: names, query and bookkeeping fields accepted without being model inputs:
+#: registry names, the y / t query, outputs of ``predict``/``mpsp`` and the
+#: non-input columns of the processed training tables (so training rows can
+#: be passed back as specs)
+_PASS_FIELDS = frozenset((
+    'config_id', 'feedstock', 'fermentation_product', 'final_product', 'recovery', 'y', 't', 'MPSP',
+    'ferm_product_chemical', 'final_product_chemical', 'product_water_solubility',
+    'g_predicted', 'g_source', 'ad_ratio', 'in_domain', 'outside_range', 'price_outside_range',
+    'intervals_calibrated', 'imputed', 'contextual_defaults', 'contextual_source', 'not_applicable',
+    'filled_from_registry', 'MPSP_lo', 'MPSP_hi', 'MPSP_std',
+    'sample_id', 'biorefinery', 'sample_kind', 'seed', 'sample_index', 'source_file', 'separation_variant',
+    'y_min', 'y_max', 't_min', 't_max', 'baseline_productivity', 'baseline_yield', 'baseline_titer',
+    'downstream_spec_version', 'inflection_yield_config', 'n_points_raw', 'n_ok_raw', 'n_infeasible', 'n_failed',
+    'r_mult', 'harness_version', 'adapter_version', 'data_patches', 'R2', 'n_points', 'fit_mape', 'fit_rmse',
+    'fit_cond', 'phi', 'F_fixed', 'closure_rel', 'sum_check', 'A_mpsp', 'B_mpsp', 'C_mpsp', 'D_mpsp',
+    'channels_ok', 'theoretical_yield', 'inflection_yield', 'fs_F_mass', 'fs_price'))
+
+
+def _norm_token(v):
+    return str(v).strip().lower().replace('_', '-').replace(' ', '-')
 
 
 class CoefficientPredictor:
@@ -243,6 +277,8 @@ class CoefficientPredictor:
         for rec in _records(df):
             info = {}
             rec.update(downstream.validate(rec))     # vocabulary / range check (ValueError)
+            unseen = self._check_regime(rec)          # feedstock_type / fermentation_mode / agent (ValueError)
+            alias = self._alias_conflicts(rec)
             for c in SPEC_BOOLEAN:                   # True/False, yes/no, 1/0 (else ValueError)
                 if c in rec:
                     rec[c] = parse_bool(rec[c], c)
@@ -296,10 +332,87 @@ class CoefficientPredictor:
                             cross_feedstock=list(info.get('cross_feedstock', [])),
                             conflict=list(info.get('conflict', [])), imputed_extra=extra,
                             custom_feedstock=list(info.get('custom_feedstock', [])),
+                            unseen_levels=unseen, alias_conflict=alias,
                             config_id=None if _bad_name(rec.get('config_id')) else str(rec['config_id']),
                             calibrated=bool(fs_known and fp_known and pair in reg.get('pair', {})) if reg else True))
         out = pd.DataFrame(rows)
         return (out, det) if details else (out, [d['filled'] for d in det])
+
+    def _check_regime(self, rec):
+        """Validate and normalize the categorical regime fields of a user
+        record in place: ``feedstock_type`` against ``features.FEEDSTOCK_TYPES``
+        and ``fermentation_mode`` against :data:`FERMENTATION_MODES` (case,
+        blanks and '-' / '_' / ' ' ignored; ValueError with close matches
+        otherwise), and the case of ``neutralizing_agent`` against the
+        training levels. Returns [(field, value)] of the (valid) values not
+        seen in training, which the encoder maps to the unknown level."""
+        levels = {k: [v for v in lv if v != '__other__'] for k, lv in (self.spec.categoricals or {}).items()}
+        unseen = []
+        for k, vocab in (('feedstock_type', FEEDSTOCK_TYPES), ('fermentation_mode', FERMENTATION_MODES)):
+            v = rec.get(k)
+            if k not in rec or _omitted(v) or (isinstance(v, str) and v == ''):
+                continue
+            canon = {_norm_token(x): x for x in vocab}
+            t = canon.get(_norm_token(v))
+            if t is None:
+                close = difflib.get_close_matches(_norm_token(v), list(canon), n=3, cutoff=0.6)
+                raise ValueError(f'{k}={v!r} is not one of {", ".join(vocab)}'
+                                 + (f" (did you mean {', '.join(repr(canon[c]) for c in close)}?)" if close else ''))
+            rec[k] = t
+            if k in levels and t not in levels[k]:
+                unseen.append((k, t))
+        v = rec.get('neutralizing_agent')
+        if 'neutralizing_agent' in rec and isinstance(v, str) and v != '' and 'neutralizing_agent' in levels:
+            canon = {x.strip().lower(): x for x in levels['neutralizing_agent']}
+            t = canon.get(v.strip().lower())
+            if t is not None:
+                rec['neutralizing_agent'] = t
+            else:
+                unseen.append(('neutralizing_agent', v))
+        return unseen
+
+    @staticmethod
+    def _alias_conflicts(rec):
+        """[(price, [(name, value), ...], used)] where a price and its
+        aliases (``features.PRICE_ALIASES``) are given with different values;
+        the canonical name wins, then the aliases in order (as in
+        ``FeatureSpec``)."""
+        out = []
+        for c, aliases in PRICE_ALIASES.items():
+            given = [(n, float(rec[n])) for n in (c,) + tuple(aliases) if n in rec and not _bad(rec[n])]
+            if len(given) > 1:
+                v0 = given[0][1]
+                if any(abs(v - v0) > _ALIAS_RTOL * max(abs(v), abs(v0), 1e-300) for _, v in given[1:]):
+                    out.append((c, given, given[0][0]))
+        return out
+
+    def _known_fields(self):
+        """Fields a spec may carry: the user fields (inputs, aliases,
+        documented fields) and the pass-through names (:data:`_PASS_FIELDS`)."""
+        kf = getattr(self, '_known', None)
+        if kf is None:
+            user = (set(REQUIRED_FIELDS) | set(FIELD_UNITS) | set(PRICE_COLUMNS) | set(EXCLUDED_ALWAYS)
+                    | {a for v in PRICE_ALIASES.values() for a in v} | set(DOWNSTREAM_FIELDS) | set(SPEC_BOOLEAN)
+                    | set(SPEC_CATEGORICAL) | set(SPEC_NUMERIC) | set(CANONICAL_PARAMETERS)
+                    | {d['name'] for d in self.spec.numeric} | set(self.spec.categoricals or {}))
+            user.discard('fs_w_*')
+            outs = {f'{k}{s}' for k in COEFF_KEYS + ('g',) for s in ('', '_std', '_lo', '_hi')}
+            kf = self._known = (frozenset(user), frozenset(user | outs | _PASS_FIELDS))
+        return kf
+
+    def _unknown_fields(self, columns):
+        """[(name, [close matches])] of the spec keys that are neither user
+        fields nor pass-through names: they are ignored by the model (e.g. a
+        misspelled price would otherwise silently fall back to the
+        configuration's baseline)."""
+        user, known = self._known_fields()
+        out = []
+        for c in columns:
+            c = str(c)
+            if c in known or c.startswith(_PASS_PREFIXES):
+                continue
+            out.append((c, difflib.get_close_matches(c, sorted(user), n=2, cutoff=0.75)))
+        return out
 
     def missing_fields(self, spec):
         """Required fields still missing (or physically invalid) after the
@@ -351,6 +464,27 @@ class CoefficientPredictor:
             warnings.warn('; '.join(f'row {i}: ' + self._suggest(k, nm) for i, k, nm in unknown[:6])
                           + ' -- descriptors/composition not filled from the registry were imputed',
                           UserWarning, stacklevel=3)
+        if warn:
+            unk = self._unknown_fields(_as_frame(spec).columns)
+            if unk:
+                warnings.warn('unknown specification field(s) IGNORED by the model: '
+                              + '; '.join(f'{n!r}' + (f" (did you mean {' or '.join(map(repr, m))}?)" if m else '')
+                                          for n, m in unk[:8])
+                              + (' ...' if len(unk) > 8 else '') + ' -- field reference: README section 5, '
+                              'P.field_units', UserWarning, stacklevel=3)
+            al = [(i, a) for i, d in enumerate(det) for a in d['alias_conflict']]
+            if al:
+                warnings.warn('; '.join(f'row {i}: ' + ' vs. '.join(f'{n}={v:g}' for n, v in g) + f' -- using {u}'
+                                        for i, (c, g, u) in al[:6])
+                              + ' (a price and its alias were both given, with different values)', UserWarning,
+                              stacklevel=3)
+            un = [(i, k, v) for i, d in enumerate(det) for k, v in d['unseen_levels']]
+            if un:
+                lv = self.spec.categoricals or {}
+                warnings.warn('; '.join(f'row {i}: {k}={v!r} was not seen in training (training levels: '
+                                        + ', '.join(x for x in lv.get(k, []) if x != '__other__') + ')'
+                                        for i, k, v in un[:6])
+                              + ' -- encoded as the unknown level', UserWarning, stacklevel=3)
         conf = [(i, c) for i, d in enumerate(det) for c in d['conflict']]
         if warn and conf:
             warnings.warn('; '.join(f'row {i}: config_id {cid!r} is ' + ', '.join(f'{k}={v!r}' for k, _, v in ks)

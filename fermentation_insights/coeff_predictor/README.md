@@ -526,9 +526,17 @@ MPSP_lo, MPSP_hi, g_source, intervals_calibrated`.
 
 Generated from `features.FIELD_UNITS` (which merges `downstream.FIELDS`;
 `P.field_units` at run time). Multi-valued fields are '+'-joined, and
-`'none'` is an explicit empty value. Categorical values that were not seen
-in training are encoded as the unknown level. Every omitted, defaulted or
-imputed field is reported per row.
+`'none'` is an explicit empty value. `feedstock_type` and
+`fermentation_mode` must be one of the listed values (case, blanks and
+`-` / `_` are ignored; anything else raises a ValueError with close
+matches), and `neutralizing_agent` is matched to the training levels
+ignoring case. Categorical values that were not seen in training (e.g.
+`fermentation_mode='continuous'`, a new base) are encoded as the unknown
+level, with a warning naming them. A field that is not in this table (e.g.
+a misspelled `electricty_price`) is ignored by the model, with a warning and
+close matches; when a price and its alias are both given with different
+values, the canonical name wins, with a warning. Every omitted, defaulted
+or imputed field is reported per row.
 
 | field | unit / allowed values | if omitted |
 |---|---|---|
