@@ -1,0 +1,570 @@
+{
+ "stats": {
+  "files": 41,
+  "restarted_attempts": 15,
+  "config_records": 41,
+  "samples_seen": 1623,
+  "points_seen": 38613,
+  "config_conflicts": 2,
+  "config_conflict_keys": [
+   "TAL|TAL_SA_glucose",
+   "TAL|TAL_SA_sugarcane"
+  ]
+ },
+ "rejections": {
+  "incomplete": 1,
+  "too_few_yields": 9,
+  "too_few_points": 11,
+  "low_R2": 2
+ },
+ "points_beyond_inflection_dropped": 2155,
+ "n_candidates": 1602,
+ "n_retained": 1600,
+ "filters": {
+  "min_points": 8,
+  "min_yields": 3,
+  "min_titers": 3,
+  "min_R2": 0.9,
+  "max_closure_rel": 0.05,
+  "max_g_over_stoich": 1.05,
+  "require_complete": true,
+  "clip_to_inflection": true,
+  "drop_superseded_smoke": true
+ },
+ "ng_pool": "auto",
+ "capital_basis": "auto",
+ "patches": true,
+ "data_patches": {
+  "M1": {
+   "config_records": 26,
+   "configs": [
+    "TAL|TAL_SA_corn",
+    "TAL|TAL_SA_cornstover",
+    "TAL|TAL_SA_glucose",
+    "TAL|TAL_SA_sugarcane",
+    "TAL|TAL_corn",
+    "TAL|TAL_cornstover",
+    "TAL|TAL_glucose",
+    "TAL|TAL_sugarcane",
+    "succinic|succinic_corn",
+    "succinic|succinic_cornstover",
+    "succinic|succinic_glucose",
+    "succinic|succinic_sugarcane"
+   ]
+  },
+  "M3": {
+   "config_records": 16,
+   "configs": [
+    "TAL|TAL_SA_corn",
+    "TAL|TAL_SA_cornstover",
+    "TAL|TAL_SA_glucose",
+    "TAL|TAL_SA_sugarcane",
+    "TAL|TAL_corn",
+    "TAL|TAL_cornstover",
+    "TAL|TAL_glucose",
+    "TAL|TAL_sugarcane"
+   ],
+   "samples": 185
+  },
+  "M12": {
+   "config_records": 16,
+   "configs": [
+    "TAL|TAL_SA_corn",
+    "TAL|TAL_SA_cornstover",
+    "TAL|TAL_SA_glucose",
+    "TAL|TAL_SA_sugarcane",
+    "TAL|TAL_corn",
+    "TAL|TAL_cornstover",
+    "TAL|TAL_glucose",
+    "TAL|TAL_sugarcane"
+   ]
+  },
+  "M23": {
+   "config_records": 10,
+   "configs": [
+    "HP|HP_corn",
+    "HP|HP_cornstover",
+    "HP|HP_glucose",
+    "HP|HP_sugarcane"
+   ]
+  },
+  "S1": {
+   "config_records": 97,
+   "configs": [
+    "HP|HP_corn",
+    "HP|HP_cornstover",
+    "HP|HP_glucose",
+    "HP|HP_hexanol_corn",
+    "HP|HP_hexanol_cornstover",
+    "HP|HP_hexanol_glucose",
+    "HP|HP_hexanol_sugarcane",
+    "HP|HP_neutral_corn",
+    "HP|HP_neutral_cornstover",
+    "HP|HP_neutral_glucose",
+    "HP|HP_neutral_hexanol_corn",
+    "HP|HP_neutral_hexanol_cornstover",
+    "HP|HP_neutral_hexanol_glucose",
+    "HP|HP_neutral_hexanol_sugarcane",
+    "HP|HP_neutral_sugarcane",
+    "HP|HP_sugarcane",
+    "TAL|TAL_SA_corn",
+    "TAL|TAL_SA_cornstover",
+    "TAL|TAL_SA_glucose",
+    "TAL|TAL_SA_sugarcane",
+    "TAL|TAL_corn",
+    "TAL|TAL_cornstover",
+    "TAL|TAL_glucose",
+    "TAL|TAL_sugarcane",
+    "ethanol|ethanol_corn",
+    "ethanol|ethanol_cornstover",
+    "ethanol|ethanol_sugarcane",
+    "isobutanol|IBO_EtOH_corn",
+    "lactic|lactic_lowpH_SHF_cornstover",
+    "lactic|lactic_lowpH_SSCF_cornstover",
+    "lactic|lactic_neutral_SHF_cornstover",
+    "lactic|lactic_neutral_SSCF_cornstover",
+    "oxalic|oxalic_neutral_sugarcane",
+    "succinic|succinic_corn",
+    "succinic|succinic_cornstover",
+    "succinic|succinic_glucose",
+    "succinic|succinic_neutral_corn",
+    "succinic|succinic_neutral_cornstover",
+    "succinic|succinic_neutral_glucose",
+    "succinic|succinic_neutral_sugarcane",
+    "succinic|succinic_sugarcane"
+   ],
+   "spec_version": 1,
+   "configs_without_spec": []
+  },
+  "D2": {
+   "samples_unpatchable": 0
+  },
+  "D15": {
+   "samples_unpatchable": 0
+  },
+  "D3": {
+   "points": 23944,
+   "samples": 998,
+   "by_config": {
+    "HP|HP_corn": 722,
+    "HP|HP_cornstover": 725,
+    "HP|HP_glucose": 718,
+    "HP|HP_neutral_corn": 721,
+    "HP|HP_neutral_glucose": 718,
+    "HP|HP_neutral_sugarcane": 721,
+    "HP|HP_sugarcane": 721,
+    "TAL|TAL_SA_corn": 721,
+    "TAL|TAL_SA_cornstover": 604,
+    "TAL|TAL_SA_glucose": 25,
+    "TAL|TAL_SA_sugarcane": 250,
+    "TAL|TAL_corn": 722,
+    "TAL|TAL_cornstover": 604,
+    "TAL|TAL_glucose": 716,
+    "TAL|TAL_sugarcane": 722,
+    "ethanol|ethanol_cornstover": 2720,
+    "ethanol|ethanol_sugarcane": 2725,
+    "isobutanol|IBO_EtOH_corn": 2712,
+    "oxalic|oxalic_neutral_sugarcane": 5242,
+    "succinic|succinic_corn": 287,
+    "succinic|succinic_cornstover": 280,
+    "succinic|succinic_glucose": 288,
+    "succinic|succinic_sugarcane": 280
+   },
+   "points_skipped": 0,
+   "moved_kg_per_h_total": 103962427.80258939
+  },
+  "D4": {
+   "points": 2725,
+   "samples": 109,
+   "by_config": {
+    "ethanol|ethanol_sugarcane": 2725
+   },
+   "credit_USD_per_kg_product_stream": 0.2593232650720395,
+   "credit_rel_spread": 1.4128065140029907e-14
+  },
+  "D6": {
+   "points": 5046,
+   "samples": 203,
+   "by_config": {
+    "HP|HP_corn": 722,
+    "HP|HP_cornstover": 725,
+    "HP|HP_glucose": 718,
+    "HP|HP_neutral_corn": 721,
+    "HP|HP_neutral_glucose": 718,
+    "HP|HP_neutral_sugarcane": 721,
+    "HP|HP_sugarcane": 721
+   }
+  },
+  "D7": {
+   "points": 5075,
+   "samples": 203,
+   "by_config": {
+    "HP|HP_corn": 725,
+    "HP|HP_cornstover": 725,
+    "HP|HP_glucose": 725,
+    "HP|HP_neutral_corn": 725,
+    "HP|HP_neutral_glucose": 725,
+    "HP|HP_neutral_sugarcane": 725,
+    "HP|HP_sugarcane": 725
+   },
+   "points_skipped": 0,
+   "points_above_inflection": 420
+  }
+ },
+ "median_R2": 0.9996548988636187,
+ "median_fit_mape": 0.013227139917375726,
+ "median_closure_rel": 0.0011861310249284165,
+ "max_sum_check": 1.68082681661321e-14,
+ "phi_flags": {
+  "ok": 1600
+ },
+ "ng_pools": {
+  "split": 1600
+ },
+ "ng_pool_inadmissible": 0,
+ "F_negative": 0,
+ "capital_bases": {
+  "FCI": 1600
+ },
+ "channels_ok": 1600,
+ "median_phi": 0.1441218199116128,
+ "median_area_coverage": 1.0,
+ "median_el_area_mismatch": 1.2861059116193884e-16,
+ "min_materials_other_rel": 0.002630990465367159,
+ "min_utilities_other_rel": 5.654282668998112e-06,
+ "imputed": {},
+ "per_config": {
+  "HP|HP_corn": 29,
+  "HP|HP_cornstover": 29,
+  "HP|HP_glucose": 29,
+  "HP|HP_hexanol_corn": 29,
+  "HP|HP_hexanol_cornstover": 29,
+  "HP|HP_hexanol_glucose": 29,
+  "HP|HP_hexanol_sugarcane": 29,
+  "HP|HP_neutral_corn": 29,
+  "HP|HP_neutral_cornstover": 29,
+  "HP|HP_neutral_glucose": 29,
+  "HP|HP_neutral_hexanol_corn": 29,
+  "HP|HP_neutral_hexanol_cornstover": 29,
+  "HP|HP_neutral_hexanol_glucose": 29,
+  "HP|HP_neutral_hexanol_sugarcane": 29,
+  "HP|HP_neutral_sugarcane": 29,
+  "HP|HP_sugarcane": 29,
+  "TAL|TAL_SA_corn": 29,
+  "TAL|TAL_SA_cornstover": 29,
+  "TAL|TAL_SA_glucose": 29,
+  "TAL|TAL_SA_sugarcane": 29,
+  "TAL|TAL_corn": 29,
+  "TAL|TAL_cornstover": 29,
+  "TAL|TAL_glucose": 29,
+  "TAL|TAL_sugarcane": 29,
+  "ethanol|ethanol_corn": 109,
+  "ethanol|ethanol_cornstover": 109,
+  "ethanol|ethanol_sugarcane": 109,
+  "isobutanol|IBO_EtOH_corn": 109,
+  "lactic|lactic_lowpH_SHF_cornstover": 27,
+  "lactic|lactic_lowpH_SSCF_cornstover": 25,
+  "lactic|lactic_neutral_SHF_cornstover": 34,
+  "lactic|lactic_neutral_SSCF_cornstover": 27,
+  "oxalic|oxalic_neutral_sugarcane": 211,
+  "succinic|succinic_corn": 18,
+  "succinic|succinic_cornstover": 18,
+  "succinic|succinic_glucose": 18,
+  "succinic|succinic_neutral_corn": 18,
+  "succinic|succinic_neutral_cornstover": 18,
+  "succinic|succinic_neutral_glucose": 18,
+  "succinic|succinic_neutral_sugarcane": 18,
+  "succinic|succinic_sugarcane": 18
+ },
+ "rejections_by_biorefinery": {
+  "lactic": {
+   "incomplete": 1,
+   "too_few_yields": 9,
+   "too_few_points": 11,
+   "low_R2": 2
+  }
+ },
+ "per_biorefinery": {
+  "HP": {
+   "n_kept": 464,
+   "rejected": {},
+   "R2": 0.9998494952989035,
+   "fit_mape": 0.014438225368861567,
+   "closure_rel": 0.0014102610301812897,
+   "closure_rel_max": 0.0035646810912464463,
+   "phi": 0.1450247735176009,
+   "phi_min": 0.12428745719953635,
+   "phi_max": 0.16896064738424854,
+   "phi_cv_productivity": 0.006352324026665918,
+   "F_fixed": 4676460.386373577,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor": 464
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 464
+   },
+   "ng_price": 0.2765,
+   "ng_price_source": {
+    "pools": 464
+   },
+   "ng_mixed_pool": {
+    "": 464
+   },
+   "ng_unpriced_flow_share": 0.0,
+   "capex_weights": {
+    "tdc": 464
+   },
+   "foc_alloc": {
+    "isbl": 464
+   },
+   "sum_check_max": 9.604723859140423e-16,
+   "ng_kg_per_kg": 0.0
+  },
+  "TAL": {
+   "n_kept": 232,
+   "rejected": {},
+   "R2": 0.9996493754273352,
+   "fit_mape": 0.0124540676258157,
+   "closure_rel": 0.0010234750338970092,
+   "closure_rel_max": 0.0032750564026795474,
+   "phi": 0.14525685171141658,
+   "phi_min": 0.12275608029933985,
+   "phi_max": 0.1673204535030873,
+   "phi_cv_productivity": 0.01058234963934783,
+   "F_fixed": 1396120.8520896132,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor": 232
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 232
+   },
+   "ng_price": 0.2765000000000001,
+   "ng_price_source": {
+    "pools": 232
+   },
+   "ng_mixed_pool": {
+    "": 232
+   },
+   "ng_unpriced_flow_share": 1.1102230246251565e-16,
+   "capex_weights": {
+    "tdc": 232
+   },
+   "foc_alloc": {
+    "isbl": 232
+   },
+   "sum_check_max": 2.0883168230080873e-15,
+   "ng_kg_per_kg": 0.7096221400230639
+  },
+  "ethanol": {
+   "n_kept": 327,
+   "rejected": {},
+   "R2": 0.9996865720004455,
+   "fit_mape": 0.00891261026784008,
+   "closure_rel": 0.00180473300894507,
+   "closure_rel_max": 0.003097990230399108,
+   "phi": 0.15459311524298677,
+   "phi_min": 0.13557658689615187,
+   "phi_max": 0.24524208733371783,
+   "phi_cv_productivity": 0.0005551700092237903,
+   "F_fixed": 4750000.0,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor_foc": 109,
+    "labor": 218
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 327
+   },
+   "ng_price": 0.21840140264305344,
+   "ng_price_source": {
+    "pools": 327
+   },
+   "ng_mixed_pool": {
+    "": 327
+   },
+   "ng_unpriced_flow_share": 0.0,
+   "capex_weights": {
+    "installed": 109,
+    "tdc": 218
+   },
+   "foc_alloc": {
+    "weights": 109,
+    "isbl": 218
+   },
+   "sum_check_max": 2.613740601082933e-15,
+   "ng_kg_per_kg": 0.0
+  },
+  "isobutanol": {
+   "n_kept": 109,
+   "rejected": {},
+   "R2": 0.9950072697505771,
+   "fit_mape": 0.03314428628915473,
+   "closure_rel": 1.4508849631161359e-05,
+   "closure_rel_max": 2.1191792778004503e-05,
+   "phi": 0.21858581827166296,
+   "phi_min": 0.21174385803882523,
+   "phi_max": 0.2279635484163028,
+   "phi_cv_productivity": 6.809763452605423e-06,
+   "F_fixed": 3679999.9999999995,
+   "fixed_over_labor": 1.5999999999999999,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor_foc": 109
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 109
+   },
+   "ng_price": 0.2893046531979421,
+   "ng_price_source": {
+    "pools": 109
+   },
+   "ng_mixed_pool": {
+    "": 109
+   },
+   "ng_unpriced_flow_share": 1.1102230246251565e-16,
+   "capex_weights": {
+    "installed": 109
+   },
+   "foc_alloc": {
+    "weights": 109
+   },
+   "sum_check_max": 9.215190898121162e-16,
+   "ng_kg_per_kg": 1.5703024274815132
+  },
+  "lactic": {
+   "n_kept": 113,
+   "rejected": {
+    "incomplete": 1,
+    "too_few_yields": 9,
+    "too_few_points": 11,
+    "low_R2": 2
+   },
+   "R2": 0.9986128224155166,
+   "fit_mape": 0.010962078824511345,
+   "closure_rel": 0.00012650365500824513,
+   "closure_rel_max": 0.0003898443452690897,
+   "phi": 0.1419499039922919,
+   "phi_min": 0.14005176455630522,
+   "phi_max": 0.14402492680348333,
+   "phi_cv_productivity": 0.003832426128070963,
+   "F_fixed": 6105238.2627799995,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor": 113
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 113
+   },
+   "ng_price": 0.253,
+   "ng_price_source": {
+    "pools": 113
+   },
+   "ng_mixed_pool": {
+    "": 113
+   },
+   "ng_unpriced_flow_share": 0.0,
+   "capex_weights": {
+    "tdc": 113
+   },
+   "foc_alloc": {
+    "isbl": 113
+   },
+   "sum_check_max": 1.68082681661321e-14,
+   "ng_kg_per_kg": 1.6380234022569422
+  },
+  "oxalic": {
+   "n_kept": 211,
+   "rejected": {},
+   "R2": 0.9975956949424767,
+   "fit_mape": 0.018001336277899606,
+   "closure_rel": 0.001587039098175295,
+   "closure_rel_max": 0.0035413929052039816,
+   "phi": 0.14465965147978524,
+   "phi_min": 0.12440235965841295,
+   "phi_max": 0.16695340491874494,
+   "phi_cv_productivity": 0.008462285689980741,
+   "F_fixed": 12175903.700380653,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor": 211
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 211
+   },
+   "ng_price": 0.276011662323727,
+   "ng_price_source": {
+    "pools": 211
+   },
+   "ng_mixed_pool": {
+    "": 211
+   },
+   "ng_unpriced_flow_share": 0.0,
+   "capex_weights": {
+    "tdc": 211
+   },
+   "foc_alloc": {
+    "isbl": 211
+   },
+   "sum_check_max": 1.1014374489826501e-15,
+   "ng_kg_per_kg": 0.0
+  },
+  "succinic": {
+   "n_kept": 144,
+   "rejected": {},
+   "R2": 0.9999283316043501,
+   "fit_mape": 0.01088907951279906,
+   "closure_rel": 0.0020196133289598433,
+   "closure_rel_max": 0.004153486263908965,
+   "phi": 0.1414314875962191,
+   "phi_min": 0.13854089032745537,
+   "phi_max": 0.1434941238279863,
+   "phi_cv_productivity": 0.008282297216116443,
+   "F_fixed": 22850419.742509328,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor": 144
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 144
+   },
+   "ng_price": 0.2527,
+   "ng_price_source": {
+    "pools": 144
+   },
+   "ng_mixed_pool": {
+    "": 144
+   },
+   "ng_unpriced_flow_share": 1.1102230246251565e-16,
+   "capex_weights": {
+    "tdc": 144
+   },
+   "foc_alloc": {
+    "isbl": 144
+   },
+   "sum_check_max": 8.970749688499817e-16,
+   "ng_kg_per_kg": 0.270463250091718
+  }
+ }
+}

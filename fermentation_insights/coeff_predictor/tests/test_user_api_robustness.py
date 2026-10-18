@@ -50,7 +50,9 @@ def shipped():
     proc = os.path.join(HERE, 'data', 'processed', 'samples.csv.gz')
     ck = os.path.join(HERE, 'models', 'release', 'feature_spec.json')
     if not (os.path.exists(proc) and os.path.exists(ck)):
-        pytest.skip('processed tables / shipped checkpoint not available')
+        pytest.skip('processed tables (data/processed/*.csv.gz, tracked in git) or shipped checkpoint '
+                    'not available -- restore them from git or rebuild them (README section 8, '
+                    '"Data availability")')
     s, _, _ = T.load_tables(os.path.join(HERE, 'data', 'processed'))
     return s, _quiet(CoefficientPredictor.load, os.path.join(HERE, 'models', 'release'))
 

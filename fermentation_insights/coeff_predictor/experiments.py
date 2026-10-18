@@ -391,7 +391,13 @@ def stage_data(a):
         with open(fp_path) as fh:
             old = json.load(fh)
     src_changed = old.get('processing_sources') not in (None, src)
-    if have and (a.no_rebuild or (old.get('raw_fingerprint') == fp and not a.rebuild and not src_changed)):
+    if have and not files and not a.rebuild:
+        # a clone without the raw simulation records (not in git): the shipped
+        # processed tables are the data (README section 8, "Data availability")
+        log(f'data: no raw *.jsonl files under {a.raw}: using the shipped processed tables in {proc}'
+            + (' (WARNING: the data-processing sources changed since they were built; they cannot be rebuilt '
+               'without the raw records)' if src_changed else ''))
+    elif have and (a.no_rebuild or (old.get('raw_fingerprint') == fp and not a.rebuild and not src_changed)):
         log(f'data: cached processed tables in {proc} '
             f'({"--no-rebuild" if a.no_rebuild else "raw files and processing sources unchanged"})')
         if old.get('processing_sources') is None and not a.no_rebuild:
@@ -438,7 +444,7 @@ def stage_data(a):
     log(f'data: {len(samples)} samples, {len(points)} points, {samples["config_id"].nunique()} configurations, '
         f'{samples["biorefinery"].nunique()} biorefineries (hash {dh})')
     return dict(samples=samples, points=points, configs=configs, report=rep, hash=dh,
-                recent_raw_files=recent, n_raw_files=len(files))
+                recent_raw_files=recent, n_raw_files=len(files) or len(old.get('files') or []))
 
 
 def data_summary(samples, points):
@@ -1883,9 +1889,17 @@ def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
         except Exception as e:
             log(f'tables: WARNING applicability-domain validation failed: {type(e).__name__}: {e}')
     try:
-        checks['data_coverage'] = RC.raw_sample_coverage(dataset._find_files(a.raw), D['samples'],
-                                                         PLANNED_SAMPLES)
-        checks['data_coverage'].to_csv(os.path.join(tdir, 'data_coverage.csv'), index=False)
+        raw_files = dataset._find_files(a.raw)
+        cov_path = os.path.join(tdir, 'data_coverage.csv')
+        if not raw_files and os.path.exists(cov_path):
+            # no raw records (a clone of the repository): keep the table of the
+            # run that had them rather than counting zero started samples
+            import pandas as pd
+            checks['data_coverage'] = pd.read_csv(cov_path)
+            log(f'tables: no raw files under {a.raw}: sample coverage kept from {cov_path}')
+        else:
+            checks['data_coverage'] = RC.raw_sample_coverage(raw_files, D['samples'], PLANNED_SAMPLES)
+            checks['data_coverage'].to_csv(cov_path, index=False)
     except Exception as e:
         checks['data_coverage'] = None
         log(f'tables: WARNING raw sample coverage failed: {type(e).__name__}: {e}')

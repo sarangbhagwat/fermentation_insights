@@ -203,7 +203,9 @@ def _real(name):
     ck = os.path.join(HERE, 'models', name, 'feature_spec.json')
     split = os.path.join(HERE, 'results', 'split_applied.json')
     if not (os.path.exists(proc) and os.path.exists(ck) and os.path.exists(split)):
-        pytest.skip('processed tables / shipped checkpoint not available')
+        pytest.skip('processed tables (data/processed/*.csv.gz, tracked in git) or shipped checkpoint '
+                    'not available -- restore them from git or rebuild them (README section 8, '
+                    '"Data availability")')
     s, _, _ = T.load_tables(os.path.join(HERE, 'data', 'processed'))
     P = _quiet(CoefficientPredictor.load, os.path.join(HERE, 'models', name))
     if name == 'final_dev':

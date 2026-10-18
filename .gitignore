@@ -163,7 +163,14 @@ cython_debug/
 
 # coeff_predictor large/intermediate data
 fermentation_insights/coeff_predictor/data/raw/
-fermentation_insights/coeff_predictor/data/processed/
+# processed tables: shipped (the training data of the checkpoints and of every REPORT.md number);
+# anything else written there stays local
+fermentation_insights/coeff_predictor/data/processed/*
+!fermentation_insights/coeff_predictor/data/processed/samples.csv.gz
+!fermentation_insights/coeff_predictor/data/processed/points.csv.gz
+!fermentation_insights/coeff_predictor/data/processed/configs.csv.gz
+!fermentation_insights/coeff_predictor/data/processed/report.json
+!fermentation_insights/coeff_predictor/data/processed/experiments_fingerprint.json
 fermentation_insights/coeff_predictor/results/quick/
 fermentation_insights/coeff_predictor/models/quick/
 fermentation_insights/coeff_predictor/results/cache/
