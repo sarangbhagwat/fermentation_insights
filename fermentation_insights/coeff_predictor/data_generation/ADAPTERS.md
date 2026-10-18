@@ -201,5 +201,8 @@ For items 2-4, every point records the measured flows (`F_ferm_product`,
 `F_sugar_fed`, `V_broth`, `F_final_product`) and the recovery, `dataset.py`
 rejects samples whose cost-channel decomposition does not close
 (`closure_rel`, `high_closure`), and the failure and rejection counts are in
-`report.json` and REPORT.md section 1; an explicit per-point check of y and
-t against the measured flows is not part of the pipeline.
+`report.json` and REPORT.md section 1. The per-point check of y and t
+against the measured flows (F_ferm_product / F_sugar_fed / y and
+F_ferm_product / V_broth / t, min / median / max per configuration) is
+reported in REPORT.md section 1 (`report_checks.yt_definition_check`,
+`results/tables/yt_definition_check.csv`; report only, it rejects nothing).

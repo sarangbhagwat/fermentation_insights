@@ -52,8 +52,10 @@ module's bracketed concentration solver must not get unattainable targets),
 interpolating titer/yield in between. The sampled acetic acid yield
 (``bp_acetic_acid_yield``) moves the sample's own inflection yield
 (``x_inflection_yield``; points above it have ``x_above_inflection`` = True).
-Measured yield (fresh glucose + xylose basis) exceeds y by up to ~4% at low y
-because residual sugars of the seed train are recycled with the inoculum.
+Measured yield (fresh glucose + xylose basis) exceeds y by up to ~6% at low y
+(SHF 5.6 %, SSCF 4.7 % in the training data; REPORT.md section 1, "Measured
+vs. nominal yield and titer") because residual sugars of the seed train are
+recycled with the inoculum.
 
 Robustness/consistency measures (see also Bioindustrial-Park branch fi-lactic,
 which ports lactic to BioSTEAM 2.54 and fixes the titer specifications): the

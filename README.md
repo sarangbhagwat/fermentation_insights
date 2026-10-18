@@ -36,8 +36,9 @@ physical constraints, uncertainty intervals and an applicability domain) trained
 Bioindustrial-Park biorefineries (41 configurations). Its intervals are split-conformal, calibrated on the
 leave-one-configuration-out cross-validation of the development data (so they target new configurations; coverage is
 marginal over the samples of new configurations, not guaranteed for each configuration; the recovery intervals
-under-cover for some product families). In the cross-validation of the shipped (v3) model, accuracy is good for new
-configurations of known feedstocks and products (leave-one-configuration-out MPSP error 8.5 %), but for a new
+under-cover for some product families). In the cross-validation of the shipped (v3) model, the leave-one-configuration-out
+MPSP error is 8.5 % (6.8 % over the 35 folds whose product has another configuration; by family from about 2-3 % for
+HP and succinic acid to 10-12 % for TAL and lactic acid and 25 % for ethanol), but for a new
 feedstock (37.0 %) or a new product family (44.8 %) the model is not better than a nearest-configuration lookup at the
 fold level; for an unseen feedstock or product the intervals are not calibrated (0.71 MPSP coverage of a nominal 0.90
 for both), and such predictions are flagged. The numbers are those of its

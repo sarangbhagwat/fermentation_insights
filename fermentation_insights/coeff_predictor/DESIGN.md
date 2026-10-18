@@ -53,7 +53,7 @@ carries `harness_version`, `adapter_version` and `data_patches`.
 | id | affected rows | correction |
 |---|---|---|
 | D3 | harness < 3: HP, oxalic, isobutanol, TAL, succinic, ethanol cornstover/sugarcane | v2 booked the boiler's natural gas (BioSTEAM `BoilerTurbogenerator` stream utility 'Fuel', which the TEA charges at `stream_prices['Fuel']` = `BT.natural_gas_price`) as an unpriced material feed. The boiler gas `B` moves to the utility pool at `natural_gas_price`: `ng_flow_utility += B`, `ng_cost_utility += B·natural_gas_price`, `ng_flow_material -= B`. `B` = `ng_flow_material` for HP, oxalic and isobutanol (all their material gas is the boiler's), and `x_natural_gas_BT` for the others. Unaffected: lactic (its boiler gas is priced) and ethanol corn (no boiler). |
-| D4 | ethanol_sugarcane, adapter < 2 | The MPSP was net of the module's RIN credit, recorded as `coproduct_sales` (0.2593 USD per kg of denatured product, checked to be constant before patching). Patched: `x_RIN_credit = coproduct_sales/h`, `MPSP += coproduct_sales/(h·F_final_product)`, `x_MPSP_denatured`/`x_MESP_…` raised by the credit, `coproduct_sales = 0`. |
+| D4 | ethanol_sugarcane, adapter < 2 | The MPSP was net of the module's RIN credit, recorded as `coproduct_sales` (0.2593 USD per kg of denatured product, checked to be constant before patching). Patched: `x_RIN_credit = coproduct_sales/h`, `MPSP += coproduct_sales/(h·F_final_product)`, `x_MPSP_denatured`/`x_MESP_…` raised by the credit, `coproduct_sales = 0`. `product_stream_sales` (the harness's sales of the product stream) is not updated and stays net of the credit in the patched rows (58 % off in the ethanol_sugarcane reproduction); no module reads it (`dataset.py`, `physics.py` and the model use `MPSP` and the cost channels), so this is harmless. |
 | D6 | HP, adapter < 2 | `base_cost = x_lime_fermentation · p_base_price`. The TEA charges `lime_fresh`, which is linked to `fermentation_lime`, at the sampled price. v1 read `fermentation_lime`, whose price was frozen. |
 | D7 | HP, adapter < 2 | `x_inflection_yield = (1 − p_cell_mass_yield)·theoretical_yield`, `x_above_inflection = y > x_inflection_yield`. Basis checked: the config inflection is 0.755 = 1 − 0.245, and `x_cell_mass_conversion` equals `p_cell_mass_yield` at low y. |
 | D11 | ethanol_corn, adapter < 2 | The corn natural gas missed the thermal oxidizer X611 and its price was the stream's own (0). Fixed in adapter v2 (sum over the 'Natural gas' and 'Fuel' utilities, `bst.stream_prices`); the affected samples were regenerated with D2. |
@@ -194,6 +194,96 @@ training row; the convention is the same for all of them); the lactic SSCF rando
 samples rejected for too few feasible points are the low-carbohydrate ones
 (retained median carbohydrate content 0.54, rejected 0.25-0.59), so the
 retained data are censored toward carbohydrate-rich feedstock.
+
+### Product-specific cost structure (not defects)
+
+Two configurations break priors that hold for every other one; the data are
+the modules' own physics, kept as simulated, but they matter for the model:
+
+* **Isobutanol (`IBO_EtOH_corn`): the MPSP rises with the yield.** The
+  adapter (`adapters/isobutanol.py`) sends the sugar not converted to
+  isobutanol to ethanol, sold at a fixed price (`x_ethanol_price` 0.79
+  USD/kg), so its yield axis is a product split, unlike the other families,
+  whose yield deficit goes to unsold cell mass or byproducts. At low yield
+  the ethanol credit exceeds the feedstock cost (baseline sample, y = 0.05,
+  t = 5 g/L: coproducts −8.58 USD/kg, feedstock +5.57 USD/kg). Consequences:
+  b′ < 0 in 102 of the 109 samples (median −0.021) and d′ < 0 in all 109
+  (median −0.169), against b′ = "the sugar needed per kg product" for the
+  others (README section 1); the simulated MPSP rises from y = 0.05 to 0.36
+  on the t = 5 g/L line in 99 % of the samples (median +33 %), and the
+  relative impact of yield vs. titer (README section 4.4) is negative at
+  the isobutanol baseline (a yield gain RAISES the MPSP).
+* **Isobutanol: broth alcohol titers without an inhibition limit.** The
+  adapter replaces the module's kinetic model by a stoichiometric one
+  without product inhibition: 172 of the 2712 retained isobutanol points
+  (106 samples) have more than 120 g/L ethanol in the broth (max 148 g/L),
+  283 more than 150 g/L total alcohol (max 168 g/L; glucose loading up to
+  578 g/L). Refitting each sample without its points above 120 g/L ethanol
+  (OLS of g·MPSP on the unifying basis, which reproduces the stored
+  coefficients) changes the mean d′ from −0.168 to −0.118 (−30 %); the
+  fitted MPSP on the kept points changes by 1.1 % on average, the
+  per-sample maximum by a median 5.1 % (up to 13 %). Not corrected (a
+  titer cap in the adapter's `max_titer`, or flagging those points, is an
+  option for the next data rebuild).
+* **Oxalic acid (`oxalic_neutral_sugarcane`): the MPSP rises with the titer
+  at high titer.** Reaching a higher titer means evaporating the cane
+  juice, which cuts the exported electricity (baseline sample, y = 0.24:
+  electricity credit −0.600 → −0.516 USD/kg and MPSP 1.604 → 1.678 USD/kg
+  from t = 52.5 to 100 g/L); every oxalic sample has a yield line on which
+  the simulated MPSP rises with the titer (between neighbouring titers by
+  up to +9.7 %; from the line's minimum to its highest titer by a median
+  +8.9 % of the samples' largest rise, up to +15 %). 26 oxalic
+  samples also have a recovery slightly above the stoichiometric ratio 1
+  (g up to 1.003; the predictions are bounded by g_max).
+
+Effect on the physics residuals: `train.check_constraints` enables a
+residual only if the training targets satisfy it in ≥ 99 % of the samples.
+dMPSP/dy ≤ 0 holds in 93.25 % (the 108 violating samples are all
+`IBO_EtOH_corn`) and dMPSP/dt ≤ 0 in 98.1 % (the 30 violating samples are all
+oxalic), so both residuals are disabled for EVERY product
+(`models/release/meta.json`, `constraint_report`). The REPORT.md
+constraint-violation tables (sections 5 and 6) therefore show the data's own
+rates (`data (fit)`) next to the methods': a `viol_mono_y` near the data's is
+the isobutanol share of the held-out samples, not a model error. Enabling the
+monotonicity residuals per product (off only for isobutanol / oxalic) would
+change training and is left for a future model round (it needs a re-run and
+a new evaluation).
+
+The natural-gas intensity has the same kind of issue. The simulated
+natural-gas use `q__ng` is never negative (0 of 35 583 points), but it is a
+hinge, max(0, ·): zero wherever the biomass fuel covers the steam demand
+(44 % of all points; 6-83 % of the HP points per configuration, 80 % of
+ethanol_cornstover's, 92 % of ethanol_sugarcane's, 89 % of oxalic's) and
+positive only at low titer or high yield. The unifying basis cannot
+represent a hinge, so the 4-term fits `int__ng__{a,b,c,d}` (the targets of
+the natural-gas intensity head) go below zero at some of the sample's own
+points in 923 of the 1600 samples (`nonneg_ng` satisfied in 42 %): the
+non-negativity residual of the natural-gas intensity is disabled for that
+reason, and a predicted natural-gas intensity (`int__ng__*`) can be negative
+in parts of the domain, as the fitted targets are. The channel identities
+are unaffected (`price_linear` holds exactly), so the totals and the price
+linearity are; clip the natural-gas use at 0 when reporting it as a
+quantity.
+
+### Measured vs. nominal yield and titer
+
+ADAPTERS.md checklist item 2 asks that y and t follow the shared
+definitions. REPORT.md section 1 reports the per-point ratios
+F_ferm_product / F_sugar_fed / y and F_ferm_product / V_broth / t per
+configuration (`results/tables/yt_definition_check.csv`, report only). HP,
+succinic, oxalic and isobutanol stay within ±0.6 % (ethanol_cornstover within
+0.9 %). The departures above 1 %:
+
+| configurations | yield ratio | titer ratio | cause |
+|---|---|---|---|
+| TAL, TAL_SA (8) | 0.998-1.645 | 1.000 | D8 (the spiked acetate counts as substrate in y, not in F_sugar_fed) |
+| lactic SHF (2) | 0.999-1.056 | 0.997-1.002 | residual seed-train sugars recycled with the inoculum (adapter docstring) |
+| lactic SSCF (2) | 0.999-1.047 | 0.976-1.001 | the same for the yield; the titer ratio below 1 is not explained |
+| ethanol (3) | 1.000 | 1.001-1.026 | ethanol leaving with the CO2 vent counts in F_ferm_product but not in the module's broth titer (adapter docstring) |
+
+The coefficients are fitted on the nominal y and t (the modules' own
+definitions), the inputs of the unifying equation; the ratios matter only
+when comparing yields or titers across modules.
 
 ### Comparison with the publication
 
@@ -724,9 +814,25 @@ keep them inside the training box, `[1, 1]`); only physics residuals 1–4 are
 evaluated there (PINN-style). Residuals the training data violate in more
 than 1 % of the samples are disabled (`train.check_constraints`): in the
 release only positive MPSP and the non-negative feedstock intensity are
-active (monotonicity in y and t is violated by 7 % / 2 % of the samples,
-monotonicity in r is replaced by the hard structure of §3, the natural-gas
-non-negativity is disabled; `models/release/meta.json` → `loss_config`).
+active. Monotonicity in y is violated by 7 % of the samples, all of them
+isobutanol, whose yield deficit is sold as ethanol, and monotonicity in t by
+2 %, all of them oxalic acid (§1, "Product-specific cost structure"), so
+both are off for every product; monotonicity in r is replaced by the hard
+structure of §3; the natural-gas non-negativity is disabled because the
+4-term fits of the hinge-shaped natural-gas demand go negative inside the
+domain in 58 % of the samples although the simulated use never does (§1),
+so a predicted natural-gas intensity can be negative where the fitted
+targets are (`models/release/meta.json` → `constraint_report`,
+`loss_config`).
+
+**Settings of the v3 pipeline and the shipped checkpoints**
+(`models/release/meta.json` → `loss_config`): channel term in surface space
+(`ch_space='surface'`) with the total in coefficient space
+(`coef_space='coef'`), `w_ch = 3` (fixed, chosen on out-of-fold channel
+fidelity, §6 round 5), `w_mpsp = 0.3`, `w_tot = w_g = 1`, `w_phys = 0.03`,
+collocation ratio 2, no configuration balancing; the TAL / TAL_SA
+feedstock-channel targets are masked (D8). The formula above shows the
+coefficient-space channel term, the default of `LossConfig`.
 
 Options (`LossConfig`; defaults = the loss above):
 
@@ -2317,6 +2423,54 @@ here:
    conformal quantile would be an option (it changes the shipped quantiles).
 4. *Fixed reagent prices* (succinic_neutral H2SO4, TAL NaOH) recorded as
    `p_acid_price` / `p_base_price` at the next data rebuild (§1, minor items).
+5. *Monotonicity priors per product.* dMPSP/dy ≤ 0 and dMPSP/dt ≤ 0 are off
+   for every product because isobutanol and oxalic acid violate them in
+   the data (§1, "Product-specific cost structure"); enabling them for the
+   other products changes training.
+6. *Composition features.* For a custom feedstock the energy channels
+   follow the composition as a proxy for the feedstock (diluting glucose
+   with water lowers the predicted electricity and natural-gas costs, −5.6 %
+   MPSP at w_sugar = 0.5, README section 4.2); dry-basis composition
+   features plus an explicit water fraction feeding only the channels it
+   affects, and a sugar-throughput scale input instead of the wet capacity.
+7. *Calibration on known-product folds.* 290 of the 1353 LOCO out-of-fold
+   scores that calibrate the shipped intervals come from the two
+   new-product folds (isobutanol, oxalic acid); calibrating on the 35
+   known-product folds only would match the intervals' stated target (a new
+   configuration of a known product; coverage of the shipped quantiles on
+   those folds: MPSP 0.90, g 0.87).
+
+### Validation-design checks (final review, round 3; report only)
+
+Added to the report from the saved outputs, without any refit or new
+choice (REPORT.md sections 2, 5 and 6; `experiments.clustered_and_twin_checks`):
+
+* **Input twins.** Configurations whose baseline rows encode to the same
+  model input (`report_checks.input_twins`, features of `models/final_dev`):
+  the two lactic SHF / SSCF pairs (0 of 151 features differ; no other pair
+  is closer than 5.09 in the standardized features). One of them crosses
+  the development / test boundary: the held-out
+  `lactic_neutral_SSCF_cornstover` is input-identical to the development
+  configuration `lactic_neutral_SHF_cornstover`, so its OOD result
+  measures the unmodelled SHF-to-SSCF difference. The OOD test is also
+  reported without it (PI-NN 7.1 % vs. 6.6 % with it; 22 of the 42
+  in-domain OOD samples were the twin's, the in-domain fraction without it
+  is 0.26), and the LOCO folds whose twin is in training (the low-pH pair)
+  are marked; the one lactic fold without a twin in training has 18.1 %.
+  The split rule, fixed before modelling, is unchanged; a check of
+  identical encodings across a new split belongs before the split is
+  frozen.
+* **New-product LOCO folds.** `IBO_EtOH_corn` and `oxalic_neutral_sugarcane`
+  are their product's only configuration, so their LOCO folds are
+  new-product folds; LOCO over the other 35 folds: PI-NN 6.8 %, plain MLP
+  8.8 %, kNN 15.5 %.
+* **Family clustering.** The 37 LOCO folds cluster in 7 families (15 HP);
+  the fold-level p-values treat them as independent. At the family level
+  (fold differences averaged per family) the PI-NN is better than the
+  plain MLP in 7 of 7 families and than kNN in 6 of 7 (Wilcoxon p 0.016,
+  0.031).
+* **Data's own constraint violations** next to the methods' (sections 5,
+  6), and the measured vs. nominal y and t per configuration (section 1).
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 

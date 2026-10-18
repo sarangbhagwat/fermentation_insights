@@ -64,7 +64,8 @@ Definitions are identical for all configurations:
 * titer ``t`` = ethanol in the liquid broth leaving the main fermentor / broth
   volumetric flow (the module's own titer definition). Because ~1-2 % of the
   ethanol leaves with the CO2 vent (recovered by the vent scrubber),
-  ``F_ferm_product/V_broth`` is 1-2 % above ``t``;
+  ``F_ferm_product/V_broth`` is 0.1-2.6 % above ``t`` (training data,
+  REPORT.md section 1);
   ``x_F_ethanol_broth/V_broth`` equals ``t``.
 * productivity: fermentation time tau = t / r (cornstover: co-fermentation
   time of the SSCF vessels; the 60 h saccharification time is kept).
