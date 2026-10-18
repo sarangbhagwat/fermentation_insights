@@ -682,7 +682,7 @@ class CoefficientPredictor:
         warnings.warn('contextual parameter(s) outside the training range of the configuration (or product pair '
                       'and feedstock): ' + ' | '.join(parts)
                       + (' -- each configuration\'s capacity was sampled only about +/-10-20 % around its baseline, '
-                         'and the model reproduces only about half of the simulated economy of scale (README '
+                         'and the model reproduces only about two thirds of the simulated economy of scale (README '
                          'section 7): do not read scale-up effects from it' if cap else
                          ' -- the response to these parameters is extrapolated')
                       + '; in_domain does not include this check (column contextual_outside_range)',

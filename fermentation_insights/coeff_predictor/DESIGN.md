@@ -261,14 +261,16 @@ change training and is left for a future model round (it needs a re-run and
 a new evaluation).
 
 The natural-gas intensity has the same kind of issue. The simulated
-natural-gas use `q__ng` is never negative (0 of 35 583 points), but it is a
+natural-gas use `q__ng` is never negative (0 of 35 578 points), but it is a
 hinge, max(0, ·): zero wherever the biomass fuel covers the steam demand
-(44 % of all points; 6-83 % of the HP points per configuration, 80 % of
-ethanol_cornstover's, 92 % of ethanol_sugarcane's, 89 % of oxalic's) and
-positive only at low titer or high yield. The unifying basis cannot
+(38 % of all points; 3-82 % of the HP points per configuration, 80 % of
+ethanol_cornstover's, 90 % of ethanol_sugarcane's, 89 % of oxalic's; data
+of 2026-10-18, D16 / D17 corrected; before: 44 %, 6-83 %, 80 / 92 / 89 %)
+and positive only at low titer or high yield. The unifying basis cannot
 represent a hinge, so the 4-term fits `int__ng__{a,b,c,d}` (the targets of
 the natural-gas intensity head) go below zero at some of the sample's own
-points in 923 of the 1600 samples (`nonneg_ng` satisfied in 42 %): the
+points in 880 of the 1600 samples (`nonneg_ng` satisfied in 45 %; v3 data:
+923, 42 %): the
 non-negativity residual of the natural-gas intensity is disabled for that
 reason, and a predicted natural-gas intensity (`int__ng__*`) can be negative
 in parts of the domain, as the fitted targets are. The channel identities
@@ -301,14 +303,15 @@ when comparing yields or titers across modules.
 REPORT.md section 8 (i) compares the baseline coefficients with the
 publication's (`results/data/<config>_coefficients.npy`): b′, c′, d′ and g
 agree within a few per cent for most configurations, a′ is higher (median
-ratio 1.215). Two causes are known. Succinic acid at neutral pH differs by
-design (D15: the regenerated data simulate the salt formation and
-acidulation; a′ ratio 1.24-1.34 against 1.02-1.15 at low pH). HP's a′ is
-1.08-1.63 x the publication's, mostly fermentation capital (a median 48 %
-of the HP baseline a′, `ch__capex_fermentation__a`), which scales with 1/r:
+ratio 1.202; v3 data 1.215). Two causes are known. Succinic acid at neutral
+pH differs by design (D15: the regenerated data simulate the salt formation
+and acidulation; a′ ratio 1.24-1.34 against 1.02-1.15 at low pH). HP's a′ is
+1.12-1.62 x the publication's (v3 data 1.08-1.63 x), mostly fermentation
+capital (a median 46 % of the HP baseline a′, `ch__capex_fermentation__a`;
+v3 data 48 %), which scales with 1/r:
 a review comparison with the publication's productivity coefficient sets
 (`results/data/<cfg>_0.2bp_*` and `_5.0bp_*`, at the median y and t of each
-baseline sample, release model) found the MPSP increase at 0.2 x the
+baseline sample, v3 release model) found the MPSP increase at 0.2 x the
 baseline productivity 1.24-1.64 x the publication's for the 16 HP
 configurations (HP_corn +1.148 vs. +0.825 USD/kg) and the decrease at 5 x
 1.22-1.63 x, while TAL and succinic agree within 0.89-1.11; the data show
@@ -876,16 +879,16 @@ isobutanol, whose yield deficit is sold as ethanol, and monotonicity in t by
 both are off for every product; monotonicity in r is replaced by the hard
 structure of §3; the natural-gas non-negativity is disabled because the
 4-term fits of the hinge-shaped natural-gas demand go negative inside the
-domain in 58 % of the samples although the simulated use never does (§1),
+domain in 55 % of the samples although the simulated use never does (§1),
 so a predicted natural-gas intensity can be negative where the fitted
 targets are (`models/release/meta.json` → `constraint_report`,
 `loss_config`).
 
 **Settings of the v3 / v4 pipeline and the shipped checkpoints**
 (`models/release/meta.json` → `loss_config`; the HPO-selected values below,
-`w_mpsp`, `w_phys` and the collocation ratio, are the v3 selection, and the
-v4 run re-runs the same search on the corrected data: REPORT.md section 4
-and the checkpoint have the shipped values): channel term in surface space
+`w_mpsp`, `w_phys` and the collocation ratio, are the v3 selection, which
+the v4 run's re-run of the same search on the corrected data selected again:
+REPORT.md section 4 and the checkpoint have the shipped values): channel term in surface space
 (`ch_space='surface'`) with the total in coefficient space
 (`coef_space='coef'`), `w_ch = 3` (fixed, chosen on out-of-fold channel
 fidelity, §6 round 5), `w_mpsp = 0.3`, `w_tot = w_g = 1`, `w_phys = 0.03`,
@@ -1159,9 +1162,10 @@ price, so prices outside the training range are reported separately.
     reported: + `bp_*` inputs, and the configuration mean). It was meant as
     an estimate of the error the unobserved `bp_*` cause, but it is NOT a
     noise floor: it is the model-form error of a linear model on 20-60
-    samples per configuration (v3: 6.3 % configuration geo-mean, while the
-    PI-NN predicts random samples at 3.3 % in random CV, and adding the
-    `bp_*` draws makes the ridge worse, 7.2 %; REPORT.md section 1);
+    samples per configuration (v4: 6.0 % configuration geo-mean, while the
+    PI-NN predicts random samples at 3.1 % in random CV, and adding the
+    `bp_*` draws makes the ridge worse, 7.0 %; v3: 6.3, 3.3 and 7.2 %;
+    REPORT.md section 1);
   - `coef_gram_rel`: conditioning-aware coefficient error, the numerator
     error vector e in the norm of the sample's own design, √(eᵀGe) with
     G = ΦᵀΦ/n over its points (= RMS error of the numerator surface),
@@ -1976,8 +1980,9 @@ Open issues:
    paired LOCO / LOPO check (≥ 3 seeds) before adoption.
 11. Scale response (final review, round 4; REPORT.md section 8 (ii-c)): each
    configuration's capacity is sampled only 0.81-1.19 x its baseline, and
-   the release model reproduces a median 0.60 / 0.55 of the simulated MPSP
-   decrease of a 2x / 3x plant (BioSTEAM at baseline parameters,
+   the release model reproduces a median 0.60 / 0.55 (v3; v4: 0.65 / 0.71)
+   of the simulated MPSP decrease of a 2x / 3x plant (BioSTEAM at baseline
+   parameters,
    `data_generation/checks/capacity_response.csv`). The user API flags a
    capacity outside the configuration's training range
    (`contextual_outside_range`), but the model is unchanged. Proposed for
@@ -1990,8 +1995,8 @@ Open issues:
    section 6, "Coverage for a KNOWN configuration"): the pooled LOCO
    quantiles over-cover HP, ethanol, isobutanol, oxalic and succinic acid
    and under-cover TAL's g (also for known configurations: 0.45 on the
-   random-CV scores; the decarboxylation-conversion noise of item 6) and
-   lactic's d′ (0.56). Candidates (need a re-run and a fresh calibration):
+   random-CV scores, v4 0.44; the decarboxylation-conversion noise of item
+   6) and lactic's d′ (0.56, v4 0.56). Candidates (need a re-run and a fresh calibration):
    Mondrian (per-family) conformal quantiles with a fallback for small
    families, or a score with an aleatoric term (a per-family floor ε, or a
    variance head for g).
@@ -2497,7 +2502,9 @@ here:
    43-51, 5b). For the README's wheat straw in the HP_neutral_cornstover
    process it predicts int__fs (a, b, c, d) = (0.247, 1.617, −3.80, 20.06)
    against (0.191, 2.097, 0.920, 1.149) for corn stover: b′ 23 % lower
-   although the straw has 5.5 % more sugar, d′ 17 times larger. Proposed:
+   although the straw has 5.5 % more sugar, d′ 17 times larger (v3
+   checkpoint; the v4 checkpoint: (0.244, 1.596, −0.91, 18.91) against
+   (0.152, 2.119, 2.79, 0.561), b′ 25 % lower, d′ 34 times larger). Proposed:
    keep b′ of the feedstock intensity product-blind (sugar availability)
    and predict its a′, c′, d′ (the recovery shape, F_feedstock / F_sugar is
    constant within a sample) from a product / recovery-side sub-network, or
@@ -2520,7 +2527,8 @@ here:
 6. *Composition features.* For a custom feedstock the energy channels
    follow the composition as a proxy for the feedstock (diluting glucose
    with water lowers the predicted electricity and natural-gas costs, −5.6 %
-   MPSP at w_sugar = 0.5, README section 4.2); dry-basis composition
+   MPSP at w_sugar = 0.5 with the v3 checkpoint, −4.4 % with v4, README
+   section 4.2); dry-basis composition
    features plus an explicit water fraction feeding only the channels it
    affects, and a sugar-throughput scale input instead of the wet capacity.
 7. *Calibration on known-product folds.* 290 of the 1353 LOCO out-of-fold
@@ -2559,22 +2567,24 @@ choice (REPORT.md sections 2, 5 and 6; `experiments.clustered_and_twin_checks`):
   `lactic_neutral_SSCF_cornstover` is input-identical to the development
   configuration `lactic_neutral_SHF_cornstover`, so its OOD result
   measures the unmodelled SHF-to-SSCF difference. The OOD test is also
-  reported without it (PI-NN 7.1 % vs. 6.6 % with it; 22 of the 42
-  in-domain OOD samples were the twin's, the in-domain fraction without it
-  is 0.26), and the LOCO folds whose twin is in training (the low-pH pair)
-  are marked; the one lactic fold without a twin in training has 18.1 %.
+  reported without it (v3 run: PI-NN 7.1 % vs. 6.6 % with it; v4: 7.3 %
+  vs. 7.0 %; in both, 22 of the 42 in-domain OOD samples were the twin's
+  and the in-domain fraction without it is 0.26), and the LOCO folds whose
+  twin is in training (the low-pH pair) are marked; the one lactic fold
+  without a twin in training has 18.1 % (v4: 17.4 %).
   The split rule, fixed before modelling, is unchanged; a check of
   identical encodings across a new split belongs before the split is
   frozen.
 * **New-product LOCO folds.** `IBO_EtOH_corn` and `oxalic_neutral_sugarcane`
   are their product's only configuration, so their LOCO folds are
   new-product folds; LOCO over the other 35 folds: PI-NN 6.8 %, plain MLP
-  8.8 %, kNN 15.5 %.
+  8.8 %, kNN 15.5 % (v3 run; v4: 6.9, 9.1 and 15.3 %).
 * **Family clustering.** The 37 LOCO folds cluster in 7 families (15 HP);
   the fold-level p-values treat them as independent. At the family level
   (fold differences averaged per family) the PI-NN is better than the
   plain MLP in 7 of 7 families and than kNN in 6 of 7 (Wilcoxon p 0.016,
-  0.031).
+  0.031 in the v3 run; v4: 7 of 7 and 6 of 7, p 0.016 and 0.078; over the
+  5 known-product families 5 of 5 for both, smallest attainable p 0.062).
 * **Data's own constraint violations** next to the methods' (sections 5,
   6), and the measured vs. nominal y and t per configuration (section 1).
 

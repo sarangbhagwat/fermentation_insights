@@ -47,14 +47,14 @@ test samples. Generated from `results/tables` at the end of a full run of
 <!-- END generated -->
 
 In short: for a new configuration of a known feedstock and product (the
-typical use) the error depends on the family: 1-4 % for HP and succinic
-acid, 8-18 % for TAL and lactic acid and 17-39 % for ethanol (ranges of the
+typical use) the error depends on the family: 1.5-3.7 % for HP and succinic
+acid, 7-17 % for TAL and lactic acid and 16-47 % for ethanol (ranges of the
 leave-one-configuration-out folds, the line above); the recovery (g)
 intervals under-cover every TAL configuration, known or new, and new lactic
 configurations, the d′ intervals the lactic ones, and the others are
-over-covered (section 4.5). The model does not reproduce the economy of
-scale: it gives about half of the simulated MPSP change for a 2-3x larger
-plant (section 7). The shipped (v4) checkpoints train on the data
+over-covered (section 4.5). The model does not fully reproduce the economy of
+scale: it gives about two thirds of the simulated MPSP change for a 2-3x
+larger plant (section 7). The shipped (v4) checkpoints train on the data
 regenerated with the D16 / D17 corrections (2026-10-18; the processed
 tables in git): the training data of the v3 checkpoints (`results/v3/`)
 understated the MPSP of the HP and TAL plants (and, slightly, of sugarcane
@@ -137,7 +137,7 @@ per-sample least-squares fits of exactly this equation to simulated MPSPs
   non-negativity is disabled because the natural-gas demand is a hinge
   (zero wherever the biomass fuel covers the steam demand) that the 4-term
   basis cannot represent: the fitted targets go negative inside the domain
-  in 58 % of the samples, so a predicted natural-gas intensity can too
+  in 55 % of the samples, so a predicted natural-gas intensity can too
   (DESIGN.md §1 and §4; `meta.json` → `constraint_report`).
 * **Channel-wise input masking (§3).** Each output has its own sub-network
   that sees only the features of the process areas that can affect it. For
@@ -331,25 +331,25 @@ Other gains, as in `data_generation/harness.describe_feedstock`: 1 for
 monomeric sugars, 2·180.16/342.30 for sucrose and 180.16/162.14 for starch.
 
 **Accuracy for a new feedstock: not better than a lookup.** In
-leave-one-feedstock-out CV the PI-NN's MPSP error is 37.0 % (fold mean, 4
-folds: corn 71.5, corn stover 39.1, sugarcane 30.0, glucose 7.4 %) against
-8.5 % for a new configuration of known feedstocks. A nearest-configuration
-lookup (kNN) has the lower mean (35.2 %) and is better on 2 of the 4 folds
-(corn, corn stover; paired kNN − PI-NN −1.8 ± 10.1 pp), so no advantage of
-the PI-NN is established for a new feedstock (REPORT.md section 5). The
-intervals are NOT calibrated for it: the shipped quantiles cover 0.71 of
-the held-out MPSP samples (0.34 for corn stover, 0.68 for sugarcane) and
-0.64 of the recoveries, against a nominal 0.90 (REPORT.md section 6). Such
-rows are flagged `intervals_calibrated = False`.
+leave-one-feedstock-out CV the PI-NN's MPSP error is 36.8 % (fold mean, 4
+folds: corn 70.1, corn stover 37.1, sugarcane 31.5, glucose 8.6 %) against
+8.8 % for a new configuration of known feedstocks. A nearest-configuration
+lookup (kNN) has the same fold mean (36.8 %) and is better on 2 of the 4
+folds (corn, corn stover; paired kNN − PI-NN +0.0 ± 8.7 pp, median −4.4),
+so no advantage of the PI-NN is established for a new feedstock (REPORT.md
+section 5). The intervals are NOT calibrated for it: the shipped quantiles
+cover 0.76 of the held-out MPSP samples (0.57 for corn stover, 0.62 for
+sugarcane) and 0.71 of the recoveries, against a nominal 0.90 (REPORT.md
+section 6). Such rows are flagged `intervals_calibrated = False`.
 
 The feedstock intensity of a new composition comes from the product-blind
 feedstock head, which has also learned the recovery shape of the lactic
 corn-stover configurations (feedstock-channel d′ of 43-51, DESIGN.md 5b).
-For the wheat straw above it gives a b′ of the feedstock intensity 23 %
-below corn stover's, although the straw has 5.5 % more sugar, and a d′ 17
+For the wheat straw above it gives a b′ of the feedstock intensity 25 %
+below corn stover's, although the straw has 5.5 % more sugar, and a d′ 34
 times larger: the straw's feedstock intensity (kg feedstock per kg
-product) is predicted 19 % above corn stover's at y = 0.2, t = 20 g/L and
-13 % below at y = 0.5, t = 100 g/L. Treat the feedstock costs of a new
+product) is predicted 17 % above corn stover's at y = 0.2, t = 20 g/L and
+14 % below at y = 0.5, t = 100 g/L. Treat the feedstock costs of a new
 composition as rough (section 7).
 
 The composition also acts as a proxy for the feedstock's identity, mainly
@@ -358,10 +358,10 @@ in the energy channels, and its water fraction does too. Example
 with water only (`fs_w_glucose` = `fs_w_fermentable_sugar_eq` = w,
 `fs_w_water` = 1 − w, price per kg sugar and sugar throughput held fixed).
 From w = 0.909 (the training glucose) to 0.5, the predicted MPSP at the
-baseline yield and titer falls from 1.682 to 1.589 USD/kg (−5.6 %), with
+baseline yield and titer falls from 1.686 to 1.612 USD/kg (−4.4 %), with
 the row still in the domain. The feedstock channel moves the right way
-(+0.018 USD/kg), but electricity (−0.049) and natural gas (−0.045) fall
-(capital −0.006, the other channels −0.012),
+(+0.012 USD/kg), but electricity (−0.052) and natural gas (−0.049) fall
+(capital +0.003, the other channels +0.012),
 although the extra water only replaces dilution water at a fixed titer.
 The model associates water-rich compositions (sugarcane-like, whose
 configurations burn bagasse) with lower energy costs. The scale input is the
@@ -406,20 +406,21 @@ value outside a vocabulary raises ValueError (`P.downstream_vocabulary`), and
 **Accuracy for a new product: poor, and not better than a lookup.** For a
 product family not in training the predictions are rough first guesses,
 not estimates. In leave-one-product-out CV the PI-NN's MPSP error is
-44.8 % (fold mean over 7 products; 9.7-69.9 % per product: HP 9.7,
-isobutanol 37.0, oxalic 41.7, TAL 45.3, lactic 49.9, succinic 60.2,
-ethanol 69.9 %), and only 34 % of the held-out TY points are within
+47.0 % (fold mean over 7 products; 10.8-70.9 % per product: HP 10.8,
+isobutanol 41.3, oxalic 42.8, TAL 46.8, lactic 49.6, succinic 67.0,
+ethanol 70.9 %), and only 31 % of the held-out TY points are within
 ±20 %. The fold mean is below that of a nearest-configuration lookup (kNN
-52.8 %) and of the plain MLP (55.6 %), but no advantage is established at
+54.4 %) and of the plain MLP (58.1 %), but no advantage is established at
 the fold level: kNN is better on isobutanol, succinic acid and TAL (paired
-kNN − PI-NN +7.9 ± 9.7 pp, PI-NN better on 4 of 7 folds, Wilcoxon p 0.58),
-and without the ethanol fold (kNN 123 %) the mean difference is +0.4 pp
-(REPORT.md section 5). The recovery is off by a median −29 % (succinic) to
+kNN − PI-NN +7.4 ± 10.6 pp, PI-NN better on 4 of 7 folds, Wilcoxon p 0.69),
+and without the ethanol fold (kNN 129 %) the mean difference is −1.0 pp
+(REPORT.md section 5). The recovery is off by a median −30 % (succinic) to
 +57 % (lactic) per product. The intervals are NOT calibrated for a new
-product: the shipped quantiles cover 0.71 of the held-out MPSP samples
-(0.00 for lactic acid, 0.03 for TAL) and 0.45 of the recoveries (0 for
-lactic, oxalic and succinic acid and TAL) against a nominal 0.90 (REPORT.md
-section 6). Such rows are flagged `intervals_calibrated = False`.
+product: the shipped quantiles cover 0.70 of the held-out MPSP samples
+(0.00 for lactic acid, 0.02 for TAL) and 0.46 of the recoveries (0 for
+lactic and succinic acid and TAL, 0.05 for oxalic acid) against a nominal
+0.90 (REPORT.md section 6). Such rows are flagged
+`intervals_calibrated = False`.
 
 ### 4.4 MPSP surface and relative impact of yield vs. titer
 
@@ -467,28 +468,28 @@ inflection yield or outside the training titer range.
   values; coverage of the shipped quantiles on the random-CV out-of-fold
   scores, REPORT.md section 6, "Coverage for a KNOWN configuration"): the
   intervals are conservative pooled over samples (MPSP 0.99, g 0.92,
-  a′ b′ c′ d′ 0.97-0.99) but NOT for every family. g covers only 0.45 of
-  the TAL samples (0.21-0.65 per TAL configuration), c′ 0.80 and MPSP 0.93
+  a′ b′ c′ d′ 0.96-0.99) but NOT for every family. g covers only 0.44 of
+  the TAL samples (0.21-0.65 per TAL configuration), c′ 0.76 and MPSP 0.91
   of TAL; d′ covers 0.56 and b′ 0.87 of the lactic samples. Every other
-  family is covered at 0.99-1.00 for every key, i.e. its intervals are too
-  wide. The productivity tails give the same picture (TAL g 0.39, lactic d′
+  family is covered at 1.00 for every key, i.e. its intervals are too
+  wide. The productivity tails give the same picture (TAL g 0.40, lactic d′
   0.55). The TAL recovery varies within a configuration with a module
   parameter that is not a model input (section 7, "TAL recovery noise"), so
   the TAL g intervals are too narrow for any TAL query, known or new.
 * **Measured coverage (nominal 0.90).** Cross-fitted LOCO estimate for a new
   configuration, pooled over samples (the targeted quantity) / mean over
-  configurations: a′ 0.90 / 0.94, b′ 0.90 / 0.93, c′ 0.90 / 0.94, d′
-  0.83 / 0.93, **g 0.90 / 0.86** (10 % quantile over configurations 0.43),
-  **MPSP 0.89 / 0.94**. The pooled g coverage averages very different
+  configurations: a′ 0.90 / 0.95, b′ 0.90 / 0.93, c′ 0.86 / 0.92, d′
+  0.85 / 0.94, **g 0.90 / 0.86** (10 % quantile over configurations 0.40),
+  **MPSP 0.88 / 0.93**. The pooled g coverage averages very different
   families: with the shipped quantile the LOCO out-of-fold recoveries are
   covered at 1.00 for HP, ethanol, isobutanol, oxalic and succinic acid, but
-  at 0.45 for TAL and 0.62 for lactic acid (REPORT.md section 6). A new
+  at 0.43 for TAL and 0.65 for lactic acid (REPORT.md section 6). A new
   configuration of an HP-like family therefore gets g intervals that are too
   wide, and a TAL- or lactic-like one intervals that are too narrow. On the
-  OOD test the g coverage is 0.74 (TAL_sugarcane 0.38,
-  lactic_neutral_SSCF_cornstover 0.67). For a **new feedstock or a new
+  OOD test the g coverage is 0.71 (TAL_sugarcane 0.38,
+  lactic_neutral_SSCF_cornstover 0.56). For a **new feedstock or a new
   product the intervals are not calibrated**: the shipped quantiles cover
-  0.71 / 0.71 of the held-out MPSP samples and 0.64 / 0.45 of the recoveries
+  0.76 / 0.70 of the held-out MPSP samples and 0.71 / 0.46 of the recoveries
   in leave-one-feedstock-out / leave-one-product-out CV (REPORT.md section
   6). `intervals_calibrated` is False (with an `ApplicabilityWarning` that
   quotes these numbers from `P.ensemble.meta['coverage_unseen']`) for rows
@@ -501,12 +502,12 @@ inflection yield or outside the training titer range.
   extrapolation. Prices are not part of the domain (the price channels are
   exactly linear), and prices outside the training range are listed in
   `price_outside_range`. On the OOD test (final_dev, REPORT.md section 6)
-  41 % of the samples are in the domain, with an MPSP error of 3.2 % in it
-  and 8.7 % outside (Spearman correlation of `ad_ratio` with the error
-  0.48). Half of those in-domain samples (22 of 42) belong to
+  41 % of the samples are in the domain, with an MPSP error of 3.5 % in it
+  and 9.1 % outside (Spearman correlation of `ad_ratio` with the error
+  0.44). Half of those in-domain samples (22 of 42) belong to
   `lactic_neutral_SSCF_cornstover`, whose input is identical to that of a
   training configuration (section 6); without it 26 % are in the domain
-  (2.0 % error in it, 8.9 % outside). The flag is informative but no
+  (1.9 % error in it, 9.3 % outside). The flag is informative but no
   guarantee, and the CV folds could not be checked (their models are not
   saved).
 
@@ -521,22 +522,24 @@ exactly linear in the feedstock, electricity and natural-gas prices. The
 price SENSITIVITY is only as accurate as the predicted intensity, which is
 learned. In-sample (release model, REPORT.md section 8 (ii-b); error of
 the MPSP response to a 100 % price change, in % of MPSP) the median error
-over configurations is 0.3 % for the feedstock, 0.7 % for electricity and
-0.3 % for natural gas. The exception is TAL: its feedstock-channel targets
+over configurations is 0.2 % for the feedstock, 0.4 % for electricity and
+0.2 % for natural gas. The exception is TAL: its feedstock-channel targets
 are masked in the loss (data defect D8), so its feedstock sensitivity comes
-from the product-blind feedstock head (relative error +22.4 % for TAL_corn
+from the product-blind feedstock head (relative error +23.5 % for TAL_corn
 on the test set). The largest in-sample error of the v3 checkpoint, +19.5 %
 for TAL_SA_sugarcane, was mostly a defect of that configuration's training
-data (D16, section 7; corrected in the v4 training data): its simulated cane
-mill received the juice recycle twice, so its fermentation got about 15 %
-more sugar per kg cane than the other sugarcane configurations (more than
-the cane holds) and its simulated feedstock demand was too low, while the
-product-blind head predicted about the physical demand. Out of
+data (D16, section 7; corrected in the v4 training data, on which the v4
+checkpoint's in-sample error for TAL_SA_sugarcane is +4.4 %): its simulated
+cane mill received the juice recycle twice, so its fermentation got about
+15 % more sugar per kg cane than the other sugarcane configurations (more
+than the cane holds) and its simulated feedstock demand was too low, while
+the product-blind head predicted about the physical demand. Out of
 fold the errors are larger (REPORT.md section 5, per configuration): for a
-new configuration the electricity response is off by 112 % of MPSP for
-isobutanol (118 % in leave-one-product-out, 163 % in
-leave-one-feedstock-out), by 19-21 % for corn and cellulosic ethanol and
-17 % for oxalic acid, and the isobutanol feedstock response by 17 %. Treat
+new configuration the electricity response is off by 89 % of MPSP for
+isobutanol (92 % in leave-one-product-out, 133 % in
+leave-one-feedstock-out), by 18 % for corn ethanol, 30 % for cellulosic
+ethanol and 18 % for oxalic acid, and the isobutanol feedstock response by
+18 %. Treat
 price sensitivities of those families, and of any new feedstock or product,
 as rough. (The v2 checkpoint was biased even in-sample: every corn
 configuration's feedstock sensitivity 19-24 % low, power export predicted
@@ -599,7 +602,7 @@ separate from `in_domain`, whose range check uses the global training range
 (41 000-1 060 000 kg/h wet feedstock for the capacity, wide only because the
 configurations differ in scale). In particular, a capacity more than about
 ±20 % from a configuration's baseline is an extrapolation of its scale
-response, which the model reproduces only about half (section 7).
+response, of which the model reproduces only about two thirds (section 7).
 
 ## 5. Field reference
 
@@ -701,14 +704,14 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   select or calibrate anything. The test results of the earlier runs were,
   however, seen before the next run was designed, so from the v2 report on
   the test split is a re-used hold-out and its numbers are likely
-  optimistic (see *Three runs* below). One of the four held-out
+  optimistic (see *Four runs* below). One of the four held-out
   configurations is **not new in input space**:
   `lactic_neutral_SSCF_cornstover` encodes identically to the development
   configuration `lactic_neutral_SHF_cornstover` (0 of 151 features differ;
   the saccharification mode SHF / SSCF is not an input), so its test
   result measures the unmodelled SHF-to-SSCF difference, not
   generalization to a new configuration. Without it the OOD test MAPE is
-  7.1 % (3 configurations, 76 samples) instead of 6.6 %; REPORT.md
+  7.3 % (3 configurations, 76 samples) instead of 7.0 %; REPORT.md
   sections 2 and 6 give both.
 * **One training procedure everywhere.** Every network fit (hyperparameter
   search, every CV scheme, `final_dev`, release) trains on all its samples,
@@ -731,8 +734,8 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     another separation design). This is the typical use case. Two of its
     37 folds, `IBO_EtOH_corn` and `oxalic_neutral_sugarcane`, hold out the
     only configuration of their product, so they are new-product folds
-    (34.6 and 43.5 %); over the other 35 folds the PI-NN error is 6.8 %
-    (plain MLP 8.8 %, kNN 15.5 %). Their 290 out-of-fold scores are part
+    (40.1 and 43.2 %); over the other 35 folds the PI-NN error is 6.9 %
+    (plain MLP 9.1 %, kNN 15.3 %). Their 290 out-of-fold scores are part
     of the interval calibration (coverage of the shipped quantiles on the
     known-product folds: MPSP 0.90, g 0.87). Two lactic folds have an
     input-identical twin in training (the SHF / SSCF pairs), and the
@@ -763,14 +766,16 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   boosting and kNN use fixed settings and ridge its internal CV of the
   penalty, so the comparisons are tilted toward the PI-NN by an unknown
   amount. No ablation effect is established at the fold level (REPORT.md
-  summary and section 5: every |t| ≤ 1.5, Wilcoxon p ≥ 0.11, each mean
+  summary and section 5: every |t| ≤ 1.4, Wilcoxon p ≥ 0.08, each mean
   driven by one fold). The fold-level evidence for the physics-informed
   model as a whole is PI-NN vs. plain MLP and vs. kNN on
-  leave-one-configuration-out (PI-NN better on 32 and 34 of 37 folds; plain
-  MLP − PI-NN +3.7 ± 1.5 pp, Wilcoxon p 5e-5; these fold-level p-values
-  treat the 37 configurations as independent, but at the level of the 7
-  families the PI-NN is still better than the plain MLP in 7 of 7 and than
-  kNN in 6 of 7, Wilcoxon p 0.016 and 0.031). For a new feedstock or a new
+  leave-one-configuration-out (PI-NN better on 31 and 34 of 37 folds; plain
+  MLP − PI-NN +3.7 ± 1.5 pp, Wilcoxon p 1.7e-5; these fold-level p-values
+  treat the 37 configurations as independent; at the level of the 7
+  families the PI-NN is better than the plain MLP in 7 of 7, Wilcoxon p
+  0.016, and than kNN in 6 of 7, Wilcoxon p 0.078, which is not
+  significant; over the 5 known-product families it is better than both in
+  5 of 5, where p < 0.05 is not attainable). For a new feedstock or a new
   product the PI-NN is not distinguishable from a nearest-configuration
   lookup at the fold level (sections 4.2, 4.3; REPORT.md section 5, "PI-NN
   vs. the baselines, paired over folds"). The channel decomposition, the
@@ -778,15 +783,15 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   guarantees they give (exact price linearity, dMPSP/dr ≤ 0, bounds, an
   additive channel breakdown), not for a measured accuracy gain. On the
   final test the PI-NN is better than the best baseline on the
-  in-distribution samples (PI-NN − plain MLP −1.2 pp, configuration-cluster
-  bootstrap 95 % CI [−1.7, −0.7]); with 4 held-out configurations the OOD
-  test cannot rank the methods (plain MLP 6.6 % vs. PI-NN 6.6 %, CI of the
-  difference [−1.6, +1.6] pp; without the input twin 6.7 % vs. 7.1 %, CI
-  [−2.1, +2.3] pp).
+  in-distribution samples (PI-NN − plain MLP −0.9 pp, configuration-cluster
+  bootstrap 95 % CI [−1.3, −0.5]); with 4 held-out configurations the OOD
+  test cannot rank the methods (plain MLP 7.1 % vs. PI-NN 7.0 %, CI of the
+  difference [−2.8, +2.3] pp; without the input twin 7.2 % vs. 7.3 %, CI
+  [−4.2, +3.2] pp).
 * **Release model** (`models/release`). It is trained on all data and has no
   independent test. The CV and final-test estimates (`models/final_dev`)
   measure its accuracy.
-* **Three runs.** The first full run (v1, commit fd3f386; report and
+* **Four runs.** The first full run (v1, commit fd3f386; report and
   headline tables in [`results/v1/`](results/v1/README.md)) was the first
   use of the test split. Its results led to the round-4 changes (training
   protocol, interval calibration, recovery inputs, productivity structure,
@@ -829,26 +834,26 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   each configuration's inflection yield, and titers and productivities over
   the simulated ranges. Each configuration's feedstock capacity was sampled
   only 0.81-1.19 x its baseline (next bullet).
-* **Scale (capacity) response: about half of the simulated economy of
-  scale.** The capacity was sampled within ±10-20 % of each configuration's
+* **Scale (capacity) response: about two thirds of the simulated economy
+  of scale.** The capacity was sampled within ±10-20 % of each configuration's
   baseline, with every other parameter varied at the same time, so the
   scale response within a configuration is weakly identified (the model has
   no capital-scaling structure; the capital channels see the scale only
   through the log-capacity input). Against BioSTEAM (every parameter at its
   baseline, baseline yield, titer and productivity, capacity scaled;
   REPORT.md section 8 (ii-c), `data_generation/checks/capacity_response.csv`)
-  the release model reproduces a median 0.60 / 0.55 of the simulated MPSP
+  the release model reproduces a median 0.65 / 0.71 of the simulated MPSP
   decrease of a 2x / 3x plant (configurations whose simulated MPSP falls).
   MPSP change at 2x / 3x, predicted vs. simulated: ethanol_cornstover
-  −5.6 / −8.5 % vs. −11.1 / −15.9 %, IBO_EtOH_corn −4.9 / −6.7 % vs.
-  −9.9 / −14.0 %, succinic_cornstover −6.5 / −11.0 % vs. −14.0 / −19.5 %,
-  TAL_cornstover −4.8 / −7.0 % vs. −7.9 / −11.1 %; at 0.5x (median over
-  the configurations) +2.9 % vs. +8.3 %. The simulated HP plants have little
+  −5.9 / −8.7 % vs. −11.1 / −15.9 %, IBO_EtOH_corn −5.7 / −7.8 % vs.
+  −9.9 / −13.9 %, succinic_cornstover −8.4 / −13.2 % vs. −14.0 / −19.5 %,
+  TAL_cornstover −4.3 / −6.3 % vs. −6.4 / −8.9 %; at 0.5x (median over
+  the configurations) +3.3 % vs. +7.6 %. The simulated HP plants have little
   economy of scale (capital about proportional to the capacity, and growing
   faster beyond 2x for the hexanol and sugarcane designs). The MPSP
-  intervals (half-width a median 31 % of MPSP) cover 70 of the 72 simulated
+  intervals (half-width a median 27 % of MPSP) cover 69 of the 72 simulated
   2-3x points, but a scale-up comparison is a paired difference, and there
-  the predicted change is about half the simulated one. The global
+  the predicted change is about two thirds of the simulated one. The global
   applicability-domain check does not catch this (86 % of the 2-3x queries
   stay `in_domain`: the global capacity range spans the configurations'
   different scales), so `predict()` reports a capacity outside the
@@ -857,15 +862,15 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   effects from the model. A wider capacity sampling (e.g. 0.3-3x) and a
   hard capital-scaling structure are open items.
 * **New-product extrapolation is poor and not better than a lookup.** In
-  leave-one-product-out CV the PI-NN's MPSP error is 44.8 % (fold mean, 7
-  products; 9.7-69.9 % per product), against 52.8 % for a
-  nearest-configuration lookup (kNN) and 55.6 % for the plain MLP; at the
+  leave-one-product-out CV the PI-NN's MPSP error is 47.0 % (fold mean, 7
+  products; 10.8-70.9 % per product), against 54.4 % for a
+  nearest-configuration lookup (kNN) and 58.1 % for the plain MLP; at the
   fold level kNN is better on 3 of the 7 products and the mean gain is
-  carried by the ethanol fold (section 4.3). Only 34 % of the held-out TY
+  carried by the ethanol fold (section 4.3). Only 31 % of the held-out TY
   points are within ±20 %, and the median recovery error per held-out
-  product ranges from −29 % (succinic) to +57 % (lactic). The intervals are
-  not calibrated for a new product (coverage of the shipped quantiles 0.71
-  for MPSP and 0.45 for g; section 4.5). The errors come from the recovery
+  product ranges from −30 % (succinic) to +57 % (lactic). The intervals are
+  not calibrated for a new product (coverage of the shipped quantiles 0.70
+  for MPSP and 0.46 for g; section 4.5). The errors come from the recovery
   g and from the electricity, natural-gas and downstream channels, which
   legitimately depend on the product, and from process structure no
   training configuration has (coproduct credits of isobutanol and corn
@@ -873,45 +878,46 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   (78 %) was a regression of the input clipping, which mapped the held-out
   HP's final-product stoichiometric ratio (0.80) onto that of the products
   without a conversion (1.00); since v3 that ratio is never clipped (HP
-  9.7 %). Use predictions for a new product as rough first guesses, check
-  `in_domain`/`ad_ratio`, and supply a known recovery (section 4.7) where
-  possible.
+  9.7 % in v3, 10.8 % in v4). Use predictions for a new product as rough
+  first guesses, check `in_domain`/`ad_ratio`, and supply a known recovery
+  (section 4.7) where possible.
 * **New feedstocks are not better than a lookup either:**
-  leave-one-feedstock-out MPSP error 37.0 % (fold mean, 4 folds; kNN
-  35.2 %, better on 2 of 4 folds), interval coverage of the shipped
-  quantiles 0.71 (MPSP) and 0.64 (g). The feedstock intensity of a new
+  leave-one-feedstock-out MPSP error 36.8 % (fold mean, 4 folds; kNN
+  36.8 %, better on 2 of 4 folds), interval coverage of the shipped
+  quantiles 0.76 (MPSP) and 0.71 (g). The feedstock intensity of a new
   composition is product-blind and can carry another product's recovery
-  shape (section 4.2). v3 is worse here than v2 (23.9 %): the power gate
-  removed the corn-ethanol prediction's compensating wrong-sign electricity
-  credit (corn fold 71.5 %), and the surface channel loss cost cellulosic
-  ethanol accuracy (REPORT.md "Changes v1 -> v2 -> v3 -> v4").
+  shape (section 4.2). v3 (37.0 %) and v4 are worse here than v2 (23.9 %):
+  the power gate removed the corn-ethanol prediction's compensating
+  wrong-sign electricity credit (corn fold 71.5 % in v3, 70.1 % in v4), and
+  the surface channel loss cost cellulosic ethanol accuracy (REPORT.md
+  "Changes v1 -> v2 -> v3 -> v4").
 * **Round-5 trade-offs and open issues** (the settings of v3 and v4;
   REPORT.md sections 5, 8 and "Changes v1 -> v2 -> v3 -> v4"; DESIGN.md §6,
   round 5):
   - Ethanol is less accurate than in v2: leave-one-configuration-out
-    ethanol_cornstover 38.9 % (kNN 18.4 %), ethanol_corn 19.5 %. A missed
+    ethanol_cornstover 47.0 % (kNN 23.9 %), ethanol_corn 22.3 %. A missed
     DDGS / corn-oil credit of corn ethanol is no longer offset by a
     (physically wrong) electricity export credit.
-  - Isobutanol's out-of-fold electricity response is off by 112 % of MPSP
-    for a new configuration (118 % for a new product, 163 % for a new
+  - Isobutanol's out-of-fold electricity response is off by 89 % of MPSP
+    for a new configuration (92 % for a new product, 133 % for a new
     feedstock); the price sensitivities of isobutanol, ethanol and oxalic
     acid are rough (section 4.6).
   - TAL's feedstock sensitivity is product-blind (its defective feedstock
-    targets are masked, D8): +22.4 % for TAL_corn on the test set; the
+    targets are masked, D8): +23.5 % for TAL_corn on the test set; the
     +19.5 % for TAL_SA_sugarcane in-sample of the v3 checkpoint was mostly
     that configuration's data defect D16, corrected in the v4 training data
-    (section 4.6).
+    (v4 checkpoint +4.4 %; section 4.6).
   - The saccharification mode (SHF vs. SSCF) of the lactic configurations
     is not an input: both modes get the same coefficients, and the model
     averages them. In-sample signed MPSP error of `models/release`
     (predicted / fitted − 1 at the baseline yield and titer; baseline
     sample / mean over the configuration's samples; REPORT.md section 7,
-    `tables/release_twin_bias.csv`): low-pH SSCF +5.0 / +5.8 %, neutral
-    SSCF +6.0 / +5.2 %, low-pH SHF −5.1 / −5.0 %, neutral SHF −3.1 /
-    −5.5 %. The held-out test configuration `lactic_neutral_SSCF_cornstover`
+    `tables/release_twin_bias.csv`): low-pH SSCF +4.4 / +5.5 %, neutral
+    SSCF +5.7 / +5.2 %, low-pH SHF −5.6 / −4.2 %, neutral SHF −3.4 /
+    −4.6 %. The held-out test configuration `lactic_neutral_SSCF_cornstover`
     is therefore input-identical to a training configuration (section 6). A
     `saccharification` regime field needs a further data round.
-  - The HP baseline a′ is 1.08-1.63 x the publication's, mostly from the
+  - The HP baseline a′ is 1.12-1.62 x the publication's, mostly from the
     fermentation capital, so HP's productivity response is larger than the
     publication's (REPORT.md section 8 (i); DESIGN.md §1); the module or
     BioSTEAM change behind it is not identified.
@@ -920,7 +926,7 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   the composition, including its water fraction, as a proxy for the training
   feedstocks, not through the physics of the water: diluting the glucose
   feedstock of `HP_glucose` with water alone (price per kg sugar and sugar
-  throughput fixed) lowers the predicted MPSP by 5.6 % at w_sugar = 0.5,
+  throughput fixed) lowers the predicted MPSP by 4.4 % at w_sugar = 0.5,
   through lower electricity and natural-gas costs, inside the
   applicability domain (section 4.2). The scale input is the wet feedstock
   capacity. Dry-basis composition features with an explicit water fraction
@@ -953,8 +959,8 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   biorefinery-specific parameters (`bp_*`) that are not model inputs, so
   part of their variation is not predictable from the specification.
   REPORT.md section 1 gives a within-configuration linear baseline
-  (`evaluate.noise_floor`, 6.3 % configuration geo-mean); it is not a noise
-  floor (the PI-NN predicts random samples at 3.3 % in random CV, and adding
+  (`evaluate.noise_floor`, 6.0 % configuration geo-mean); it is not a noise
+  floor (the PI-NN predicts random samples at 3.1 % in random CV, and adding
   the `bp_*` inputs makes the linear baseline worse).
 * **Sample coverage.** Some configurations keep fewer samples than planned
   (REPORT.md section 1, `tables/data_coverage.csv`). The shipped (v4)
@@ -1017,7 +1023,7 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
 | processed tables `data/processed/{samples,points,configs}.csv.gz` (+ `report.json`, `experiments_fingerprint.json`: build statistics and the raw files they were built from) | yes | 11 MB | retraining, re-running `experiments.py` (data hash `ae69af98b3ba4561`: the data regenerated on 2026-10-18 with D16 / D17 corrected, logged by `experiments.py` and checked by `tests/test_shipped_data.py`; the v4 run and the shipped checkpoints train on them; the v3 run in `results/v3` was trained on the tables before it, data hash `c345efda41c4fdca`, in git history up to commit 85ec2b4), the checkpoint-verification tests (`tests/test_serving_consistency.py`, `tests/test_user_api_robustness.py`) |
 | frozen split, plan, report tables `results/{split,split_applied,plan}.json`, `results/tables/` | yes | – | the test split and the reported numbers |
 | raw simulation records (`<raw>/<biorefinery>/*.jsonl`, one JSON-lines file per configuration) | **no** | 231 MB (27 MB as `.tar.xz`) | rebuilding the processed tables (step 4) and the raw sample-coverage table (`tables/data_coverage.csv`, shipped) |
-| fit cache `results/cache/` | no | – | nothing (an empty cache re-fits every job: about 1.5 h on 4 CPUs) |
+| fit cache `results/cache/` | no | – | nothing (an empty cache re-fits every job: about 2 h on 4 CPUs; the v4 run, with a new data hash, took 111 min) |
 
 The raw records are regenerated by the campaigns of steps 1-3 (7 conda
 environments, ~30 CPU-hours); for example, a re-run of the oxalic baseline
