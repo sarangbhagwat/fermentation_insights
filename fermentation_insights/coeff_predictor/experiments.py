@@ -1922,6 +1922,123 @@ def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
     r = cv['results']
     r = r[(r['scheme'] == 'random') & (r['fold'] >= 0) & (r['metric'] == 'mpsp_mape_cfg_gmean_random')]
     checks['random_cv_random_samples'] = r.groupby('method')['value'].mean().to_dict()
+    clustered_and_twin_checks(a, D, cv, fin, checks, S, Pts, tdir, fp, path)
+
+
+def clustered_and_twin_checks(a, D, cv, fin, checks, S, Pts, tdir, fp, saved_model):
+    """Report-only checks of the CV and test designs (``report_checks``):
+    the LOCO comparison with the baselines at the family level (the 37
+    configurations cluster in 7 families), LOCO without the folds that hold
+    out the only configuration of their product (new-product folds) and per
+    family, and configurations whose model inputs are identical (input
+    twins) -- across the development / test boundary they make a held-out
+    configuration not new in input space, so the OOD test is also reported
+    without them, and the LOCO folds whose twin is in training are marked."""
+    import warnings
+    import pandas as pd
+    from fermentation_insights.coeff_predictor import report_checks as RC
+    from fermentation_insights.coeff_predictor.train import CONF_KEYS
+    res = cv['results']
+    checks['yt_check'] = RC.yt_definition_check(D['samples'], D['points'])
+    checks['yt_check'].to_csv(os.path.join(tdir, 'yt_definition_check.csv'), index=False)
+    fam = dict(zip(D['samples']['config_id'].astype(str), D['samples']['biorefinery'].astype(str)))
+    checks['baseline_family'] = RC.baseline_family_stats(res, fam, methods=[m for m in BASE_METHODS if m != 'pinn'])
+    checks['baseline_family'].to_csv(os.path.join(tdir, 'cv_baselines_paired_family.csv'), index=False)
+    loco = set(res.loc[res['scheme'] == 'config', 'label'].astype(str))
+    newp = RC.single_config_products(D['samples'][D['samples']['config_id'].astype(str).isin(loco)])
+    checks['loco_new_product_folds'] = newp
+    checks['loco_known_product'] = RC.loco_subset(res, newp, methods=BASE_METHODS)
+    checks['loco_known_product'].insert(0, 'excluded_folds', ', '.join(newp))
+    checks['loco_known_product'].to_csv(os.path.join(tdir, 'cv_loco_known_product.csv'), index=False)
+    checks['loco_per_family'] = RC.loco_per_family(res, fam)
+    fm = RC._fold_mape(res, 'config')
+    checks['loco_per_fold_pinn'] = fm['pinn'].dropna().to_dict() if 'pinn' in fm else {}
+    checks['loco_per_family'].to_csv(os.path.join(tdir, 'cv_loco_per_family.csv'), index=False)
+    conf = fin.get('release_conformal') or {}
+    sc = cv.get('oof_scores')
+    checks['known_product_coverage'] = None
+    if conf and sc is not None and len(sc):
+        grp = {c: ('new-product folds' if c in newp else 'known-product folds') for c in fam}
+        checks['known_product_coverage'], _ = RC.family_coverage(sc, conf, keys=CONF_KEYS, families=grp)
+        checks['known_product_coverage'].rename(columns={'family': 'folds'}).to_csv(
+            os.path.join(tdir, 'interval_coverage_known_product.csv'), index=False)
+    # input twins (features of models/final_dev)
+    for k in ('twins', 'twin_nearest', 'test_no_twin', 'test_no_twin_cov', 'ad_no_twin'):
+        checks[k] = None
+    checks['ood_twins'], checks['loco_twin_folds'] = [], []
+    if not (fp and not fp.get('error') and os.path.isdir(saved_model) and 'test_ood' in fp.get('evals', {})):
+        return
+    try:
+        from fermentation_insights.coeff_predictor.predict import CoefficientPredictor
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            Pfd = CoefficientPredictor.load(saved_model)
+            ood = set(S.loc[list(fp['evals']['test_ood']['ids']), 'config_id'].astype(str))
+            sets = {c: ('test_ood' if c in ood else 'development') for c in fam}
+            tw, near = RC.input_twins(Pfd, D['samples'], sets)
+            checks['twins'], checks['twin_nearest'] = tw, near
+            tw.to_csv(os.path.join(tdir, 'input_twins.csv'), index=False)
+            cross = tw[tw['crosses_split']]
+            oodt = sorted({c for x in cross.itertuples() for c, st in ((x.config_id, x.set), (x.twin, x.twin_set))
+                           if st == 'test_ood'})
+            devt = tw[(tw['set'] == 'development') & (tw['twin_set'] == 'development')]
+            checks['ood_twins'] = oodt
+            checks['loco_twin_folds'] = sorted(set(devt['config_id']) | set(devt['twin']))
+            if oodt:
+                log(f'tables: WARNING held-out test configuration(s) {oodt} encode identically to development '
+                    'configuration(s) (input twins; tables/input_twins.csv): the OOD test is also reported without '
+                    'them')
+                checks['test_no_twin'], checks['test_no_twin_cov'] = RC.final_test_without_configs(
+                    fin.get('final'), S, Pts, oodt, seed=a.seed)
+                checks['test_no_twin'].to_csv(os.path.join(tdir, 'final_test_without_twins.csv'), index=False)
+                checks['test_no_twin_cov'].to_csv(os.path.join(tdir, 'final_intervals_without_twins.csv'),
+                                                  index=False)
+                ev = RC.drop_configs(fp['evals']['test_ood'], S, oodt)
+                checks['ad_no_twin'], _ = RC.ad_validation(Pfd, {'test_ood without the input twins': ev}, S, Pts)
+                checks['ad_no_twin'].to_csv(os.path.join(tdir, 'applicability_domain_test_without_twins.csv'),
+                                            index=False)
+    except Exception as e:
+        log(f'tables: WARNING input-twin check failed: {type(e).__name__}: {e}')
+    checks['twin_bias'] = None
+    rel = os.path.join(a.models, 'release')
+    if checks.get('twins') is not None and len(checks['twins']) and os.path.isdir(rel):
+        try:
+            from fermentation_insights.coeff_predictor.predict import CoefficientPredictor
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                tw = checks['twins']
+                checks['twin_bias'] = RC.baseline_bias(CoefficientPredictor.load(rel), D['samples'],
+                                                       sorted(set(tw['config_id']) | set(tw['twin'])))
+            checks['twin_bias'].to_csv(os.path.join(tdir, 'release_twin_bias.csv'), index=False)
+        except Exception as e:
+            log(f'tables: WARNING twin bias of the release model failed: {type(e).__name__}: {e}')
+    if checks['loco_twin_folds']:
+        checks['loco_matched_no_twin'] = loco_matched(res, S, exclude=checks['loco_twin_folds'])
+        checks['loco_matched_no_twin'].to_csv(os.path.join(tdir, 'cv_loco_ood_families_without_twin_folds.csv'),
+                                              index=False)
+
+
+def data_violation_table(dev, plan, seed, fin, S, Pts):
+    """Constraint-violation rates of the data themselves (fitted
+    coefficients; ``report_checks.data_violation_rates``) on the held-out
+    samples of every CV scheme (mean over its folds, as the methods' rates)
+    and of every final test set: what a method that reproduces the data
+    exactly would show."""
+    import numpy as np
+    import pandas as pd
+    from fermentation_insights.coeff_predictor import report_checks as RC
+    ids = dev['sample_id'].astype(str).to_numpy()
+    rows = []
+    for sch in SCHEMES:
+        per = [RC.data_violation_rates(S, Pts, list(ids[te])) for _, _, te, _ in scheme_splits(dev, sch, plan, seed)]
+        keys = sorted({k for p in per for k in p})
+        rows.append(dict(kind='cv', set=sch, n_folds=len(per),
+                         **{k: float(np.nanmean([p.get(k, np.nan) for p in per])) for k in keys}))
+    fp = (fin.get('final') or {}).get('pinn') or {}
+    for st, ev in (fp.get('evals') or {}).items():
+        if st in ('test_ood', 'test_id', 'test_all'):
+            rows.append(dict(kind='test', set=st, n_folds=1, **RC.data_violation_rates(S, Pts, list(ev['ids']))))
+    return pd.DataFrame(rows)
 
 
 def final_intervals(fin, samples_by_id, alpha=ALPHA):
@@ -2027,17 +2144,19 @@ def final_headline(table):
     return df
 
 
-def loco_matched(res, samples_by_id, families=OOD_FAMILIES):
+def loco_matched(res, samples_by_id, families=OOD_FAMILIES, exclude=()):
     """LOCO CV restricted to the configurations of the families that have a
     held-out test configuration: the matched CV estimate of the OOD test
     (which holds out ONE configuration of each family). Per method: the
     family-balanced mean (mean over families of the mean over their LOCO
     folds; comparable to the configuration-balanced OOD test MAPE), the
-    configuration mean, and one column per family."""
+    configuration mean, and one column per family. ``exclude``: fold labels
+    left out (e.g. the folds whose held-out configuration has an
+    input-identical twin in training)."""
     import numpy as np
     import pandas as pd
     r = res[(res['scheme'] == 'config') & (res['fold'] >= 0) & (res['metric'] == 'mpsp_mape')
-            & (res['target'] == 'MPSP')]
+            & (res['target'] == 'MPSP') & ~res['label'].astype(str).isin([str(x) for x in exclude])]
     if not len(r):
         return pd.DataFrame()
     bio = samples_by_id.groupby('config_id')['biorefinery'].first()
@@ -2134,6 +2253,20 @@ def load_v1_tables(out_dir, fallback=True):
 
 # %% Stage 6: checks
 
+#: publication comparison: a coefficient ratio ours / publication is shown
+#: only where both values have the same sign and the smaller |value| is at
+#: least this fraction of the median |publication value| of the coefficient
+PUB_RATIO_MIN = 0.2
+
+
+def _nanmedian(v):
+    """Median of the finite values (NaN, without a warning, if none)."""
+    import numpy as np
+    v = np.asarray(v, float)
+    v = v[np.isfinite(v)]
+    return float(np.median(v)) if len(v) else float('nan')
+
+
 def pub_comparison(samples, test_cfgs):
     import numpy as np
     import pandas as pd
@@ -2152,7 +2285,16 @@ def pub_comparison(samples, test_cfgs):
             row[f'{k}_ours'], row[f'{k}_pub'] = ours, float(pub[j])
             row[f'{k}_ratio'] = ours / pub[j] if pub[j] != 0 else np.nan
         rows.append(row)
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    # a ratio of two near-zero (or opposite-sign) coefficients is undefined
+    # (e.g. the TAL a', |a'| <= 0.16): NaN where the smaller |value| is below
+    # PUB_RATIO_MIN x the median |publication value| of that coefficient
+    for k in TARGETS:
+        if len(out):
+            o, q = out[f'{k}_ours'].to_numpy(float), out[f'{k}_pub'].to_numpy(float)
+            bad = (np.minimum(np.abs(o), np.abs(q)) < PUB_RATIO_MIN * np.nanmedian(np.abs(q))) | (np.sign(o) != np.sign(q))
+            out.loc[bad, f'{k}_ratio'] = np.nan
+    return out
 
 
 def sensitivity_table(final, samples_by_id):
@@ -2494,7 +2636,7 @@ def fig_pub(path, pub, made):
             lo, hi = min(x[f].min(), y[f].min()), max(x[f].max(), y[f].max())
             pad = 0.05 * (hi - lo if hi > lo else 1)
             ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color=INK3, ls='--', lw=1)
-            med = np.nanmedian(pub[f'{k}_ratio'])
+            med = _nanmedian(pub[f'{k}_ratio'])
             ax.text(0.04, 0.96, f'median ratio = {med:.3f}\nn = {f.sum()}', transform=ax.transAxes, va='top',
                     fontsize=8, color=INK2)
         ax.set_xlabel(f'publication {TARGET_LABEL[k]}')
@@ -3127,6 +3269,251 @@ def interval_extrapolation_section(shc, cfx, fam_cov=None, cfg_cov=None):
     return '\n'.join(L)
 
 
+def with_data_rows(t, dv, kind, col):
+    """Table ``t`` (one row per ``col`` x method) with a ``data (fit)`` row
+    after the rows of each ``col`` value: the violation rates of the data
+    (``data_violation_table``); its other columns are empty."""
+    import pandas as pd
+    if dv is None or not len(dv) or col not in t:
+        return t
+    d = dv[dv['kind'] == kind].set_index('set')
+    out = []
+    for v, g in t.groupby(col, sort=False):
+        out.append(g)
+        if v in d.index:
+            row = {c: d.loc[v, c] for c in t.columns if c.startswith('viol_') and c in d.columns}
+            out.append(pd.DataFrame([dict({col: v, 'method': 'data (fit)'}, **row)], columns=t.columns))
+    res = pd.concat(out, ignore_index=True)
+    for c in t.columns:      # keep integer columns integer (the data rows leave them empty)
+        if pd.api.types.is_integer_dtype(t[c]):
+            res[c] = pd.Series([int(x) if pd.notna(x) else float('nan') for x in res[c]], dtype=object)
+    return res
+
+
+def data_violation_note(byc):
+    """Which configurations make the data violate the monotonicity priors
+    (``report_checks.data_violations_by_config`` over all samples), why,
+    and the consequence: the residuals are enabled only where the targets
+    satisfy them in >= 99 % of the samples, so they are off for every
+    product."""
+    if byc is None or not len(byc):
+        return ''
+    why = {('mono_y', 'isobutanol'): 'the MPSP rises with the yield because the yield deficit is sold as ethanol at '
+                                     'a fixed price (b′ < 0 and d′ < 0 in most samples)',
+           ('mono_t', 'oxalic'): 'at high titer the MPSP rises with the titer, because evaporating the juice to '
+                                 'reach it cuts the exported electricity',
+           ('g_le_gmax', 'oxalic'): 'the recovery slightly exceeds the stoichiometric ratio 1'}
+    parts = []
+    for (k, g) in byc.groupby('constraint', sort=False):
+        lab = {'mono_y': 'dMPSP/dy <= 0', 'mono_t': 'dMPSP/dt <= 0', 'positive': 'MPSP > 0',
+               'g_le_gmax': 'g <= g_max'}.get(k, k)
+        tot = int(g['n_samples_all_configs'].iloc[0])
+        cfgs = []
+        for x in g.itertuples():
+            fam = x.config_id.split('_')[0].lower()
+            fam = {'ibo': 'isobutanol'}.get(fam, fam)
+            extra = f' (max g / g_max {x.max_g_over_gmax:.4f})' if k == 'g_le_gmax' else ''
+            cfgs.append(f'`{x.config_id}` {x.n_violating} of {x.n_samples} samples{extra}'
+                        + (f': {why[(k, fam)]}' if (k, fam) in why else ''))
+        parts.append(f'{lab}: violated by {int(g["n_violating"].sum())} of the {tot} samples, all of '
+                     + '; '.join(cfgs))
+    return ('**Violations in the data** (all samples; `tables/data_constraint_violations_by_config.csv`): '
+            + '. '.join(parts) + '. Every other configuration satisfies these constraints. A residual is enabled '
+            'only where the targets satisfy it in >= 99 % of the samples (`train.check_constraints`), so the '
+            'yield- and titer-monotonicity residuals are disabled for EVERY product because of these two '
+            'configurations (DESIGN.md section 1, "Product-specific cost structure"), and a method\'s '
+            '`viol_mono_y` near the data\'s is not a model error. The predicted g is bounded by g_max.\n')
+
+
+def loco_structure_section(checks):
+    """Section 5 paragraphs on the structure of the LOCO folds
+    (``clustered_and_twin_checks``): the family-level comparison with the
+    baselines, LOCO without the new-product folds, and LOCO per family."""
+    import numpy as np
+    L = []
+    bf = checks.get('baseline_family')
+    if bf is not None and len(bf):
+        t = bf.copy()
+        for c in ('mean', 'median', 'se', 'dominant_delta'):
+            t[c] = 100 * t[c]
+        pf = checks.get('loco_per_family')
+        cnt = (', '.join(f'{x.n_folds} {x.family}' for x in pf.sort_values('n_folds', ascending=False).itertuples())
+               if pf is not None and len(pf) else '')
+        L.append(f'**The LOCO folds are not independent**: its configurations cluster in {int(t["n_families"].max())} '
+                 f'biorefinery families ({cnt}) that share inputs and errors, so the '
+                 'fold-level p-values above (and the ± s.e. of the LOCO fold means) treat correlated folds as '
+                 'independent and overstate the precision. Family-level comparison (the paired fold differences '
+                 'averaged per family, then tested over the families; `report_checks.baseline_family_stats`, '
+                 '`tables/cv_baselines_paired_family.csv`; percentage points):\n')
+        L.append(md_table(t[['scheme', 'method', 'n_folds', 'n_families', 'mean', 'se', 'median', 'n_pinn_better',
+                             'n_baseline_better', 'p_wilcoxon', 'p_sign', 'dominant_family', 'dominant_delta']])
+                 + '\n')
+    kp, newp = checks.get('loco_known_product'), checks.get('loco_new_product_folds') or []
+    if kp is not None and len(kp) and newp:
+        r = kp.set_index('method')
+        pin = r.loc['pinn'] if 'pinn' in r.index else None
+        parts = []
+        for m in ('plain', 'knn'):
+            if m in r.index and np.isfinite(r.loc[m, 'diff_mean']):
+                x = r.loc[m]
+                parts.append(f'{METHOD_LABEL[m]} {100 * x["mean"]:.1f} % ({METHOD_LABEL[m]} - PI-NN '
+                             f'{100 * x["diff_mean"]:+.1f} ± {100 * x["diff_se"]:.1f} pp, PI-NN better on '
+                             f'{int(x["n_pinn_better"])}/{int(x["n_folds"])}, Wilcoxon p {x["p_wilcoxon"]:.2g})')
+        cov = checks.get('known_product_coverage')
+        ctxt = ''
+        if cov is not None and len(cov):
+            c = cov[cov['family'] == 'known-product folds'].set_index('key')['coverage']
+            n = cov[cov['family'] == 'new-product folds']['n']
+            ctxt = (f' {int(n.iloc[0]) if len(n) else 0} of the {int(cov[cov["key"] == "mpsp"]["n"].sum())} '
+                    'out-of-fold scores that calibrate the shipped intervals come from these new-product folds; '
+                    'coverage of the shipped quantiles on the known-product folds\' samples (pooled; '
+                    '`tables/interval_coverage_known_product.csv`): '
+                    + ', '.join(f'{k} {c[k]:.2f}' for k in c.index) + '.')
+        if pin is not None:
+            L.append(f'**LOCO without the new-product folds.** {len(newp)} of the {int(pin["n_folds"]) + len(newp)} '
+                     f'LOCO folds ({", ".join(f"`{c}`" for c in newp)}) hold out the only development '
+                     'configuration of their fermentation product, so they are new-product folds, not new '
+                     f'configurations of a known product. Over the other {int(pin["n_folds"])} folds '
+                     f'(`tables/cv_loco_known_product.csv`): PI-NN {100 * pin["mean"]:.1f} % (± '
+                     f'{100 * pin["se"]:.1f} s.e.), ' + ', '.join(parts) + '.' + ctxt + '\n')
+    pf = checks.get('loco_per_family')
+    if pf is not None and len(pf):
+        L.append('LOCO fold MAPE of the PI-NN per family (`tables/cv_loco_per_family.csv`; mean, range over the '
+                 'family\'s folds): ' + '; '.join(
+                     f'{x.family} {100 * x.mean:.1f} %' + (f' ({100 * x.min:.1f}-{100 * x.max:.1f}, {x.n_folds} folds)'
+                                                           if x.n_folds > 1 else ' (1 fold)')
+                     + (' [new-product fold]' if x.n_folds == 1 and x.min_config in newp else '')
+                     for x in pf.itertuples()) + '.\n')
+    return '\n'.join(L)
+
+
+def test_without_twins_section(checks):
+    """Section 6: the OOD test without the held-out configurations that are
+    input twins of development configurations (section 2)."""
+    import numpy as np
+    oodt, tp = checks.get('ood_twins') or [], checks.get('test_no_twin')
+    if not oodt or tp is None or not len(tp):
+        return ''
+    t = tp.drop(columns=[c for c in ('set',) if c in tp]).copy()
+    for c in ('mpsp_mape', 'diff_reference_minus_method', 'ci_lo', 'ci_hi'):
+        t[c] = 100 * t[c]
+    t = t[['method', 'n_configs', 'n_samples', 'mpsp_mape', 'diff_reference_minus_method', 'ci_lo', 'ci_hi',
+           'frac_boot_reference_better']]
+    L = [f'**OOD test without the input twin** {", ".join(f"`{c}`" for c in oodt)} (it encodes identically to a '
+         'development configuration, section 2; report only, from the saved test outputs; '
+         '`tables/final_test_without_twins.csv`), same columns as above. Its rows in the per-configuration tables '
+         'of this section (error, coverage, applicability domain) are those of a configuration whose input is in '
+         'training:\n', md_table(t) + '\n']
+    cv_ = checks.get('test_no_twin_cov')
+    if cv_ is not None and len(cv_):
+        c = cv_[cv_['method'] == 'pinn']
+        if len(c):
+            L.append('PI-NN interval coverage without it (sample-simultaneous for MPSP; pooled / mean over '
+                     'configurations; `tables/final_intervals_without_twins.csv`): '
+                     + ', '.join(f'{x.key} {x.coverage:.2f} / {x.coverage_cfg_mean:.2f}' for x in c.itertuples())
+                     + '.')
+    ad = checks.get('ad_no_twin')
+    if ad is not None and len(ad):
+        x = ad.iloc[0]
+        f = lambda v: f'{100 * v:.1f} %' if np.isfinite(v) else '–'
+        L.append(f'Applicability domain without it (`models/final_dev`; '
+                 '`tables/applicability_domain_test_without_twins.csv`): in-domain fraction '
+                 f'{x["frac_in_domain"]:.2f} of {int(x["n_samples"])} samples, MPSP MAPE {f(x["mape_in_domain"])} in '
+                 f'/ {f(x["mape_out_of_domain"])} out of the domain.')
+    return '\n'.join(L) + '\n'
+
+
+def _test_without_twin_clause(checks):
+    """'; without the input twin ...' clause of the OOD-test summary bullet."""
+    oodt, tp = checks.get('ood_twins') or [], checks.get('test_no_twin')
+    if not oodt or tp is None or not len(tp) or not (tp['method'] == 'pinn').any():
+        return ''
+    tw = checks.get('twins')
+    mates = sorted({x.twin if x.config_id in oodt else x.config_id for x in tw.itertuples()
+                    if x.crosses_split and (x.config_id in oodt or x.twin in oodt)}) if tw is not None else []
+    r = tp[tp['method'] == 'pinn'].iloc[0]
+    txt = (f'; without {", ".join(oodt)}, which is input-identical to the development configuration '
+           f'{", ".join(mates)} (section 2) and so not new in input space: PI-NN {100 * r["mpsp_mape"]:.1f} % '
+           f'(n = {int(r["n_samples"])} samples)')
+    return txt + _test_vs_baseline(tp, tp['set'].iloc[0])
+
+
+def _no_twin_cov(checks, key):
+    """', test_ood without the input twin x / y' (PI-NN interval coverage)."""
+    c = checks.get('test_no_twin_cov')
+    if c is None or not len(c):
+        return ''
+    c = c[(c['method'] == 'pinn') & (c['key'] == key)]
+    return (f', test_ood without the input twin {c["coverage"].iloc[0]:.2f} / {c["coverage_cfg_mean"].iloc[0]:.2f}'
+            if len(c) else '')
+
+
+def loco_structure_summary(checks):
+    """Summary bullets on the LOCO fold structure (family clustering,
+    new-product folds, per-family errors)."""
+    import numpy as np
+    L = []
+    bf = checks.get('baseline_family')
+    if bf is not None and len(bf):
+        r = bf.set_index('method')
+        ms = [m for m in ('plain', 'knn') if m in r.index]
+        L.append(f'* The LOCO folds cluster in {int(r["n_families"].max())} families, so the fold-level p-values '
+                 'above assume independent configurations; at the family level (fold differences averaged per '
+                 'family, then paired over the families): '
+                 + ', '.join(f'{METHOD_LABEL[m]} - PI-NN {100 * r.loc[m, "mean"]:+.1f} pp, PI-NN better in '
+                             f'{int(r.loc[m, "n_pinn_better"])}/{int(r.loc[m, "n_families"])} families (Wilcoxon p '
+                             f'{r.loc[m, "p_wilcoxon"]:.2g})' for m in ms)
+                 + (' -- the LOCO advantage over these baselines holds at the family level'
+                    if all(r.loc[m, 'mean'] > 0 and np.isfinite(r.loc[m, 'p_wilcoxon']) and r.loc[m, 'p_wilcoxon'] < 0.05
+                           for m in ms) else ' -- an advantage is not established at the family level for all of them')
+                 + ' (all baselines: section 5).')
+    kp, newp = checks.get('loco_known_product'), checks.get('loco_new_product_folds') or []
+    if kp is not None and len(kp) and newp and (kp['method'] == 'pinn').any():
+        r = kp.set_index('method')
+        pf = checks.get('loco_per_family')
+        fam = ('; PI-NN per family ' + ', '.join(f'{x.family} {100 * x.mean:.1f}' for x in pf.itertuples()
+                                                if x.min_config not in newp) + ' %'
+               if pf is not None and len(pf) else '')
+        L.append(f'* LOCO without its {len(newp)} new-product folds ({", ".join(newp)}: the only configuration of '
+                 f'their product): PI-NN {100 * r.loc["pinn", "mean"]:.1f} % over {int(r.loc["pinn", "n_folds"])} '
+                 'folds vs. ' + ', '.join(f'{METHOD_LABEL[m]} {100 * r.loc[m, "mean"]:.1f} %'
+                                          for m in ('plain', 'knn') if m in r.index) + fam + ' (section 5).')
+    return '\n'.join(L)
+
+
+def twin_section(checks):
+    """Section 2 paragraph on configurations with identical model inputs
+    (``clustered_and_twin_checks``)."""
+    tw = checks.get('twins')
+    if tw is None:
+        return ''
+    near = checks.get('twin_nearest') or {}
+    nd = (f' No other pair of configurations is closer than {near["distance"]:.2f} (`{near["config_id"]}` / '
+          f'`{near["other"]}`; Euclidean distance of the standardized inputs).' if near.get('config_id') else '')
+    if not len(tw):
+        return ('**Input twins** (checked after modelling with the features of `models/final_dev`; report only): '
+                'no two configurations encode to the same model input.' + nd + '\n')
+    pairs = '; '.join(f'`{x.config_id}` ({x.set}) = `{x.twin}` ({x.twin_set})' for x in tw.itertuples())
+    n = int(tw['n_features'].iloc[0])
+    txt = ('**Input twins** (checked after modelling with the features of `models/final_dev`, baseline rows; '
+           f'report only; `tables/input_twins.csv`): {len(tw)} pair(s) of configurations encode to the SAME model '
+           f'input (0 of {n} features differ): {pairs}. They differ only in settings that are not inputs (the '
+           'saccharification mode SHF / SSCF of the lactic configurations), so the model predicts the same '
+           'coefficients for both.' + nd)
+    oodt = checks.get('ood_twins') or []
+    if oodt:
+        txt += (f' **The held-out {", ".join(f"`{c}`" for c in oodt)} is therefore not new in input space**: its '
+                'twin is a development configuration, so its OOD test result measures the unmodelled difference '
+                'between the twins (a label shift at identical inputs), not generalization to a new configuration. '
+                'Section 6 reports the OOD test also without it; the split rule (fixed before modelling) is '
+                'unchanged.')
+    lt = checks.get('loco_twin_folds') or []
+    if lt:
+        txt += (f' In leave-one-configuration-out, the folds {", ".join(f"`{c}`" for c in lt)} have their twin in '
+                'training (section 5).')
+    return txt + '\n'
+
+
 def ad_section(ad, per):
     """Markdown: applicability-domain validation on the test sets."""
     if ad is None or not len(ad):
@@ -3297,12 +3684,21 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           + f' vs. best baseline {METHOD_LABEL[bm]} '
           f'{100 * base[bm]:.1f} %; irreducible fit MAPE {100 * _m(sch, "pinn", "fit_mape"):.1f} %'
           + baseline_paired_clause(checks.get('baseline_paired'), sch, bm) + '.')
+    P(loco_structure_summary(checks))
     lm = checks.get('loco_matched')
     if lm is not None and len(lm) and (lm['method'] == 'pinn').any():
         r = lm[lm['method'] == 'pinn'].iloc[0]
+        lmn, lt = checks.get('loco_matched_no_twin'), checks.get('loco_twin_folds') or []
+        tw = ''
+        if lt and lmn is not None and len(lmn) and (lmn['method'] == 'pinn').any():
+            r2 = lmn[lmn['method'] == 'pinn'].iloc[0]
+            tw = (f'; {len(lt)} of its folds ({", ".join(lt)}) have an input-identical twin in training (section 2); '
+                  f'without them {100 * r2["family_mean"]:.1f} %'
+                  + (f' (lactic {100 * r2["lactic"]:.1f} % vs. {100 * r["lactic"]:.1f} % with them)'
+                     if 'lactic' in r2 and np.isfinite(r2['lactic']) else ''))
         P(f'* LOCO restricted to the {", ".join(OOD_FAMILIES)} configurations (matched CV estimate of the OOD '
           f'test, family-balanced): PI-NN {100 * r["family_mean"]:.1f} % over {int(r["n_configs"])} '
-          'configurations.')
+          'configurations' + tw + '.')
     P(ablation_summary(checks.get('ablation_stats')))
     if len(fh):
         tp = checks.get('test_paired')
@@ -3311,7 +3707,8 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
             if len(r):
                 P(f'* Final test, {lab} (PI-NN trained on dev): MPSP MAPE {100 * r["mpsp_mape"].iloc[0]:.1f} % '
                   f'(median {100 * r["mpsp_mape_median"].iloc[0]:.1f} %; fit MAPE {100 * r["fit_mape"].iloc[0]:.1f} %; '
-                  f'n = {int(r["n_test"].iloc[0])} samples)' + _test_vs_baseline(tp, st) + '.')
+                  f'n = {int(r["n_test"].iloc[0])} samples)' + _test_vs_baseline(tp, st)
+                  + (_test_without_twin_clause(checks) if st == 'test_ood' else '') + '.')
     iv = fin.get('intervals')
     if iv is not None and len(iv):
         r = iv[(iv['method'] == 'pinn') & (iv['key'] == 'mpsp') & iv['calibration'].isin(['loco', 'holdout'])]
@@ -3323,6 +3720,7 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
             P(f'* PI-NN MPSP intervals (nominal {1 - ALPHA:.0%}, calibrated on {src}): realized '
               'sample-simultaneous coverage pooled over samples / mean over configurations '
               + ', '.join(f'{st} {g(st, "coverage"):.2f} / {g(st, "coverage_cfg_mean"):.2f}' for st in sets)
+              + _no_twin_cov(checks, 'mpsp')
               + f'; cross-fitted estimate pooled {g(sets[0], "crossfit_pooled"):.2f} / mean over configurations '
               f'{g(sets[0], "crossfit_mean"):.2f}.')
         rg = iv[(iv['method'] == 'pinn') & (iv['key'] == 'g') & iv['calibration'].isin(['loco', 'holdout'])]
@@ -3338,6 +3736,7 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
                  + '; the other families about 1.0)' if low is not None and len(low) else '')
               + ': realized coverage pooled / mean over configurations '
               + ', '.join(f'{st} {gg(st, "coverage"):.2f} / {gg(st, "coverage_cfg_mean"):.2f}' for st in sets)
+              + _no_twin_cov(checks, 'g')
               + f'; cross-fitted estimate pooled {gg(sets[0], "crossfit_pooled"):.2f} / mean '
               f'{gg(sets[0], "crossfit_mean"):.2f}, 10 % quantile over configurations '
               f'{gg(sets[0], "crossfit_q10"):.2f} (section 6).')
@@ -3383,6 +3782,25 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           'samples better in random CV (random samples, configuration geo-mean, mean over folds: '
           f'{rtxt}). The CV tables report spec-determined (baseline / productivity: every `bp_*` at baseline) and '
           'random samples separately (`*_spec`, `*_random`). `tables/noise_floor.csv`.\n')
+    yt = checks.get('yt_check')
+    if yt is not None and len(yt):
+        dep = yt[yt['departs']]
+        ok = yt[~yt['departs']]
+        dev_ = lambda x: max(abs(x[c] - 1) for c in ('y_ratio_min', 'y_ratio_max', 't_ratio_min', 't_ratio_max'))
+        P('**Measured vs. nominal yield and titer** (ADAPTERS.md checklist item 2; per simulated point '
+          'F_ferm_product / F_sugar_fed / y and F_ferm_product / V_broth / t, i.e. the fermentation product leaving '
+          'fermentation per sugar fed and per broth volume over the nominal y and t; `tables/yt_definition_check.csv`, '
+          'min / median / max per configuration): '
+          + (f'{len(ok)} configurations within ±{100 * max(dev_(x) for _, x in ok.iterrows()):.1f} %. ' if len(ok)
+             else '')
+          + (f'{len(dep)} depart by more than 1 %: ' + '; '.join(
+              f'`{x.config_id}` y {x.y_ratio_min:.3f}-{x.y_ratio_max:.3f}, t {x.t_ratio_min:.3f}-{x.t_ratio_max:.3f}'
+              for x in dep.itertuples()) + '. Known causes (DESIGN.md section 1, "Measured vs. nominal yield and '
+             'titer"): TAL, D8 (the spiked acetate counts as substrate in y but not in F_sugar_fed); lactic yield, '
+             'residual seed-train sugars recycled with the inoculum; ethanol titer, the ethanol of the CO2 vent counts '
+             'in F_ferm_product but not in the module\'s broth titer. The lactic SSCF titer ratio below 1 is not '
+             'explained. The coefficients are fitted on the nominal y and t (the modules\' own definitions), which '
+             'are the inputs of the unifying equation.' if len(dep) else '') + '\n')
     cov = checks.get('data_coverage')
     if cov is not None and len(cov):
         short = cov[(cov['retained'] < cov['planned'].fillna(0)) | (cov['empty_reset_failed'] > 0)]
@@ -3415,6 +3833,9 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       + (f'Biorefineries with too few configurations for a held-out one: '
          f'{", ".join(sp["biorefineries_without_held_out_config"])}. ' if sp['biorefineries_without_held_out_config']
          else '') + '`split.json`.\n')
+    tw_txt = twin_section(checks)
+    if tw_txt:
+        P(tw_txt)
     # protocol
     P('## 3. Training protocol\n')
     if protocol['name'] == 'v2':
@@ -3528,12 +3949,16 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         P(md_table(t[['scheme', 'method', 'n_folds', 'mean', 'se', 't', 'median', 'n_pinn_better',
                       'n_baseline_better', 'p_wilcoxon', 'p_sign', 'dominant_fold', 'dominant_delta',
                       'mean_without_dominant']]) + '\n')
-    P('Per-coefficient MAE (pooled out-of-fold, natural units) and constraint-violation rates:\n')
+    P(loco_structure_section(checks))
+    P('Per-coefficient MAE (pooled out-of-fold, natural units) and constraint-violation rates (`data (fit)` = '
+      'the rates of the data themselves, i.e. of the per-sample fitted coefficients on the same held-out samples '
+      'and with the same definitions; a method that reproduced the data exactly would show them):\n')
     vcols = ['scheme', 'method'] + [f'MAE_{k}' for k in TARGETS] + ['viol_mono_y', 'viol_mono_t', 'viol_positive',
                                                                      'viol_mono_r', 'viol_g_le_gmax']
     vcols += [c for c in ('coverage_MPSP',) if c in head and head[c].notna().any()]
     vcols += [c for c in ('crossfit_cov_mpsp', 'crossfit_cov_g') if c in head]
-    P(md_table(head[vcols]) + '\n')
+    P(md_table(with_data_rows(head[vcols], checks.get('data_viol'), 'cv', 'scheme')) + '\n')
+    P(data_violation_note(checks.get('data_viol_by_config')))
     lm = checks.get('loco_matched')
     if lm is not None and len(lm):
         P(f'**LOCO restricted to the {", ".join(OOD_FAMILIES)} configurations** -- the families of the held-out '
@@ -3541,6 +3966,17 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           'mean over the families of the mean over their configurations, as the OOD test holds out one '
           'configuration of each; `tables/cv_loco_ood_families.csv`):\n')
         P(md_table(lm, pct_cols=tuple(c for c in lm.columns if c not in ('method', 'n_configs'))) + '\n\n(%.)\n')
+        lt, lmn = checks.get('loco_twin_folds') or [], checks.get('loco_matched_no_twin')
+        if lt and lmn is not None and len(lmn):
+            per = checks.get('loco_per_fold_pinn') or {}
+            P(f'The folds {", ".join(f"`{c}`" for c in lt)} hold out a configuration whose input twin (section 2) '
+              'is in training' + (' (PI-NN ' + ', '.join(f'{100 * per[c]:.1f} %' for c in lt if c in per) + ')'
+                                   if per else '')
+              + '; the held-out lactic test configuration has its twin in training as well, so these folds are '
+              'the matched estimate of that one. Without them (`tables/cv_loco_ood_families_without_twin_folds.csv`'
+              '; the lactic column is then the one lactic fold without a twin in training):\n')
+            P(md_table(lmn, pct_cols=tuple(c for c in lmn.columns if c not in ('method', 'n_configs')))
+              + '\n\n(%.)\n')
     cfx = cv.get('crossfit')
     if cfx is not None and len(cfx):
         sub = cfx[(cfx['weighting'] == 'sample') & cfx['method'].isin(NN_BASES)
@@ -3591,9 +4027,11 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
     if len(fh):
         cols = ['set', 'method', 'n_train', 'n_test', 'mpsp_mape', 'mpsp_mape_median', 'fit_mape'] + \
                [f'R2_{k}' for k in TARGETS] + ['coverage_MPSP', 'viol_mono_y', 'viol_mono_t', 'viol_mono_r']
-        P(md_table(fh[fh['set'] != 'train_all'][cols], pct_cols=('mpsp_mape', 'mpsp_mape_median', 'fit_mape'))
+        P(md_table(with_data_rows(fh[fh['set'] != 'train_all'][cols], checks.get('data_viol'), 'test', 'set'),
+                   pct_cols=('mpsp_mape', 'mpsp_mape_median', 'fit_mape'))
           + '\n\n(test_ood = held-out configurations, test_id = in-distribution samples; MAPE in %; '
-          '`coverage_MPSP` = pointwise coverage of the MPSP intervals.)\n')
+          '`coverage_MPSP` = pointwise coverage of the MPSP intervals; `data (fit)` = violation rates of the data '
+          'themselves, section 5.)\n')
         pc = checks.get('test_per_config')
         if pc is not None and len(pc):
             P('PI-NN per held-out test configuration:\n')
@@ -3610,6 +4048,7 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
               '`tables/final_test_paired.csv`). With 4 held-out configurations the OOD test cannot rank the '
               'methods: its CIs are those of 4 clusters.\n')
             P(md_table(t) + '\n')
+        P(test_without_twins_section(checks))
         P(intervals_section(fin, protocol))
         P(interval_extrapolation_section(checks.get('shipped_coverage'), cv.get('crossfit'),
                                          checks.get('family_coverage'), checks.get('config_coverage')))
@@ -3665,6 +4104,17 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
                  'not in its training data) reproduces the validated path to '
                  f'{rc["new_configs"]["max_rel"]:.1g} ({rc["new_configs"].get("in_domain_mismatch", 0)} '
                  'in_domain mismatches)' if isinstance(rc.get('new_configs'), dict) else '') + '.\n')
+    tb = checks.get('twin_bias')
+    if tb is not None and len(tb):
+        t = tb.copy()
+        for c in ('err_baseline_sample', 'err_mean'):
+            t[c] = 100 * t[c]
+        P('**Input twins in the release model** (section 2: identical inputs, so identical coefficients, e.g. '
+          'a′ below): in-sample signed MPSP error, predicted / fitted - 1 at the sample\'s baseline yield and titer '
+          '(fitted = the sample\'s 4-coefficient fit, the training target), for the baseline sample and as the '
+          'mean over the configuration\'s samples, in % (`tables/release_twin_bias.csv`). The model averages the '
+          'twins, so it over-predicts one and under-predicts the other:\n')
+        P(md_table(t) + '\n')
     # checks
     P('## 8. Physical-consistency and interpretability checks\n')
     pub = checks['pub']
@@ -3672,9 +4122,14 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       'configuration vs. `results/data/<config>_coefficients.npy`; differences are expected from the newer '
       f'BioSTEAM / harness). {len(pub)} of 32 publication configurations present.\n')
     if len(pub):
-        med = {k: np.nanmedian(pub[f'{k}_ratio']) for k in TARGETS}
-        P('Median ratio ours/publication: ' + ', '.join(f"{k}′ {v:.3f}" if k != 'g' else f'g {v:.3f}'
-                                                     for k, v in med.items()) + '.\n')
+        med = {k: _nanmedian(pub[f'{k}_ratio']) for k in TARGETS}
+        und = {k: pub.loc[pub[f'{k}_ratio'].isna(), 'config_id'].tolist() for k in TARGETS}
+        P('Median ratio ours/publication (over the defined ratios): '
+          + ', '.join(f"{k}′ {v:.3f}" if k != 'g' else f'g {v:.3f}' for k, v in med.items()) + '. '
+          + (f'Ratios shown as `–` are undefined: one of the two values is near zero (below {PUB_RATIO_MIN:g} x '
+             'the median |publication value| of the coefficient) or the signs differ -- compare the values '
+             'themselves (' + '; '.join(f"{k}′: {', '.join(v)}" for k, v in und.items() if v) + ').'
+             if any(und.values()) else '') + '\n')
         note = publication_notes(pub, D.get('samples'))
         if note:
             P(note + '\n')
@@ -4002,6 +4457,11 @@ def main(argv=None):
     checks['sens'].to_csv(os.path.join(tdir, 'price_sensitivity.csv'), index=False)
     checks['channels'] = channel_table(fp, S, test_cfgs)
     checks['channels'].to_csv(os.path.join(tdir, 'channel_breakdown.csv'), index=False)
+    checks['data_viol'] = data_violation_table(dev, plan, a.seed, fin, S, Pts)
+    checks['data_viol'].to_csv(os.path.join(tdir, 'data_constraint_violations.csv'), index=False)
+    from fermentation_insights.coeff_predictor import report_checks as _RC
+    checks['data_viol_by_config'] = _RC.data_violations_by_config(S, Pts, list(D['samples']['sample_id'].astype(str)))
+    checks['data_viol_by_config'].to_csv(os.path.join(tdir, 'data_constraint_violations_by_config.csv'), index=False)
     report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp)
     T('tables', t0)
 

@@ -1,0 +1,13 @@
+key,folds,n,n_configs,coverage
+a,known-product folds,1063,35,0.9746001881467544
+a,new-product folds,290,2,0.6310344827586207
+b,known-product folds,1063,35,0.8739416745061148
+b,new-product folds,290,2,1.0
+c,known-product folds,1063,35,0.8739416745061148
+c,new-product folds,290,2,1.0
+d,known-product folds,1063,35,0.9633113828786454
+d,new-product folds,290,2,0.6724137931034483
+g,known-product folds,1063,35,0.8739416745061148
+g,new-product folds,290,2,1.0
+mpsp,known-product folds,1063,35,0.8974600188146754
+mpsp,new-product folds,290,2,0.9137931034482759

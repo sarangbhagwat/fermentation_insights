@@ -1,0 +1,2 @@
+set,n_samples,frac_in_domain,mape_in_domain,mape_out_of_domain,spearman_ad_ratio_vs_ape,frac_outside_range
+test_ood without the input twins,76,0.2631578947368421,0.0196110926463139,0.08889469487115927,0.7564456596035544,0.013157894736842105
