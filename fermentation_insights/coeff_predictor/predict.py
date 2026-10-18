@@ -123,6 +123,10 @@ productivity space), ``in_domain``, ``outside_range``,
 ``price_outside_range`` (informational: price channels are exactly linear),
 ``intervals_calibrated`` (False when the feedstock, fermentation product or
 product pair is not in training: the intervals are then not calibrated),
+``intervals_undercovered`` (the interval keys whose shipped quantiles cover
+the row's fermentation-product family more than 0.1 below nominal in
+development CV, with the measured coverage, e.g. ``'c 0.76, g 0.40'`` for a
+known TAL configuration; '' otherwise; see "Interval calibration" below),
 ``imputed`` (per row), ``contextual_defaults`` (contextual parameters not
 given by the user; their origin in ``contextual_source``), ``not_applicable``
 (contextual parameters kept NaN), ``contextual_outside_range`` (contextual
@@ -135,7 +139,16 @@ check is global) and ``filled_from_registry``. A given feedstock capacity
 breakdown has a ``ch__rest__<k>`` channel. Intervals are omitted when the
 calibration set was too small for the nominal level
 (``ensemble.conformal['<k>_level']``). With a user recovery, ``g_std`` = 0 and
-``g_lo`` = ``g_hi`` = ``g`` on that row.
+``g_lo`` = ``g_hi`` = ``g`` on that row. For a DataFrame spec the output keeps
+the spec's index (rows in the same order); :meth:`CoefficientPredictor.mpsp`
+numbers the spec rows positionally (column ``row`` = 0, 1, ...). Every given
+numeric field (``r``, prices and their aliases, contextual ``p_*``
+parameters, ``fs_w_*`` fractions, ``theoretical_yield`` etc.) must be a
+number, None / NaN / '' (not given) or, for the contextual parameters, 'n/a'
+(not applicable); anything else (e.g. ``p_IRR='10%'``) raises ValueError.
+An ``fs_w_*`` key that is not a composition column of the checkpoint is
+ignored (and reported), so it does not turn a by-name configuration into a
+custom feedstock.
 
 Interval calibration
 --------------------
@@ -153,15 +166,36 @@ is False (the scores come from the CV fold ensembles), and
 (mean, pooled, min, q10 over the held-out configurations). Coverage is
 marginal over the samples of new configurations (configurations weighted by
 their numbers of samples) and varies between configurations and families.
-For a KNOWN configuration (random-CV out-of-fold scores) the intervals are
-conservative pooled over samples (MPSP 0.99, g 0.92 for nominal 0.90) but
-not per family: g covers about 0.45 of the TAL samples (every TAL
-configuration; its recovery varies with a module parameter that is not an
-input) and d' about 0.56 of the lactic ones, while the other families are
-covered at about 1.0 (REPORT.md section 6).
 ``conformal['<k>_level']`` is then nominal (``conformal['level_kind']``).
 ``ensemble.meta['conformal_random_cv']`` (when present) holds, for
 information only, the quantiles calibrated on the random-CV scores.
+
+The quantiles are pooled over all families, and the coverage differs
+strongly between them (REPORT.md section 6). For a KNOWN configuration
+(random-CV out-of-fold scores) the intervals are conservative pooled over
+samples (MPSP 0.99, g 0.92 for nominal 0.90) but not per family: g covers
+about 0.44 of the TAL samples (every TAL configuration; its recovery varies
+with a module parameter that is not an input), c' about 0.76 of them and d'
+about 0.56 of the lactic ones, while HP, ethanol, isobutanol, oxalic and
+succinic acid are covered at 1.0 on every key, i.e. their intervals are too
+wide (MPSP half-width typically 15-30 % of the MPSP for a known
+configuration, for a random-CV error of about 3.5 %). For a NEW
+configuration of a known product (LOCO scores) the MPSP intervals
+under-cover ethanol (0.77) and lactic acid (0.69), g under-covers TAL
+(0.43) and lactic acid (0.65), and b', c', d' under-cover ethanol and
+lactic acid (d' also oxalic acid). ``ensemble.meta['coverage_by_family']``
+(written by the experiment pipeline from the development out-of-fold
+scores; report-only metadata, the quantiles stay pooled) holds the coverage
+of the checkpoint's quantiles per fermentation product and key for a known
+configuration (``'known_configuration'``: the lower of the random-CV and
+productivity-tail coverage) and for a new one (``'new_configuration'``:
+LOCO). ``predict`` / ``mpsp`` list the keys whose coverage for the row's
+family is more than :data:`UNDERCOVERAGE_TOL` below nominal in
+``intervals_undercovered`` (e.g. ``'c 0.76, g 0.40'`` for a known TAL
+configuration; a row named by a training ``config_id``, without its own
+feedstock or conflicting names, counts as a known configuration, any other
+row of a known product as a new one) and issue an ApplicabilityWarning
+quoting the numbers; their intervals are too narrow for that family.
 """
 import difflib
 import json
@@ -205,6 +239,13 @@ _PASS_PREFIXES = ('m__', 'q__', 'int__', 'ch__', 'x_', 'bp_', 'c__', 'fp_', 'pp_
 _CAPACITY_FIELDS = ('p_feedstock_capacity', 'fs_F_mass')
 #: relative tolerance of the contextual training-range check
 _CTX_RTOL = 1e-6
+#: an interval key counts as under-covering a family when its measured
+#: coverage (``ensemble.meta['coverage_by_family']``) is more than this below
+#: the nominal level 1 - alpha
+UNDERCOVERAGE_TOL = 0.1
+#: coverage schemes of ``meta['coverage_by_family']`` and their labels
+_COVERAGE_SCHEMES = {'known_configuration': 'known configuration: min of random CV and productivity tails',
+                     'new_configuration': 'new configuration: leave-one-configuration-out CV'}
 #: names, query and bookkeeping fields accepted without being model inputs:
 #: registry names, the y / t query, outputs of ``predict``/``mpsp`` and the
 #: non-input columns of the processed training tables (so training rows can
@@ -213,7 +254,7 @@ _PASS_FIELDS = frozenset((
     'config_id', 'feedstock', 'fermentation_product', 'final_product', 'recovery', 'y', 't', 'MPSP',
     'ferm_product_chemical', 'final_product_chemical', 'product_water_solubility',
     'g_predicted', 'g_source', 'ad_ratio', 'in_domain', 'outside_range', 'price_outside_range',
-    'intervals_calibrated', 'imputed', 'contextual_defaults', 'contextual_source', 'not_applicable',
+    'intervals_calibrated', 'intervals_undercovered', 'imputed', 'contextual_defaults', 'contextual_source', 'not_applicable',
     'contextual_outside_range', 'filled_from_registry', 'MPSP_lo', 'MPSP_hi', 'MPSP_std',
     'sample_id', 'biorefinery', 'sample_kind', 'seed', 'sample_index', 'source_file', 'separation_variant',
     'y_min', 'y_max', 't_min', 't_max', 'baseline_productivity', 'baseline_yield', 'baseline_titer',
@@ -306,6 +347,8 @@ class CoefficientPredictor:
                 if c in rec:
                     rec[c] = parse_bool(rec[c], c)
             cap_user = self._check_capacity(rec)     # positive number where given (else ValueError)
+            self._check_numeric(rec)                 # numbers where given (else ValueError)
+            self._drop_unknown_composition(rec)      # an fs_w_* key the checkpoint does not know: ignored
             rec, f = apply_spec_registry(rec, reg, info)
             # no neutralization (or nothing to neutralize) and no agent given:
             # 'none', as the training rows encode a missing agent
@@ -447,6 +490,54 @@ class CoefficientPredictor:
             warnings.warn(f"p_feedstock_capacity={given['p_feedstock_capacity']:g} and fs_F_mass="
                           f"{given['fs_F_mass']:g} differ -- using p_feedstock_capacity", UserWarning, stacklevel=5)
         return sorted(given)
+
+    def _numeric_fields(self):
+        """User fields that must be numbers where given: ``r``, the prices
+        and their aliases, the contextual ``p_*`` parameters, the ``fs_w_*``
+        fractions and :data:`features.SPEC_NUMERIC` (the feedstock capacity
+        is checked by :meth:`_check_capacity`)."""
+        nf = getattr(self, '_numeric', None)
+        if nf is None:
+            user = self._known_fields()[0]
+            nf = self._numeric = frozenset(
+                ({c for c in user if c.startswith(('p_', 'fs_w_'))} | set(PRICE_COLUMNS) | set(SPEC_NUMERIC)
+                 | {a for v in PRICE_ALIASES.values() for a in v} | {'r', W_SUGAR}) - set(_CAPACITY_FIELDS))
+        return nf
+
+    def _check_numeric(self, rec):
+        """ValueError for a given numeric field (:meth:`_numeric_fields`)
+        whose value is not a number: not given are None, NaN and '' (and
+        'n/a', not applicable, which the contextual parameters accept and
+        the required fields report as missing); a value such as '10%' or
+        '300 days' would otherwise be read as missing and silently encoded
+        as 'not applicable' / imputed."""
+        bad = []
+        for c in sorted(self._numeric_fields() & set(rec)):
+            v = rec[c]
+            if v is None or isinstance(v, (bool, np.bool_)) or (isinstance(v, str) and not v.strip()) \
+                    or is_not_applicable(v) or (np.ndim(v) == 0 and pd.isna(v)):
+                continue
+            try:
+                float(v)
+            except (TypeError, ValueError):
+                bad.append(c)
+        if bad:
+            unit = lambda c: FIELD_UNITS.get(c, FIELD_UNITS.get('fs_w_*') if c.startswith('fs_w_') else None)
+            raise ValueError('not a number: ' + '; '.join(f'{c}={rec[c]!r}' + (f' [{unit(c)}]' if unit(c) else '')
+                                                        for c in bad)
+                             + ' -- give a number in the field\'s unit (e.g. p_IRR=0.10, p_operating_days=330), '
+                             'or None / NaN to omit it' + (", or 'n/a' for a contextual parameter that does not "
+                                                           "apply" if any(c.startswith('p_') for c in bad) else ''))
+
+    def _drop_unknown_composition(self, rec):
+        """Remove the ``fs_w_*`` keys that are not composition columns of
+        the checkpoint (reported as unknown fields, e.g. 'fs_w_watre'): the
+        model does not read them, and they must not make a by-name
+        configuration a custom feedstock (``features._custom_feedstock_fields``)."""
+        _, known, fs_w_checked = self._known_fields()
+        if fs_w_checked:
+            for c in [c for c in rec if isinstance(c, str) and c.startswith('fs_w_') and c not in known]:
+                rec.pop(c)
 
     @staticmethod
     def _context_outside(rec, info, reg):
@@ -703,6 +794,55 @@ class CoefficientPredictor:
                              f'development CV, nominal {nominal:.2f}: {num})' if num else '')
                           + '; REPORT.md section 6', ApplicabilityWarning, stacklevel=stacklevel)
 
+    def _undercovered(self, df, det, keys, user_g=None):
+        """Per row: (scheme, fermentation product, {key: coverage}) of the
+        interval ``keys`` whose shipped quantiles cover the row's family
+        (fermentation product) more than :data:`UNDERCOVERAGE_TOL` below
+        nominal in development CV (``ensemble.meta['coverage_by_family']``;
+        a known ``config_id`` -> random-CV coverage, else LOCO), or None
+        (no intervals, no such metadata, or a feedstock / product not in
+        training, which :meth:`_warn_uncalibrated` covers). ``user_g``: rows
+        with a user recovery (their g interval is the given value)."""
+        conf = self.ensemble.conformal or {}
+        cbf = (self.ensemble.meta or {}).get('coverage_by_family') or {}
+        out = [None] * len(det)
+        if not conf or not cbf:
+            return out
+        nominal = float(cbf.get('nominal', 1 - conf.get('alpha', 0.1)))
+        cfg = (self.spec.spec_registry or {}).get('config', {})
+        fps = df['fermentation_product'].tolist() if 'fermentation_product' in df else [None] * len(det)
+        for i, (fp, d) in enumerate(zip(fps, det)):
+            if not d['calibrated'] or _bad_name(fp):
+                continue
+            known = (d.get('config_id') in cfg and not d['conflict'] and not d['custom_feedstock'])
+            sch = 'known_configuration' if known else 'new_configuration'
+            cov = (cbf.get(sch) or {}).get(str(fp)) or {}
+            low = {k: float(cov[k]) for k in keys if k in cov and cov[k] is not None
+                   and float(cov[k]) < nominal - UNDERCOVERAGE_TOL and conf.get(k) is not None
+                   and not (k == 'g' and user_g is not None and user_g[i])}
+            out[i] = (sch, str(fp), low)
+        return out
+
+    @staticmethod
+    def _format_undercovered(u):
+        return '' if not u or not u[2] else ', '.join(f'{k} {v:.2f}' for k, v in u[2].items())
+
+    def _warn_undercovered(self, und, stacklevel=4):
+        bad = [(i, u) for i, u in enumerate(und) if u and u[2]]
+        if not bad:
+            return
+        nominal = float(((self.ensemble.meta or {}).get('coverage_by_family') or {}).get(
+            'nominal', 1 - (self.ensemble.conformal or {}).get('alpha', 0.1)))
+        groups = {}
+        for i, (sch, fp, low) in bad:
+            groups.setdefault((sch, fp, tuple(low.items())), []).append(i)
+        parts = [f'rows {rows[:10]}: {fp} ({_COVERAGE_SCHEMES[sch]}) ' + ', '.join(f'{k} {v:.2f}' for k, v in low)
+                 for (sch, fp, low), rows in list(groups.items())[:6]]
+        warnings.warn('intervals that UNDER-cover the fermentation product\'s family in development CV (coverage of '
+                      f'the shipped quantiles, nominal {nominal:.2f}): ' + '; '.join(parts)
+                      + ' -- these intervals are too narrow for this family (column intervals_undercovered; '
+                      'README section 4.5, REPORT.md section 6)', ApplicabilityWarning, stacklevel=stacklevel)
+
     def _config_twins(self):
         """{config_id: [other training configurations whose by-name query
         encodes to the same model input]} (computed once per predictor)."""
@@ -841,8 +981,11 @@ class CoefficientPredictor:
         if self.spec.price_explicit:
             out['price_outside_range'] = [', '.join(o) for o in self.spec.price_outside_range(batch)]
         out['intervals_calibrated'] = [d['calibrated'] for d in det]
+        und = self._undercovered(df, det, COEFF_KEYS + ('g',), user_g=user)
+        out['intervals_undercovered'] = [self._format_undercovered(u) for u in und]
         if warn:
             self._warn_uncalibrated(det)
+            self._warn_undercovered(und)
         out['imputed'] = [', '.join(r) for r in batch.imputed_rows]
         out['contextual_defaults'] = [', '.join(d['contextual']) for d in det]
         out['contextual_source'] = ['; '.join(d['context_source']) for d in det]
@@ -852,12 +995,16 @@ class CoefficientPredictor:
         if warn:
             self._warn_imputed(batch, det)
             self._warn_context_outside(det)
+        if isinstance(spec, pd.DataFrame):
+            out.index = spec.index                    # rows in the spec's order
         return out
 
     def _check_yt(self, df, y, t, warn):
         """Raise for y <= 0 / t <= 0; warn for y above the theoretical (MPSP
-        set to NaN there: impossible) or inflection yield and t outside the
-        training titer range. Returns the (n, P) mask of impossible yields."""
+        set to NaN there: impossible) or inflection yield, y below the
+        training yield range of the product pair (registry ``y_domain``) and t
+        outside its training titer range. Returns the (n, P) mask of
+        impossible yields."""
         if not (np.all(y > 0) and np.all(t > 0)):
             raise ValueError('y and t must be > 0 (y in g product / g glucose-eq. sugar, t in g/L)')
         num = lambda c: pd.to_numeric(df[c], errors='coerce').to_numpy(float) if c in df else np.full(len(df), np.nan)
@@ -870,14 +1017,22 @@ class CoefficientPredictor:
         if above.any():
             msgs.append(f'y above the inflection yield (outside the fitted domain): rows '
                         f'{sorted({int(i) for i in np.nonzero(above)[0]})[:10]}')
-        dom = (self.spec.spec_registry or {}).get('domain', {})
-        tout = []
+        reg = self.spec.spec_registry or {}
+        dom, ydom = reg.get('domain', {}), reg.get('y_domain', {})
+        tout, ylow = [], []
         for i, rec in enumerate(df.to_dict('records')):
-            d = dom.get(f"{rec.get('fermentation_product')}|{rec.get('final_product')}") or dom.get('__all__')
+            key = f"{rec.get('fermentation_product')}|{rec.get('final_product')}"
+            d = dom.get(key) or dom.get('__all__')
             if d and (np.any(t < d['t_min'] * (1 - 1e-9)) or np.any(t > d['t_max'] * (1 + 1e-9))):
                 tout.append(i)
+            dy = ydom.get(key) or ydom.get('__all__')
+            if dy and np.any(y < dy['y_min'] * (1 - 1e-9)):
+                ylow.append((i, dy['y_min']))
         if tout:
             msgs.append(f'titer outside the training range: rows {tout[:10]}')
+        if ylow:
+            msgs.append('y below the training yield range (extrapolated along the 1/y terms): '
+                        + ', '.join(f'row {i} (training y >= {v:.3g})' for i, v in ylow[:10]))
         if warn and msgs:
             warnings.warn('; '.join(msgs), ApplicabilityWarning, stacklevel=3)
         return impossible
@@ -886,9 +1041,15 @@ class CoefficientPredictor:
         """MPSP [USD/kg] at yields ``y`` [g/g] and titers ``t`` [g/L]
         (broadcast against each other) for each spec row. Returns a long
         DataFrame with ``row, y, t, MPSP`` (ensemble mean of the members'
-        MPSP), ``MPSP_std``, the calibrated ``MPSP_lo``/``MPSP_hi`` and
-        ``g_source``. Raises ValueError for y <= 0 or t <= 0; yields above the
-        row's theoretical yield give NaN (with an ApplicabilityWarning).
+        MPSP), ``MPSP_std``, the calibrated ``MPSP_lo``/``MPSP_hi``,
+        ``g_source``, ``intervals_calibrated``, ``intervals_undercovered``
+        ('mpsp <coverage>' where the MPSP intervals under-cover the row's
+        family, see :meth:`predict`) and ``contextual_outside_range``; ``row``
+        numbers the spec rows positionally (0, 1, ..., also for a DataFrame
+        spec). Raises ValueError for y <= 0 or t <= 0; yields above the row's
+        theoretical yield give NaN (with an ApplicabilityWarning); yields
+        below the training range of the product pair and titers outside it
+        are flagged with an ApplicabilityWarning.
         ``recovery`` as in :meth:`predict`: every member's MPSP is then
         (a' + b'/y + c'/t + d'/(y t)) / recovery (intervals: coefficient
         uncertainty only)."""
@@ -919,10 +1080,13 @@ class CoefficientPredictor:
             rows['MPSP_lo'], rows['MPSP_hi'] = (mu - hw).ravel(), (mu + hw).ravel()
         rows['g_source'] = np.repeat(self._g_source(g_user), len(y))
         rows['intervals_calibrated'] = np.repeat([d['calibrated'] for d in det], len(y))
+        und = self._undercovered(df, det, ('mpsp',))
+        rows['intervals_undercovered'] = np.repeat([self._format_undercovered(u) for u in und], len(y))
         rows['contextual_outside_range'] = np.repeat([', '.join(c for c, *_ in d['context_outside'])
                                                       for d in det], len(y))
         if warn:
             self._warn_uncalibrated(det, stacklevel=3)
+            self._warn_undercovered(und, stacklevel=3)
         return pd.DataFrame(rows)
 
     def unprimed(self, spec, **kw):

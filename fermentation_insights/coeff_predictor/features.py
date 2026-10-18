@@ -795,6 +795,8 @@ def build_spec_registry(samples):
     ``p_*`` parameter; None = never applicable for that pair in training),
     'regime': {'fp|pp': {'fields': {unique regime values}, 'varying': [...],
     'n_regimes': k}}, 'domain': {'fp|pp' | '__all__': {'t_min', 't_max'}},
+    'y_domain': {'fp|pp' | '__all__': {'y_min', 'y_max'}} (the training yield
+    range, read only by the applicability warnings of the user API),
     'config': {config_id: entry}, 'pair_feedstock': {'fp|pp|feedstock':
     entry + 'configs'}, 'feedstock_context': {name: {FEEDSTOCK_DEPENDENT
     baseline medians}}, 'pair_descriptors': {'fp|pp': {fp_*/pp_* of the
@@ -842,10 +844,18 @@ def build_spec_registry(samples):
                 tmn, tmx = _to_float(grp['t_min']), _to_float(grp['t_max'])
                 if tmn.notna().any() and tmx.notna().any():
                     reg['domain'][key] = {'t_min': float(tmn.min()), 't_max': float(tmx.max())}
+            if 'y_min' in grp and 'y_max' in grp:
+                ymn, ymx = _to_float(grp['y_min']), _to_float(grp['y_max'])
+                if ymn.notna().any() and ymx.notna().any():
+                    reg.setdefault('y_domain', {})[key] = {'y_min': float(ymn.min()), 'y_max': float(ymx.max())}
     if 't_min' in samples and 't_max' in samples and len(samples):
         tmn, tmx = _to_float(samples['t_min']), _to_float(samples['t_max'])
         if tmn.notna().any() and tmx.notna().any():
             reg['domain']['__all__'] = {'t_min': float(tmn.min()), 't_max': float(tmx.max())}
+    if 'y_min' in samples and 'y_max' in samples and len(samples):
+        ymn, ymx = _to_float(samples['y_min']), _to_float(samples['y_max'])
+        if ymn.notna().any() and ymx.notna().any():
+            reg.setdefault('y_domain', {})['__all__'] = {'y_min': float(ymn.min()), 'y_max': float(ymx.max())}
     ccols = _context_columns(samples, params)
     if 'config_id' in samples:
         for cid, grp in samples.groupby('config_id'):

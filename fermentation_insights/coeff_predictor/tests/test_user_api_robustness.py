@@ -292,3 +292,121 @@ def test_capacity_response_check(with_ranges, shipped):
     assert t.loc[2., 'contextual_outside_range'] == 'feedstock_capacity'
     assert t.loc[1., 'contextual_outside_range'] == ''
     assert np.isfinite(t.loc[2., 'share_of_simulated_change'])
+
+
+def test_numeric_fields_are_validated(shipped):
+    """A given numeric field that is not a number raises (it would otherwise
+    be read as missing and encoded as 'not applicable' / imputed)."""
+    _, P = shipped
+    base = dict(config_id='HP_corn', r=0.3, feedstock_price=0.2)
+    for field, v in (('p_IRR', '10%'), ('p_operating_days', '300 days'), ('p_operating_days', 'abc'),
+                     ('electricity_price', 'abc'), ('T_fermentation', 'warm'), ('r', 'fast')):
+        with pytest.raises(ValueError, match=f'not a number: {field}='):
+            _quiet(P.predict, dict(base, **{field: v}))
+    # numbers given as strings, omitted values and 'n/a' (not applicable) are accepted
+    np.testing.assert_allclose(_quiet(P.predict, dict(base, p_IRR='0.1'))[K].to_numpy(),
+                               _quiet(P.predict, dict(base, p_IRR=0.1))[K].to_numpy())
+    for v in (None, float('nan'), ''):
+        np.testing.assert_allclose(_quiet(P.predict, dict(base, p_IRR=v))[K].to_numpy(),
+                                   _quiet(P.predict, base)[K].to_numpy())
+    assert 'p_IRR' in _quiet(P.predict, dict(base, p_IRR='n/a'))['not_applicable'][0].split(', ')
+
+
+def test_unknown_composition_key_is_ignored(shipped):
+    """An fs_w_* key the checkpoint does not know is ignored (and reported),
+    so it does not turn a by-name configuration into a custom feedstock."""
+    _, P = shipped
+    base = dict(config_id='HP_corn', r=0.3, feedstock_price=0.2)
+    out, msgs = _caught(P.predict, dict(base, fs_w_watre=0.2))
+    np.testing.assert_allclose(out[K].to_numpy(), _quiet(P.predict, base)[K].to_numpy())
+    assert any('IGNORED' in m and 'fs_w_watre' in m for m in msgs), msgs
+    assert not any('custom' in m.lower() and 'feedstock' in m.lower() for m in msgs), msgs
+
+
+def test_dataframe_index_is_kept(shipped):
+    _, P = shipped
+    df = pd.DataFrame([dict(config_id='HP_corn', r=0.3, feedstock_price=0.2),
+                       dict(config_id='TAL_glucose', r=1., feedstock_price=0.3),
+                       dict(config_id='HP_corn', r=0.5, feedstock_price=0.2)], index=[10, 3, 7])
+    out = _quiet(P.predict, df)
+    assert out.index.tolist() == [10, 3, 7]
+    ref = _quiet(P.predict, df.reset_index(drop=True))
+    np.testing.assert_allclose(out[K].to_numpy(), ref[K].to_numpy())
+    # mpsp() numbers the spec rows positionally
+    assert sorted(_quiet(P.mpsp, df, y=0.5, t=50.)['row'].unique()) == [0, 1, 2]
+
+
+@pytest.fixture(scope='module')
+def with_family_coverage(shipped, tmp_path_factory):
+    """The release checkpoint with known per-family coverage metadata
+    (``meta['coverage_by_family']``, as the experiment pipeline writes it)."""
+    import shutil
+    dst = str(tmp_path_factory.mktemp('ck_cov') / 'release')
+    shutil.copytree(os.path.join(HERE, 'models', 'release'), dst)
+    mp = os.path.join(dst, 'meta.json')
+    m = json.load(open(mp))
+    m.setdefault('meta', {})['coverage_by_family'] = dict(
+        nominal=0.9,
+        known_configuration={'TAL': dict(a=0.95, b=1.0, c=0.76, d=1.0, g=0.44, mpsp=0.91), 'HP': dict(g=1.0)},
+        new_configuration={'Ethanol': dict(b=0.67, g=1.0, mpsp=0.77), 'TAL': dict(g=0.43, mpsp=0.91)})
+    json.dump(m, open(mp, 'w'))
+    return _quiet(CoefficientPredictor.load, dst)
+
+
+def test_family_undercoverage_is_flagged(with_family_coverage):
+    P = with_family_coverage
+    specs = [dict(config_id='TAL_glucose', r=1., feedstock_price=0.3), dict(config_id='HP_corn', r=0.3,
+                                                                              feedstock_price=0.2)]
+    out, msgs = _caught(P.predict, specs)
+    assert out['intervals_undercovered'].tolist() == ['c 0.76, g 0.44', '']
+    assert out['intervals_calibrated'].all()
+    assert any('UNDER-cover' in m and 'TAL' in m and 'g 0.44' in m for m in msgs), msgs
+    # a user recovery: its g interval is the given value, not flagged
+    assert _quiet(P.predict, specs[0], recovery=0.7)['intervals_undercovered'][0] == 'c 0.76'
+    # mpsp(): the MPSP key only; a new ethanol configuration (no config_id) uses the LOCO coverage
+    eth = dict(feedstock='corn', fermentation_product='Ethanol', final_product='Ethanol', r=1.,
+               feedstock_price=0.2)
+    m, msgs = _caught(P.mpsp, [specs[0], eth], y=0.4, t=60.)
+    assert m.groupby('row')['intervals_undercovered'].first().tolist() == ['', 'mpsp 0.77']
+    assert any('new configuration' in x and 'mpsp 0.77' in x for x in msgs), msgs
+    assert _quiet(P.predict, eth)['intervals_undercovered'][0] == 'b 0.67'
+
+
+def test_shipped_checkpoints_carry_family_coverage(shipped):
+    """The pipeline records the per-family coverage of the shipped quantiles
+    (development out-of-fold scores) in both checkpoints; the known TAL
+    recovery under-coverage (REPORT.md section 6) is flagged by name."""
+    _, P = shipped
+    cbf = (P.ensemble.meta or {}).get('coverage_by_family')
+    if not cbf:
+        pytest.skip('checkpoint without coverage_by_family (written by experiments.py)')
+    assert cbf['known_configuration']['TAL']['g'] < 0.6
+    assert cbf['new_configuration']['LacticAcid']['mpsp'] < 0.8
+    out = _quiet(P.predict, dict(config_id='TAL_glucose', r=1., feedstock_price=0.3))
+    assert 'g 0.' in out['intervals_undercovered'][0]
+    fd = json.load(open(os.path.join(HERE, 'models', 'final_dev', 'meta.json')))
+    assert fd['meta']['coverage_by_family']['known_configuration']['TAL']['g'] < 0.6
+
+
+@pytest.fixture(scope='module')
+def with_y_domain(shipped, tmp_path_factory):
+    s, P = shipped
+    if (P.spec.spec_registry or {}).get('y_domain'):
+        return P
+    import shutil
+    from fermentation_insights.coeff_predictor.predict import refresh_spec_registry
+    dst = str(tmp_path_factory.mktemp('ck_y') / 'release')
+    shutil.copytree(os.path.join(HERE, 'models', 'release'), dst)
+    assert refresh_spec_registry(dst, s)
+    return _quiet(CoefficientPredictor.load, dst)
+
+
+def test_yields_below_the_training_range_warn(with_y_domain, shipped):
+    s, _ = shipped
+    P = with_y_domain
+    ymin = float(s.loc[s['config_id'] == 'succinic_glucose', 'y_min'].min())
+    q = dict(config_id='succinic_glucose', r=0.5, feedstock_price=0.3)
+    _, msgs = _caught(P.mpsp, q, y=0.2 * ymin, t=60.)
+    assert any('y below the training yield range' in m for m in msgs), msgs
+    _, msgs = _caught(P.mpsp, q, y=2 * ymin, t=60.)
+    assert not any('y below the training yield range' in m for m in msgs), msgs
