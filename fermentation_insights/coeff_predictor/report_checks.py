@@ -91,6 +91,74 @@ def ablation_stats(res, schemes=('config', 'product'), ablations=('pinn-no_chann
     return pd.DataFrame(rows), pd.DataFrame(per)
 
 
+def baseline_fold_stats(res, schemes=('config', 'feedstock', 'product'), methods=('knn', 'plain', 'ridge', 'hgb'),
+                        reference='pinn'):
+    """Paired fold-level statistics of (baseline - PI-NN) fold MPSP MAPE
+    (fractions; > 0: the PI-NN is better) per CV scheme and baseline, over
+    the folds where both ran (``cv_results.csv``): mean, s.e., t, median,
+    folds where either is better, Wilcoxon signed-rank p (>= 5 folds), the
+    two-sided sign-test p and the dominant fold."""
+    r = res[(res['fold'] >= 0) & (res['metric'] == 'mpsp_mape') & (res['target'] == 'MPSP')]
+    rows = []
+    for sch in schemes:
+        g = r[r['scheme'] == sch].pivot_table(index='label', columns='method', values='value', aggfunc='mean')
+        if reference not in g:
+            continue
+        for m in methods:
+            if m not in g:
+                continue
+            ok = g[[m, reference]].dropna()
+            if not len(ok):
+                continue
+            st = _paired(ok[m] - ok[reference])
+            nb, nw = st.pop('n_variant_better'), st.pop('n_variant_worse')
+            p_sign = math.nan
+            if nb + nw:
+                try:
+                    from scipy.stats import binomtest
+                    p_sign = float(binomtest(nw, nb + nw, 0.5).pvalue)
+                except Exception:  # pragma: no cover
+                    pass
+            rows.append(dict(scheme=sch, method=m, n_folds=st.pop('n_folds'), mean=st['mean'], se=st['se'],
+                             t=st['t'], median=st['median'], n_pinn_better=nw, n_baseline_better=nb,
+                             p_wilcoxon=st['p_wilcoxon'], p_sign=p_sign, dominant_fold=st.get('dominant_fold'),
+                             dominant_delta=st.get('dominant_delta'),
+                             mean_without_dominant=st.get('mean_without_dominant')))
+    return pd.DataFrame(rows)
+
+
+def family_coverage(scores, conf, scheme='config', method='pinn', keys=('g', 'mpsp'), families=None):
+    """Coverage of the interval quantiles ``conf`` on the out-of-fold scores
+    of one CV scheme per biorefinery family (pooled over its held-out
+    samples) and per held-out configuration: (per family, per configuration)
+    tables. The pooled coverage can sit at the nominal level while whole
+    families are over- or under-covered."""
+    from fermentation_insights.coeff_predictor.train import rescore_conformal, CONF_KEYS
+    eps = {k: conf.get(f'{k}_eps') for k in CONF_KEYS if k != 'mpsp' and conf.get(f'{k}_eps') is not None}
+    eps['mpsp_rel'] = conf.get('mpsp_eps_rel', 0.01)
+    g = scores[(scores['scheme'] == scheme) & (scores['method'] == method)]
+    if not len(g):
+        return pd.DataFrame(), pd.DataFrame()
+    sc, _ = rescore_conformal(g, eps)
+    cid = sc['config_id'].astype(str)
+    fam = cid.map(families) if families else cid.str.split('_').str[0]
+    fam = fam.where(fam.notna(), cid)
+    fr, cr = [], []
+    for k in keys:
+        q = conf.get(k)
+        if q is None or not np.isfinite(q) or k not in sc:
+            continue
+        v = sc[k].to_numpy(float)
+        ok = np.isfinite(v)
+        cov = pd.Series(v[ok] <= q, index=sc.index[ok], dtype=float)
+        byc = cov.groupby(sc.loc[ok, 'config_id'].astype(str)).mean()
+        fr += [dict(key=k, family=str(f), n=int(len(c)), n_configs=int(sc.loc[c.index, 'config_id'].nunique()),
+                    coverage=float(c.mean()))
+               for f, c in cov.groupby(fam[ok].astype(str))]
+        cr += [dict(key=k, config_id=str(c), coverage=float(v_)) for c, v_ in byc.items()]
+    return pd.DataFrame(fr), pd.DataFrame(cr)
+
+
 def sample_ape(ev, samples_by_id, points_by_id):
     """Per held-out sample of an evaluation dict (``ids``, ``coef``, ``g``):
     ``sample_id``, ``config_id``, sum of the absolute percentage errors of

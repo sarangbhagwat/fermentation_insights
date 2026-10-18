@@ -940,6 +940,25 @@
    "d_coverage_cv": 0.9009703430367637,
    "g_coverage_cv": 0.9002241355746892,
    "mpsp_coverage_cv": 0.8994697280306138
+  },
+  "coverage_unseen": {
+   "feedstock": {
+    "a": 0.9069,
+    "b": 0.7214,
+    "c": 0.8256,
+    "d": 0.8071,
+    "g": 0.6438,
+    "mpsp": 0.7118
+   },
+   "product": {
+    "a": 0.7605,
+    "b": 0.8574,
+    "c": 0.6327,
+    "d": 0.5957,
+    "g": 0.4516,
+    "mpsp": 0.7103
+   },
+   "source": "coverage of the release quantiles on the leave-one-feedstock-out / leave-one-product-out out-of-fold scores, pooled over samples (REPORT.md section 6, tables/interval_coverage_by_scheme.csv)"
   }
  }
 }

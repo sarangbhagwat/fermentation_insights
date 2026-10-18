@@ -7545,6 +7545,326 @@
     "pp_n_O": 3.0,
     "pp_n_N": 0.0
    }
+  },
+  "baseline": {
+   "config": {
+    "HP_corn": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_cornstover": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2764999999999999
+    },
+    "HP_glucose": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_hexanol_corn": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_hexanol_cornstover": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "HP_hexanol_glucose": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "HP_hexanol_sugarcane": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_neutral_corn": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_neutral_cornstover": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_neutral_glucose": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "HP_neutral_hexanol_corn": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_neutral_hexanol_cornstover": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_neutral_hexanol_glucose": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_neutral_hexanol_sugarcane": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_neutral_sugarcane": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP_sugarcane": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "IBO_EtOH_corn": {
+     "baseline_titer": 36.57434362397228,
+     "electricity_price": 0.092896,
+     "natural_gas_price": 0.2893046531979421
+    },
+    "TAL_SA_corn": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL_SA_cornstover": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL_SA_glucose": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL_SA_sugarcane": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL_corn": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL_cornstover": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "TAL_glucose": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL_sugarcane": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "ethanol_corn": {
+     "baseline_titer": 106.63544561741556,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2179999999999999
+    },
+    "ethanol_cornstover": {
+     "baseline_titer": 53.35533173842203,
+     "electricity_price": 0.0572,
+     "natural_gas_price": 0.218
+    },
+    "ethanol_sugarcane": {
+     "baseline_titer": 117.00582889065116,
+     "electricity_price": 0.0700476994786921,
+     "natural_gas_price": 0.2262253550284134
+    },
+    "lactic_lowpH_SHF_cornstover": {
+     "baseline_titer": 91.20602588845432,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2529999999999999
+    },
+    "lactic_lowpH_SSCF_cornstover": {
+     "baseline_titer": 88.43778026319333,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.253
+    },
+    "lactic_neutral_SHF_cornstover": {
+     "baseline_titer": 97.54966671350168,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.253
+    },
+    "lactic_neutral_SSCF_cornstover": {
+     "baseline_titer": 94.70473698756406,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.253
+    },
+    "oxalic_neutral_sugarcane": {
+     "baseline_titer": 28.23,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.276011662323727
+    },
+    "succinic_corn": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2527
+    },
+    "succinic_cornstover": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2527
+    },
+    "succinic_glucose": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2527
+    },
+    "succinic_neutral_corn": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2527
+    },
+    "succinic_neutral_cornstover": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2527
+    },
+    "succinic_neutral_glucose": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2526999999999999
+    },
+    "succinic_neutral_sugarcane": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2526999999999999
+    },
+    "succinic_sugarcane": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2527000000000001
+    }
+   },
+   "pair_feedstock": {
+    "Ethanol|Ethanol|corn": {
+     "baseline_titer": 106.63544561741556,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2179999999999999
+    },
+    "Ethanol|Ethanol|cornstover": {
+     "baseline_titer": 53.35533173842203,
+     "electricity_price": 0.0572,
+     "natural_gas_price": 0.218
+    },
+    "Ethanol|Ethanol|sugarcane": {
+     "baseline_titer": 117.00582889065116,
+     "electricity_price": 0.0700476994786921,
+     "natural_gas_price": 0.2262253550284134
+    },
+    "HP|AcrylicAcid|corn": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP|AcrylicAcid|cornstover": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2764999999999999
+    },
+    "HP|AcrylicAcid|glucose": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "HP|AcrylicAcid|sugarcane": {
+     "baseline_titer": 62.5,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "Isobutanol|Isobutanol|corn": {
+     "baseline_titer": 36.57434362397228,
+     "electricity_price": 0.092896,
+     "natural_gas_price": 0.2893046531979421
+    },
+    "LacticAcid|LacticAcid|cornstover": {
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2529999999999999
+    },
+    "OxalicAcid|OxalicAcid|sugarcane": {
+     "baseline_titer": 28.23,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.276011662323727
+    },
+    "SuccinicAcid|SuccinicAcid|corn": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2527
+    },
+    "SuccinicAcid|SuccinicAcid|cornstover": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2527
+    },
+    "SuccinicAcid|SuccinicAcid|glucose": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2527
+    },
+    "SuccinicAcid|SuccinicAcid|sugarcane": {
+     "baseline_titer": 63.1,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2526999999999999
+    },
+    "TAL|KSA|corn": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL|KSA|cornstover": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL|KSA|glucose": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL|KSA|sugarcane": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL|TAL|corn": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL|TAL|cornstover": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765
+    },
+    "TAL|TAL|glucose": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    },
+    "TAL|TAL|sugarcane": {
+     "baseline_titer": 35.9,
+     "electricity_price": 0.07,
+     "natural_gas_price": 0.2765000000000001
+    }
+   }
   }
  },
  "columns": [

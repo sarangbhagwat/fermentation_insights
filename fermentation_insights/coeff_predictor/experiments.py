@@ -1499,6 +1499,11 @@ FIDELITY_REPORT_COLS = ('ch_rms', 'ch_feedstock', 'ch_electricity', 'ch_natural_
                         'ch_capex_downstream', 'sens_fs', 'bias_fs', 'resp_fs', 'resp_el', 'resp_ng')
 
 
+#: per-configuration relative price-sensitivity errors (``sens_*``, ``bias_*``)
+#: are reported only where the simulated price share of MPSP is at least this
+FIDELITY_MIN_SHARE = 0.02
+
+
 def fidelity_tables(fid):
     """(summary per scheme, per scheme x configuration) of the out-of-fold
     fidelity rows: configuration-balanced means (``bias_*`` absolute in the
@@ -1521,6 +1526,15 @@ def fidelity_tables(fid):
             and not c.endswith('_valid')]
     per = d.groupby(['scheme', 'config_id'])[cols].median().reset_index()
     per.insert(2, 'n_samples', d.groupby(['scheme', 'config_id']).size().to_numpy())
+    # relative errors of a price key are undefined where its simulated share
+    # of MPSP is about 0 (DESIGN.md 5a): NaN below FIDELITY_MIN_SHARE (the
+    # absolute resp_* columns remain)
+    for k in ('fs', 'el', 'ng'):
+        if f'share_{k}' in per:
+            low = per[f'share_{k}'].abs() < FIDELITY_MIN_SHARE
+            for c in (f'sens_{k}', f'bias_{k}'):
+                if c in per:
+                    per.loc[low, c] = np.nan
     return summ, per
 
 
@@ -1689,6 +1703,11 @@ def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir, cv):
                 api = api_consistency(P, s, base)
                 pr = P.predict(base.head(1), warn=False)
                 q = P.predict(base[API_QUERY_FIELDS].head(1), warn=False)
+                fdp = os.path.join(models_dir, 'final_dev')
+                ood = s[s['sample_id'].astype(str).isin(set(map(str, sp.get('ood_test_sample_ids', []))))]
+                if os.path.isdir(fdp) and len(ood):
+                    api['new_configs'] = api_consistency_new_rows(CoefficientPredictor.load(fdp),
+                                                                  ood.reset_index(drop=True))
             out['release_check'] = dict(ok=True, n=len(pr), columns=int(pr.shape[1]),
                                         example={k: float(pr[k].iloc[0]) for k in TARGETS},
                                         example_by_name={k: float(q[k].iloc[0]) for k in TARGETS},
@@ -1727,12 +1746,44 @@ def api_consistency(P, samples, base):
         return np.abs(a - b) / np.maximum(np.abs(b), 1e-9)
 
     full = P.predict(samples, warn=False)[list(TARGETS)].to_numpy(float)
-    q = P.predict(base[API_QUERY_FIELDS], warn=False)[list(TARGETS)].to_numpy(float)
+    qd = P.predict(base[API_QUERY_FIELDS], warn=False)
+    q = qd[list(TARGETS)].to_numpy(float)
     y, t = base['baseline_yield'].to_numpy(float), base['baseline_titer'].to_numpy(float)
     mp = lambda C: (C[:, 0] + C[:, 1] / y + C[:, 2] / t + C[:, 3] / (y * t)) / C[:, 4]
-    return dict(n_rows=int(len(samples)), rows_max_rel=float(np.nanmax(rel(full, ref(samples)))),
-                n_configs=int(base['config_id'].nunique()),
-                by_name_max_rel_mpsp=float(np.nanmax(rel(mp(q), mp(ref(base))))))
+    out = dict(n_rows=int(len(samples)), rows_max_rel=float(np.nanmax(rel(full, ref(samples)))),
+               n_configs=int(base['config_id'].nunique()),
+               by_name_max_rel_mpsp=float(np.nanmax(rel(mp(q), mp(ref(base))))))
+    # the applicability domain of the by-name query equals that of the
+    # baseline row, and a query without prices uses the baseline prices
+    if 'ad_ratio' in qd:
+        fb = P.predict(base, warn=False)
+        out['by_name_ad_max_abs'] = float(np.nanmax(np.abs(qd['ad_ratio'].to_numpy(float)
+                                                           - fb['ad_ratio'].to_numpy(float))))
+        out['by_name_in_domain_mismatch'] = int((qd['in_domain'].to_numpy() != fb['in_domain'].to_numpy()).sum())
+    noprice = [c for c in API_QUERY_FIELDS if c not in ('electricity_price', 'natural_gas_price')]
+    qn = P.predict(base[noprice], warn=False)[list(TARGETS)].to_numpy(float)
+    out['by_name_no_prices_max_rel_mpsp'] = float(np.nanmax(rel(mp(qn), mp(ref(base)))))
+    return out
+
+
+def api_consistency_new_rows(P, rows):
+    """The user API on rows of configurations NOT in the checkpoint's
+    training data, passed as stored (e.g. ``final_dev`` on the held-out test
+    configurations): max relative difference of a', b', c', d', g from the
+    validated path and the number of rows whose ``in_domain`` differs from
+    the applicability domain of the validated encoding."""
+    import numpy as np
+    b, o = P.ensemble.predict_samples(rows, strict=False)
+    ref = np.column_stack([o['coef'].mean(0), o['g'].mean(0)])
+    pr = P.predict(rows, warn=False)
+    got = pr[list(TARGETS)].to_numpy(float)
+    out = dict(n_rows=int(len(rows)), n_configs=int(rows['config_id'].nunique()),
+               max_rel=float(np.nanmax(np.abs(got - ref) / np.maximum(np.abs(ref), 1e-9))))
+    if 'in_domain' in pr and P.ensemble.ad is not None:
+        ratio, oor = P._ad(b)
+        dom = np.isfinite(ratio) & (ratio <= 1.) & np.array([not x for x in oor])
+        out['in_domain_mismatch'] = int((pr['in_domain'].to_numpy() != dom).sum())
+    return out
 
 
 def refresh_registries(jobs, results, samples):
@@ -1753,6 +1804,34 @@ def refresh_registries(jobs, results, samples):
                     'defaults; model unchanged)')
         except ValueError as e:
             log(f'final: WARNING spec registry of {path} not refreshed: {e}')
+
+
+def annotate_unseen_coverage(shc, paths):
+    """Store the coverage of the shipped interval quantiles for a new
+    feedstock / product (leave-one-feedstock-out / -product-out out-of-fold
+    scores, pooled; ``report_checks.shipped_quantile_coverage``) in the
+    checkpoints' ``meta.json`` (``meta['coverage_unseen']``), so that
+    ``CoefficientPredictor`` warns with the measured numbers. Report-only
+    metadata: the networks, quantiles and domain are unchanged."""
+    cov = {sch: {r.key: round(float(r.pooled), 4) for r in shc[shc['scheme'] == sch].itertuples()}
+           for sch in ('feedstock', 'product') if (shc['scheme'] == sch).any()}
+    if not cov:
+        return
+    cov['source'] = ('coverage of the release quantiles on the leave-one-feedstock-out / leave-one-product-out '
+                     'out-of-fold scores, pooled over samples (REPORT.md section 6, '
+                     'tables/interval_coverage_by_scheme.csv)')
+    for path in paths:
+        mp = os.path.join(path, 'meta.json')
+        if not os.path.exists(mp):
+            continue
+        with open(mp) as fh:
+            m = json.load(fh)
+        if (m.get('meta') or {}).get('coverage_unseen') == cov:
+            continue
+        m.setdefault('meta', {})['coverage_unseen'] = cov
+        with open(mp, 'w') as fh:
+            json.dump(m, fh, indent=1)
+        log(f'tables: {os.path.relpath(path, PKG_DIR)}/meta.json: coverage for a new feedstock / product recorded')
 
 
 def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
@@ -1777,6 +1856,17 @@ def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
                                   else None)
     if checks['shipped_coverage'] is not None:
         checks['shipped_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_by_scheme.csv'), index=False)
+        annotate_unseen_coverage(checks['shipped_coverage'], [os.path.join(a.models, m)
+                                                              for m in ('release', 'final_dev')])
+    checks['baseline_paired'] = RC.baseline_fold_stats(cv['results'], methods=[m for m in BASE_METHODS
+                                                                               if m != 'pinn'])
+    checks['baseline_paired'].to_csv(os.path.join(tdir, 'cv_baselines_paired.csv'), index=False)
+    checks['family_coverage'] = checks['config_coverage'] = None
+    if conf and sc is not None and len(sc):
+        fam = dict(zip(D['samples']['config_id'].astype(str), D['samples']['biorefinery'].astype(str)))
+        checks['family_coverage'], checks['config_coverage'] = RC.family_coverage(sc, conf, families=fam)
+        checks['family_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_by_family.csv'), index=False)
+        checks['config_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_loco_per_config.csv'), index=False)
     checks['ad'] = checks['ad_per_config'] = None
     path = (fp or {}).get('saved_model') or os.path.join(a.models, 'final_dev')
     if fp and not fp.get('error') and os.path.isdir(path):
@@ -2566,6 +2656,37 @@ def ablation_summary(st):
     return '\n'.join(L)
 
 
+def baseline_paired_clause(bp, sch, best):
+    """'; paired over the folds ...' clause of a CV summary bullet: the
+    fold-level comparison of the PI-NN with the best baseline and the plain
+    MLP (``report_checks.baseline_fold_stats``) and whether an advantage over
+    the best baseline is established (mean > 0 and Wilcoxon p < 0.05)."""
+    import numpy as np
+    if bp is None or not len(bp) or sch not in ('config', 'feedstock', 'product'):
+        return ''
+    r = bp[bp['scheme'] == sch].set_index('method')
+    ms = [m for m in dict.fromkeys([best, 'plain']) if m in r.index]
+    if not ms:
+        return ''
+
+    def one(m):
+        x = r.loc[m]
+        p = (f'Wilcoxon p {x["p_wilcoxon"]:.2g}, ' if np.isfinite(x['p_wilcoxon']) else '') \
+            + f'sign test p {x["p_sign"]:.2g}'
+        return (f'{METHOD_LABEL[m]} {100 * x["mean"]:+.1f} ± {100 * x["se"]:.1f} pp (median '
+                f'{100 * x["median"]:+.1f}; PI-NN better on {int(x["n_pinn_better"])}/{int(x["n_folds"])}; {p}; '
+                f'without {x["dominant_fold"]} {100 * x["mean_without_dominant"]:+.1f})')
+
+    x = r.loc[ms[0]]
+    ok = x['mean'] > 0 and np.isfinite(x['p_wilcoxon']) and x['p_wilcoxon'] < 0.05
+    n = int(x['n_folds'])
+    concl = (f'the advantage over {METHOD_LABEL[ms[0]]} holds at the fold level' if ok else
+             f'no advantage of the PI-NN over {METHOD_LABEL[ms[0]]} is established at the fold level'
+             + (f' ({n} folds, too few for a signed-rank test)' if n < 5 else ''))
+    return (f'; paired over the {n} folds (baseline - PI-NN fold MAPE): ' + ', '.join(one(m) for m in ms)
+            + f' -- {concl}')
+
+
 def _test_vs_baseline(tp, st):
     """' vs. best baseline ...' clause of a final-test summary bullet
     (``report_checks.paired_test_comparison``)."""
@@ -2923,7 +3044,46 @@ def intervals_section(fin, protocol):
     return '\n'.join(L)
 
 
-def interval_extrapolation_section(shc, cfx):
+def coverage_reading(c, fam_cov=None, cfg_cov=None, nominal=None, tol=0.02):
+    """Data-driven reading of the cross-fitted LOCO coverage per key
+    (pooled, mean and 10 % quantile over configurations vs. nominal) and,
+    with the per-family / per-configuration coverage of the shipped
+    quantiles (``report_checks.family_coverage``), where it fails."""
+    nominal = 1 - ALPHA if nominal is None else nominal
+    L = []
+    for x in c.itertuples():
+        st = ('below nominal' if x.pooled < nominal - tol else 'above nominal' if x.pooled > nominal + tol
+              else 'at nominal')
+        if x.q10 < nominal - 0.2:
+            L.append(f'{x.key}: pooled {x.pooled:.2f} ({st}), but the 10 % quantile over configurations is '
+                     f'{x.q10:.2f}')
+        elif st != 'at nominal':
+            L.append(f'{x.key}: pooled {x.pooled:.2f} ({st})')
+    out = ('Pooled over samples every key is within ±0.02 of nominal' if not L else
+           'Departures from nominal: ' + '; '.join(L)) + '.'
+    if fam_cov is not None and len(fam_cov):
+        parts = []
+        for k in ('g', 'mpsp'):
+            f = fam_cov[fam_cov['key'] == k]
+            if not len(f):
+                continue
+            seg = f'{k}: ' + ', '.join(f'{x.family} {x.coverage:.2f}' for x in f.itertuples())
+            cc = cfg_cov[cfg_cov['key'] == k] if cfg_cov is not None and len(cfg_cov) else None
+            if cc is not None and len(cc):
+                seg += (f' ({int((cc["coverage"] >= 0.999).sum())} of {len(cc)} configurations covered at 1.0, '
+                        f'{int((cc["coverage"] < 0.7).sum())} below 0.7)')
+            parts.append(seg)
+        if parts:
+            out += (' Per family, coverage of the shipped quantiles on the LOCO out-of-fold scores (pooled over '
+                    'the family\'s held-out samples; `tables/interval_coverage_by_family.csv`, per configuration '
+                    '`tables/interval_coverage_loco_per_config.csv`): ' + '; '.join(parts)
+                    + '. A pooled coverage near nominal can average strongly over- and under-covered families: '
+                    'a new configuration of an over-covered family gets intervals that are too wide, one of an '
+                    'under-covered family intervals that are too narrow.')
+    return out
+
+
+def interval_extrapolation_section(shc, cfx, fam_cov=None, cfg_cov=None):
     """Markdown: per-key cross-fitted coverage (new configurations) and the
     coverage of the shipped quantiles on the leave-one-feedstock-out /
     leave-one-product-out out-of-fold scores (new feedstocks / products)."""
@@ -2935,9 +3095,7 @@ def interval_extrapolation_section(shc, cfx):
                      'nominal 0.90; pooled over samples = the quantity the intervals target, mean / 10 % quantile '
                      'over configurations): ' + '; '.join(
                          f'{x.key} {x.pooled:.2f} / {x.mean:.2f} / {x.q10:.2f}' for x in c.itertuples())
-                     + '. The recovery (g) intervals under-cover (pooled well below nominal, and far below it '
-                     'for the TAL and lactic recoveries); MPSP is below nominal when pooled over samples and above '
-                     'it averaged over configurations.\n')
+                     + '. ' + coverage_reading(c, fam_cov, cfg_cov) + '\n')
     if shc is not None and len(shc):
         t = shc[shc['scheme'] != 'config']
         if len(t):
@@ -3017,6 +3175,41 @@ def test_reuse_notice(ctx, plan=None):
             'configurations, which v2 and later no longer do.\n')
 
 
+def publication_notes(pub, samples=None):
+    """Known causes of baseline-coefficient differences from the publication
+    (data only): succinic acid at neutral pH (D15, by design: the
+    publication's process did not simulate the salt formation) and the HP
+    titer- and yield-independent cost a′ (fermentation capital)."""
+    import numpy as np
+    L = []
+    cid = pub['config_id'].astype(str)
+    neu, low = cid.str.startswith('succinic_neutral'), cid.str.startswith('succinic_') & \
+        ~cid.str.startswith('succinic_neutral')
+    if neu.any() and low.any():
+        L.append(f'Succinic acid at neutral pH differs by design (D15, DESIGN.md section 1): the regenerated '
+                 'configurations simulate the salt formation, acidulation and gypsum filtration that the '
+                 "publication's TRY script (like the module default) did not, so their a′ is "
+                 f'{pub.loc[neu, "a_ratio"].min():.2f}-{pub.loc[neu, "a_ratio"].max():.2f} x the publication\'s, '
+                 f'against {pub.loc[low, "a_ratio"].min():.2f}-{pub.loc[low, "a_ratio"].max():.2f} x for the '
+                 'low-pH configurations.')
+    hp = cid.str.startswith('HP_')
+    if hp.any():
+        s = f'HP: a′ is {pub.loc[hp, "a_ratio"].min():.2f}-{pub.loc[hp, "a_ratio"].max():.2f} x the publication\'s'
+        if samples is not None and 'ch__capex_fermentation__a' in samples:
+            b = samples[(samples['config_id'].astype(str).isin(set(cid[hp])))
+                        & (samples['sample_kind'].astype(str) == 'baseline')]
+            if len(b):
+                sh = (b['ch__capex_fermentation__a'] / b['a']).to_numpy(float)
+                s += (f'; the fermentation capital is a median {np.nanmedian(sh):.0%} of the HP baseline a′ '
+                      '(`ch__capex_fermentation__a`) and scales with 1/r, so the HP productivity response is '
+                      "larger than the publication's as well (DESIGN.md section 1)")
+        L.append(s + '. The module or BioSTEAM change behind the larger HP fermentation capital has not been '
+                 'identified (the Bioindustrial-Park patches change no process value, '
+                 '`data_generation/bip_patches/README.md`); the productivity conclusions for HP carry this '
+                 'uncertainty.')
+    return ' '.join(L)
+
+
 def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
     import numpy as np
     import pandas as pd
@@ -3088,7 +3281,8 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         P(f'* {_slabel(sch)} (CV): PI-NN MPSP MAPE {100 * _m(sch, "pinn"):.1f} %'
           + (f' (± {100 * se:.1f} s.e.)' if np.isfinite(se) else ' (single fold)')
           + f' vs. best baseline {METHOD_LABEL[bm]} '
-          f'{100 * base[bm]:.1f} %; irreducible fit MAPE {100 * _m(sch, "pinn", "fit_mape"):.1f} %.')
+          f'{100 * base[bm]:.1f} %; irreducible fit MAPE {100 * _m(sch, "pinn", "fit_mape"):.1f} %'
+          + baseline_paired_clause(checks.get('baseline_paired'), sch, bm) + '.')
     lm = checks.get('loco_matched')
     if lm is not None and len(lm) and (lm['method'] == 'pinn').any():
         r = lm[lm['method'] == 'pinn'].iloc[0]
@@ -3121,9 +3315,15 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         if len(rg):
             gg = lambda st, c: float(rg[rg['set'] == st][c].iloc[0])
             sets = [st for st in ('test_ood', 'test_id') if (rg['set'] == st).any()]
-            P(f'* PI-NN recovery (g) intervals UNDER-cover new configurations: realized coverage pooled / mean over '
-              'configurations ' + ', '.join(f'{st} {gg(st, "coverage"):.2f} / {gg(st, "coverage_cfg_mean"):.2f}'
-                                            for st in sets)
+            fc = checks.get('family_coverage')
+            low = (fc[(fc['key'] == 'g') & (fc['coverage'] < 1 - ALPHA - 0.1)] if fc is not None and len(fc)
+                   else None)
+            P('* PI-NN recovery (g) intervals UNDER-cover the new configurations of some families'
+              + (' (coverage of the shipped quantile on the LOCO out-of-fold scores: '
+                 + ', '.join(f'{x.family} {x.coverage:.2f}' for x in low.itertuples())
+                 + '; the other families about 1.0)' if low is not None and len(low) else '')
+              + ': realized coverage pooled / mean over configurations '
+              + ', '.join(f'{st} {gg(st, "coverage"):.2f} / {gg(st, "coverage_cfg_mean"):.2f}' for st in sets)
               + f'; cross-fitted estimate pooled {gg(sets[0], "crossfit_pooled"):.2f} / mean '
               f'{gg(sets[0], "crossfit_mean"):.2f}, 10 % quantile over configurations '
               f'{gg(sets[0], "crossfit_q10"):.2f} (section 6).')
@@ -3175,8 +3375,8 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         P(f'Sample coverage per configuration (`tables/data_coverage.csv`; planned = 1 baseline + productivity + '
           'random samples of `data_generation/scripts/run_all.sh`, completed = `sample_end` written, '
           '`empty_reset_failed` = completed without any simulated point because the system state could not be '
-          'restored after a convergence failure -- a harness defect fixed after this run (such samples are now '
-          'retried); retained = after the quality filters). '
+          'restored after a convergence failure -- a defect of the harness of the earlier data, fixed before '
+          'this run (such samples are retried and were re-run, H1); retained = after the quality filters). '
           + (f'{len(short)} of {len(cov)} configurations keep fewer samples than planned:\n' if len(short)
              else 'Every configuration keeps its planned samples.\n'))
         if len(short):
@@ -3301,6 +3501,19 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
                       'n_variant_worse', 'p_wilcoxon', 'dominant_fold', 'dominant_delta',
                       'mean_without_dominant']]) + '\n')
         P(ablation_summary(ab).replace('* ', '') + '\n')
+    bp = checks.get('baseline_paired')
+    if bp is not None and len(bp):
+        P('**PI-NN vs. the baselines, paired over folds** (baseline - PI-NN fold MPSP MAPE, percentage points; '
+          '> 0: the PI-NN is better; `n_pinn_better` / `n_baseline_better` = folds; Wilcoxon signed-rank p '
+          '(>= 5 folds) and two-sided sign-test p; `dominant_fold` = the fold with the largest |difference|; '
+          '`tables/cv_baselines_paired.csv`). The fold means of the summary are not a comparison by '
+          'themselves: for a new product or feedstock one or two folds carry them:\n')
+        t = bp.copy()
+        for c in ('mean', 'median', 'se', 'dominant_delta', 'mean_without_dominant'):
+            t[c] = 100 * t[c]
+        P(md_table(t[['scheme', 'method', 'n_folds', 'mean', 'se', 't', 'median', 'n_pinn_better',
+                      'n_baseline_better', 'p_wilcoxon', 'p_sign', 'dominant_fold', 'dominant_delta',
+                      'mean_without_dominant']]) + '\n')
     P('Per-coefficient MAE (pooled out-of-fold, natural units) and constraint-violation rates:\n')
     vcols = ['scheme', 'method'] + [f'MAE_{k}' for k in TARGETS] + ['viol_mono_y', 'viol_mono_t', 'viol_positive',
                                                                      'viol_mono_r', 'viol_g_le_gmax']
@@ -3351,7 +3564,9 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
                                                             'bias_ng', 'resp_ng', 'ch_electricity')
                                                if c in q]
             P('Per held-out configuration (leave-one-configuration-out; medians over its samples; `bias` signed, '
-              '`share_el` = simulated p_el dMPSP/dp_el / MPSP), in %; all schemes in '
+              '`share_el` = simulated p_el dMPSP/dp_el / MPSP; the relative `bias_*` / `sens_*` of a price are '
+              f'shown only where its simulated share of MPSP is at least {100 * FIDELITY_MIN_SHARE:.0f} % '
+              '(`–` otherwise: the ratio is undefined; `resp_*` is the error in % of MPSP), in %; all schemes in '
               '`tables/cv_fidelity_per_config.csv`, per sample `tables/cv_channel_fidelity.csv.gz`:\n')
             P(md_table(q[cc].reset_index(drop=True), pct_cols=tuple(cc[2:])) + '\n')
     P('Full tidy results: `tables/cv_results.csv`; summary: `tables/cv_headline.csv`; out-of-fold predictions: '
@@ -3382,7 +3597,8 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
               'methods: its CIs are those of 4 clusters.\n')
             P(md_table(t) + '\n')
         P(intervals_section(fin, protocol))
-        P(interval_extrapolation_section(checks.get('shipped_coverage'), cv.get('crossfit')))
+        P(interval_extrapolation_section(checks.get('shipped_coverage'), cv.get('crossfit'),
+                                         checks.get('family_coverage'), checks.get('config_coverage')))
         P(ad_section(checks.get('ad'), checks.get('ad_per_config')))
     else:
         P('Final models failed (see log).\n')
@@ -3423,7 +3639,18 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
               '(`config_id`, names, productivity and prices only) of each of the '
               f'{rc["n_configs"]} configurations reproduces the MPSP of its baseline sample at its baseline yield '
               f'and titer to {rc["by_name_max_rel_mpsp"]:.1g} (e.g. {rc.get("example_config")} by name: '
-              + ', '.join(f'{k}={v:.4g}' for k, v in rc.get('example_by_name', {}).items()) + ').\n')
+              + ', '.join(f'{k}={v:.4g}' for k, v in rc.get('example_by_name', {}).items()) + ')'
+              + (f', with the applicability domain of its baseline row (max |ad_ratio difference| '
+                 f'{rc["by_name_ad_max_abs"]:.1g}, {rc["by_name_in_domain_mismatch"]} in_domain mismatches)'
+                 if 'by_name_ad_max_abs' in rc else '')
+              + (f'; without prices it uses the configuration\'s baseline electricity and natural-gas prices '
+                 f'(MPSP difference {rc["by_name_no_prices_max_rel_mpsp"]:.1g})'
+                 if 'by_name_no_prices_max_rel_mpsp' in rc else '')
+              + (f'. New configurations: `models/final_dev` on the {rc["new_configs"]["n_rows"]} stored rows of '
+                 f'the {rc["new_configs"]["n_configs"]} held-out test configurations (passed as stored, '
+                 'not in its training data) reproduces the validated path to '
+                 f'{rc["new_configs"]["max_rel"]:.1g} ({rc["new_configs"].get("in_domain_mismatch", 0)} '
+                 'in_domain mismatches)' if isinstance(rc.get('new_configs'), dict) else '') + '.\n')
     # checks
     P('## 8. Physical-consistency and interpretability checks\n')
     pub = checks['pub']
@@ -3434,6 +3661,9 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         med = {k: np.nanmedian(pub[f'{k}_ratio']) for k in TARGETS}
         P('Median ratio ours/publication: ' + ', '.join(f"{k}′ {v:.3f}" if k != 'g' else f'g {v:.3f}'
                                                      for k, v in med.items()) + '.\n')
+        note = publication_notes(pub, D.get('samples'))
+        if note:
+            P(note + '\n')
         cols = ['config_id'] + [f'{k}_{s}' for k in TARGETS for s in ('ours', 'pub', 'ratio')]
         P(md_table(pub[cols]) + '\n')
     sens = checks['sens']
