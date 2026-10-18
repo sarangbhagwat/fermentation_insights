@@ -43,6 +43,15 @@ Architecture
   predicts only the residual ``dz``; ``neutralization_gate`` multiplies the
   neutralization channel by ``struct_neutralization`` (0 when there is
   nothing to neutralize: no acid group, no neutralizing agent);
+* optional power gate (``power_gate``; needs ``FeatureSpec(downstream=True,
+  power_export=True)``): where electricity is not among the coproducts
+  (structural input ``struct_power_export`` = 0: no turbogenerator, so no
+  power export) every coefficient of the net electricity intensity is
+  mapped to ``s softplus(q / s) >= 0`` (``s`` = ``POWER_GATE_SCALE`` x its
+  training std), so the purchased electricity and dMPSP/dp_el are >= 0 at
+  every y, t > 0; it acts after the productivity structure (a monotone map
+  of a decreasing function of r keeps dMPSP/dr <= 0) and before the price
+  (exact price linearity);
 * optional water-removal gate (``water_gate``; needs a FeatureSpec with
   ``downstream=True``): the c' and d' coefficients of the channels that scale
   with the broth water processed downstream (``GATED_CHANNELS``: downstream,
@@ -111,6 +120,9 @@ COEFF_KEYS = ('a', 'b', 'c', 'd')
 #: channels / intensities whose c', d' are gated by the water-removal input
 GATED_CHANNELS = ('capex_downstream', 'capex_utilities', 'capex_wastewater', 'utilities_other')
 GATED_INTENSITIES = ('ng',)
+#: smoothing scale of the power gate (fraction of the training std of each
+#: electricity-intensity coefficient): s softplus(q / s) ~ q for q >> s
+POWER_GATE_SCALE = 0.1
 GATED_COEFFS = (2, 3)
 #: intensity key -> channel name
 INTENSITY_CHANNEL = {v: k for k, v in PRICE_CHANNELS.items()}
@@ -247,6 +259,15 @@ class ModelConfig:
     price_explicit: bool = True  # price x intensity channels (prices not in encoder)
     structured_fs: bool = True   # b'_fs = exp(z)/w_sugar
     fs_eta_bound: bool = True    # z >= 0  (eta <= 1)
+    #: with structured_fs: the feedstock intensity is the b' term alone
+    #: (a' = c' = d' = 0): kg feedstock per kg fermentation product =
+    #: 1 / (eta w_sugar y), the sugar-balance identity at constant recovery.
+    #: Its departures in the data come from the per-point recovery varying
+    #: around the sample's median g (a pure b'/y fit is within 5 % RMS of
+    #: every development sample's intensity but lactic's, 6-9 %) and from
+    #: ill-conditioned OLS splits (TAL c' = -17 ... -90 with a pure-b' error
+    #: of 4 %), which a product-blind feedstock head cannot learn anyway
+    fs_b_only: bool = False
     g_bound: bool = True         # g = g_max * (1 + g_margin) * sigmoid(.)
     g_margin: float = 0.0        # relative slack of the bound (set from data checks)
     head_init: float = 0.1       # scale of the initial head weights
@@ -268,6 +289,12 @@ class ModelConfig:
     #: sub-networks), while the product descriptors keep their linear
     #: extrapolation.
     clip_groups: object = None
+    #: encoder columns never clipped by ``clip_inputs`` / ``clip_groups``
+    #: (names of FeatureSpec.columns; None = none). For exact structural
+    #: quantities, e.g. the final-product stoichiometric mass ratio: clipping
+    #: a held-out product's ratio to the training range maps it onto the
+    #: value of other products (round 5: HP's 0.80 to 1.00 when HP is held out)
+    clip_exempt: object = None
     #: multiply c', d' of GATED_CHANNELS / GATED_INTENSITIES by the structural
     #: input ``struct_water_removal`` (needs FeatureSpec(downstream=True);
     #: without that column it has no effect)
@@ -277,6 +304,12 @@ class ModelConfig:
     #: acid group and no neutralizing / pH-control agent is used: nothing to
     #: neutralize or acidulate; needs FeatureSpec(downstream=True))
     neutralization_gate: bool = False
+    #: non-negative net electricity intensity (each coefficient s softplus(q/s))
+    #: where the structural input ``struct_power_export`` is 0 (electricity
+    #: not among the coproducts: no on-site generation, nothing to export);
+    #: needs FeatureSpec(downstream=True, power_export=True), which
+    #: ``train.train_ensemble`` requests itself when this is on
+    power_gate: bool = False
     #: structured feedstock intensity with a physics prior of the sugar
     #: availability (needs FeatureSpec(downstream=True)):
     #: z = log(1/eta) = log(1/s_avail) + dz, s_avail = structural input
@@ -329,7 +362,7 @@ class ModelConfig:
             self.channel_inputs = None
             self.r_structure = None
             # physics-model structures (the pipeline merges them into every NN method)
-            self.fs_prior = self.neutralization_gate = False
+            self.fs_prior = self.neutralization_gate = self.power_gate = False
             self.clip_groups = None
         if not self.price_explicit:
             self.structured_fs = False
@@ -356,6 +389,11 @@ class ModelConfig:
             unknown = [g for g in self.clip_groups if not _known_group(g)]
             if unknown:
                 raise ValueError(f'clip_groups: unknown feature group(s) {unknown}')
+        if self.clip_exempt in ((), [], ''):
+            self.clip_exempt = None
+        if self.clip_exempt is not None:
+            self.clip_exempt = [str(c) for c in ([self.clip_exempt] if isinstance(self.clip_exempt, str)
+                                                 else self.clip_exempt)]
 
     @property
     def masked(self):
@@ -381,8 +419,11 @@ class ModelConfig:
         d.setdefault('r_structure', None)
         # ... and before group-restricted clipping / the neutralization gate
         d.setdefault('clip_groups', None)
+        d.setdefault('clip_exempt', None)
         d.setdefault('neutralization_gate', False)
         d.setdefault('fs_prior', False)
+        d.setdefault('power_gate', False)
+        d.setdefault('fs_b_only', False)
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
@@ -446,10 +487,14 @@ class CoefficientNet(nn.Module):
     avail_index : int
         Column of ``X`` holding ``struct_sugar_availability`` (used if
         ``cfg.fs_prior``).
+    power_index : int
+        Column of ``X`` holding ``struct_power_export`` (used if
+        ``cfg.power_gate``).
     """
 
     def __init__(self, n_features, cfg, layout, scales, r_stats, price_index=None, enc_index=None,
-                 gate_index=None, input_groups=None, neut_index=None, avail_index=None):
+                 gate_index=None, input_groups=None, neut_index=None, avail_index=None, power_index=None,
+                 clip_exempt_index=None):
         super().__init__()
         self.cfg = cfg
         self.layout = {k: list(v) for k, v in layout.items()}
@@ -469,6 +514,9 @@ class CoefficientNet(nn.Module):
         self.j_neut = layout['channels'].index('neutralization') if self.neut_index is not None else -1
         self.avail_index = None if (avail_index is None or not cfg.fs_prior or not cfg.structured_fs
                                     or cfg.kind == 'plain') else int(avail_index)
+        self.power_index = None if (power_index is None or not getattr(cfg, 'power_gate', False)
+                                    or cfg.kind == 'plain' or 'el' not in layout['price_keys']) else int(power_index)
+        self.j_el = layout['price_keys'].index('el') if self.power_index is not None else -1
         self.masked = cfg.masked
         self._setup_r_structure(layout)
         if self.masked:
@@ -517,6 +565,10 @@ class CoefficientNet(nn.Module):
                 for g in cfg.clip_groups:
                     sel[[int(i) for i in input_groups.get(g, [])]] = True
                 lo, hi = np.where(sel, lo, -np.inf), np.where(sel, hi, np.inf)
+            if clip_exempt_index:
+                lo, hi = lo.copy(), hi.copy()
+                lo[[int(i) for i in clip_exempt_index]] = -np.inf
+                hi[[int(i) for i in clip_exempt_index]] = np.inf
             buf('x_lo', np.where(np.isfinite(lo), lo - margin, -1e30))
             buf('x_hi', np.where(np.isfinite(hi), hi + margin, 1e30))
         buf('r_mu', [rs['log_r_mean'], rs['inv_r_mean']])
@@ -543,6 +595,11 @@ class CoefficientNet(nn.Module):
                     s = s / max(1. - math.exp(-max(float(scales.get('fs_logb_center', 0.)), 1e-4)), 1e-2)
                 buf('fs_u_center', c)
                 buf('fs_u_scale', s)
+                if self.power_index is not None:
+                    sd = np.asarray(scales['int_std'], float).reshape(J, 4)[self.j_el]
+                    # derived from the target scales: not saved
+                    self.register_buffer('power_scale', torch.as_tensor(
+                        POWER_GATE_SCALE * np.maximum(sd, 1e-8), dtype=torch.float32), persistent=False)
             if C:
                 if not self.masked:
                     self.ch_head = nn.Linear(w, 4 * C)
@@ -827,8 +884,19 @@ class CoefficientNet(nn.Module):
                 else:
                     z = F.softplus(u) if self.cfg.fs_eta_bound else u
                 qb = torch.exp(z) / w_sugar
-                qfs = torch.stack([q[:, self.j_fs, 0], qb, q[:, self.j_fs, 2], q[:, self.j_fs, 3]], -1)
+                if getattr(self.cfg, 'fs_b_only', False):
+                    z0 = torch.zeros_like(qb)
+                    qfs = torch.stack([z0, qb, z0, z0], -1)
+                else:
+                    qfs = torch.stack([q[:, self.j_fs, 0], qb, q[:, self.j_fs, 2], q[:, self.j_fs, 3]], -1)
                 q = torch.cat([q[:, :self.j_fs], qfs[:, None], q[:, self.j_fs + 1:]], 1)
+            if self.power_index is not None:
+                # no power export: net electricity intensity >= 0 coefficient-wise
+                e = X[:, self.power_index].clamp(0., 1.)[:, None]
+                qe = q[:, self.j_el]
+                sc_ = self.power_scale.to(qe.dtype)
+                qe = e * qe + (1. - e) * sc_ * F.softplus(qe / sc_)
+                q = torch.cat([q[:, :self.j_el], qe[:, None], q[:, self.j_el + 1:]], 1)
             if self.gate_index is not None:
                 q = q * self._gate(X, self.gate_int)
             p = prices[:, self.price_index]

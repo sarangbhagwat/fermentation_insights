@@ -69,6 +69,10 @@ Feature groups
   - the structural input ``struct_sugar_availability`` (physics prior of the
     fraction of the glucose-eq. sugar that reaches fermentation,
     :func:`sugar_availability`; unknown -> 1): used by ``ModelConfig.fs_prior``;
+  - with ``FeatureSpec(power_export=True)`` also the structural input
+    ``struct_power_export`` (1 if 'electricity' is among the coproducts, i.e.
+    an on-site turbogenerator can export power, 0 if the coproducts are known
+    and do not include it; unknown -> 1): used by ``ModelConfig.power_gate``;
 * productivity enters the network through ``log r`` and ``1/r``, which the
   model computes itself from ``log_r`` (so that ``dMPSP/dr`` is available by
   autograd); their standardization statistics are stored here.
@@ -98,7 +102,8 @@ __all__ = (
     'build_spec_registry', 'apply_spec_registry', 'register_chemical',
     'describe_new_chemical', 'psat_water', 'PRICE_COLUMNS', 'PRICE_KEYS',
     'PRICE_ALIASES', 'REQUIRED_FIELDS', 'FIELD_UNITS', 'REGIME_FIELDS',
-    'DS_PHYS', 'DOMAIN_PHYS', 'DS_CATEGORICAL', 'STRUCTURAL', 'DOWNSTREAM_FIELDS', 'FEATURE_GROUPS', 'feature_group',
+    'DS_PHYS', 'DOMAIN_PHYS', 'DS_CATEGORICAL', 'STRUCTURAL', 'POWER_STRUCTURAL', 'DOWNSTREAM_FIELDS',
+    'FEATURE_GROUPS', 'feature_group', 'power_export_factor',
 )
 
 try:
@@ -218,6 +223,9 @@ DS_PHYS = ('phys_log10_w_final', 'phys_water_removal_c', 'phys_water_removal_a',
 DOMAIN_PHYS = ('phys_log10_t_ref',)
 #: raw structural inputs (not standardized, not seen by the encoder)
 STRUCTURAL = ('struct_water_removal', 'struct_neutralization', 'struct_sugar_availability')
+#: opt-in raw structural input of ``ModelConfig.power_gate``
+#: (``FeatureSpec(power_export=True)``; appended after STRUCTURAL)
+POWER_STRUCTURAL = 'struct_power_export'
 #: fallback titer for the mass fraction of a broth product [g/L]
 _T_REF_BROTH = 30.
 
@@ -548,6 +556,27 @@ def downstream_features(df):
     out['struct_water_removal'] = gate
     out['struct_neutralization'] = neutralization_factor(df)
     out['struct_sugar_availability'] = sugar_availability(df)
+    out[POWER_STRUCTURAL] = power_export_factor(df)
+    return out
+
+
+def power_export_factor(df):
+    """Structural input of ``ModelConfig.power_gate``: 1 if 'electricity' is
+    among the ``coproducts`` (an on-site boiler-turbogenerator can export
+    surplus power, so the net purchased electricity may be negative), 0 if
+    the coproducts are known and do not include it ('none' included; no
+    generation: the net electricity intensity is a purchase, >= 0), NaN if
+    unknown (missing or empty)."""
+    vals = _strings(df, 'coproducts')
+    out = np.full(len(df), np.nan)
+    for i, v in enumerate(vals):
+        if v is None or not str(v).strip():
+            continue
+        try:
+            items = _ds.parse_ops(v)
+        except Exception:
+            continue
+        out[i] = float('electricity' in items)
     return out
 
 
@@ -1064,13 +1093,20 @@ class FeatureSpec:
         'titer_domain'). Off by default (specs saved before it existed load
         with it off); in the development CV it did not help (DESIGN.md
         section 6).
+    power_export : bool
+        With ``downstream``, also append the structural input
+        ``POWER_STRUCTURAL`` (:func:`power_export_factor`) used by
+        ``ModelConfig.power_gate``. Off by default (specs saved before it
+        existed load with their own structural inputs).
     """
 
     VERSION = 2
 
     def __init__(self, price_explicit=True, use_names=False, clip=10., exclude=(),
-                 log_ratio=100., min_level_count=1, downstream=False, domain_features=False):
+                 log_ratio=100., min_level_count=1, downstream=False, domain_features=False,
+                 power_export=False):
         self.downstream = bool(downstream)
+        self.power_export = bool(power_export) and self.downstream
         self.domain_features = bool(domain_features)
         self.price_explicit = bool(price_explicit)
         self.use_names = bool(use_names)
@@ -1081,7 +1117,8 @@ class FeatureSpec:
         self.numeric = []        # list of dicts: name, log, fill, mean, std, kind
         self.indicators = []     # numeric names with a missing indicator
         self.categoricals = {}   # name -> levels (incl. OTHER)
-        self.structural = list(STRUCTURAL) if self.downstream else []
+        self.structural = (list(STRUCTURAL) + ([POWER_STRUCTURAL] if self.power_export else [])) \
+            if self.downstream else []
         self.r_stats = {}
         self.price_stats = {}
         self.price_fill = {}
@@ -1405,7 +1442,8 @@ class FeatureSpec:
     # ---- serialization ----
     def to_dict(self):
         return dict(version=self.VERSION, price_explicit=self.price_explicit, downstream=self.downstream,
-                    domain_features=self.domain_features, structural=list(self.structural),
+                    domain_features=self.domain_features, power_export=self.power_export,
+                    structural=list(self.structural),
                     use_names=self.use_names, clip=self.clip, exclude=list(self.exclude),
                     log_ratio=self.log_ratio, min_level_count=self.min_level_count,
                     numeric=self.numeric, indicators=self.indicators,
@@ -1421,6 +1459,7 @@ class FeatureSpec:
                    min_level_count=d.get('min_level_count', 1), downstream=d.get('downstream', False),
                    domain_features=d.get('domain_features', False))
         self.structural = list(d.get('structural', []))
+        self.power_export = POWER_STRUCTURAL in self.structural
         self.numeric = [dict(x) for x in d['numeric']]
         self.indicators = list(d['indicators'])
         self.categoricals = {k: list(v) for k, v in d['categoricals'].items()}

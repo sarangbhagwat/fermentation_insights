@@ -55,7 +55,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .features import FeatureSpec, ApplicabilityDomain, PRICE_COLUMNS, W_SUGAR, G_MAX, neutralization_factor
+from .features import (FeatureSpec, ApplicabilityDomain, PRICE_COLUMNS, W_SUGAR, G_MAX, neutralization_factor,
+                       power_export_factor, POWER_STRUCTURAL)
 from .model import (CoefficientNet, ModelConfig, make_layout, mpsp_equation_np,
                     COEFF_KEYS, INTENSITY_CHANNEL, INTENSITY_KEYS)
 
@@ -63,7 +64,7 @@ __all__ = (
     'LossConfig', 'TrainConfig', 'Ensemble', 'fit_target_scales', 'make_tensors',
     'pad_points', 'compute_loss', 'physics_residuals', 'mpsp_dlogr', 'train_model', 'train_ensemble',
     'calibrate_conformal', 'calibrate_conformal_oof', 'conformal_scores', 'crossfit_coverage', 'rescore_conformal',
-    'EPS_KEYS',
+    'EPS_KEYS', 'mask_channel_targets',
     'REFIT_MODES', 'CONF_KEYS', 'check_constraints', 'apply_constraint_report',
     'split_random', 'split_group', 'split_productivity', 'make_splits', 'inner_split',
     'ensemble_splits', 'SCHEMES', 'SCHEME_GROUP', 'load_tables', 'setup_torch',
@@ -114,6 +115,15 @@ class LossConfig:
     #: relative to the target total numerator g*MPSP_fit there (well
     #: conditioned, in MPSP units: channels weigh by their economic size)
     coef_space: str = 'coef'
+    #: space of the channel / intensity term only (None = ``coef_space``):
+    #: 'surface' compares every channel numerator (price channels as price x
+    #: intensity) at the sample's simulated TY points, relative to the target
+    #: total numerator g*MPSP_fit there, summed over the channels, while the
+    #: total keeps ``coef_space``; this is the out-of-fold channel-fidelity
+    #: metric itself (RMS channel error / RMS total numerator), so channels
+    #: weigh by their economic size instead of by their cross-configuration
+    #: coefficient spread (DESIGN.md section 6, round 5)
+    ch_space: object = None
     #: sample weights n_config**(-config_balance) (normalized per batch):
     #: 0 = every sample counts once, 1 = every configuration counts once
     config_balance: float = 0.0
@@ -253,6 +263,33 @@ def pad_points(samples, points, max_points=48):
         Y[i, :k], T[i, :k], MM[i, :k], RR[i, :k] = y[sel], t[sel], M[sel], rec[sel]
         mask[i, :k] = True
     return Y, T, MM, RR, mask
+
+
+def mask_channel_targets(samples, rules, cols=('biorefinery', 'config_id', 'fermentation_product')):
+    """Copy of ``samples`` with the channel targets ``rules`` = {channel:
+    [values]} set to NaN (masked in the loss and in the target scales) in the
+    rows whose ``biorefinery``, ``config_id`` or ``fermentation_product``
+    is one of the values; a price-explicit channel also loses its intensity
+    targets ``int__<key>__*``. Totals, g and the other channels keep their
+    targets. Used for known defective decompositions (DESIGN.md section 1,
+    'Known data defects': e.g. TAL's feedstock channel, whose yield counts
+    glucose only although the spiked acetate also makes TAL, D8)."""
+    out = samples.copy()
+    for ch, vals in (rules or {}).items():
+        vals = {str(v) for v in vals}
+        rows = np.zeros(len(out), bool)
+        for c in cols:
+            if c in out:
+                rows |= out[c].astype(str).isin(vals).to_numpy()
+        if not rows.any():
+            continue
+        pre = [f'ch__{ch}__']
+        key = {v: k for k, v in INTENSITY_CHANNEL.items()}.get(ch)
+        if key is not None:
+            pre.append(f'int__{key}__')
+        tc = [c for c in out.columns if any(c.startswith(p_) for p_ in pre)]
+        out.loc[rows, tc] = np.nan
+    return out
 
 
 def _targets(samples, layout):
@@ -471,13 +508,24 @@ def data_loss(model, out, b, lcfg):
     L['mpsp'] = _wmean(per, has, w)
     gm = b['g_m'].to(dt)
     L['g'] = _wmean(((out['g'] - b['g']) / sc['g_std']) ** 2, gm, w)
-    if getattr(lcfg, 'coef_space', 'coef') == 'surface':
+    tot_space = getattr(lcfg, 'coef_space', 'coef')
+    ch_space = getattr(lcfg, 'ch_space', None) or tot_space
+    if 'surface' in (tot_space, ch_space):
         # target total numerator at the points (= g * OLS-fitted MPSP)
         Nt = _surface(b['coef'][:, None], b['Y'], b['T'])[:, 0]
         nden = Nt.abs().clamp(min=0.05 * sc['num_scale'])
+    if tot_space == 'surface':
         ok_t = b['coef_m'].min(1).values * has
         e = ((_surface(out['coef'][:, None], b['Y'], b['T'])[:, 0] - Nt) / nden) ** 2
         L['tot'] = _wmean((e * m).sum(1) / npts, ok_t, w)
+    # coefficient space; without sample weights exactly the original
+    # element means (_mmean over all valid entries)
+    wm = (lambda x, mm: _mmean(x, mm)) if not getattr(lcfg, 'config_balance', 0.) else \
+        (lambda x, mm: _mmean(x * w[:, None], mm) / _mmean(w[:, None].expand_as(mm), mm).clamp(min=1e-12))
+    if tot_space != 'surface':
+        cs = torch.as_tensor(sc['coef_std'], dtype=dt)
+        L['tot'] = wm(((out['coef'] - b['coef']) / cs) ** 2, b['coef_m'])
+    if ch_space == 'surface':
         parts, masks = [], []
         if 'channels' in out and out['channels'].shape[1]:
             parts.append(_surface(out['channels'], b['Y'], b['T']) - _surface(b['ch'], b['Y'], b['T']))
@@ -495,12 +543,6 @@ def data_loss(model, out, b, lcfg):
         else:
             L['ch'] = torch.zeros((), dtype=dt)
     else:
-        # coefficient space; without sample weights exactly the original
-        # element means (_mmean over all valid entries)
-        wm = (lambda x, mm: _mmean(x, mm)) if not getattr(lcfg, 'config_balance', 0.) else \
-            (lambda x, mm: _mmean(x * w[:, None], mm) / _mmean(w[:, None].expand_as(mm), mm).clamp(min=1e-12))
-        cs = torch.as_tensor(sc['coef_std'], dtype=dt)
-        L['tot'] = wm(((out['coef'] - b['coef']) / cs) ** 2, b['coef_m'])
         parts, masks = [], []
         if 'channels' in out and out['channels'].shape[1]:
             s = torch.as_tensor(sc['ch_std'], dtype=dt)
@@ -670,7 +712,11 @@ def build_model(spec, layout, scales, mcfg, dtype=torch.float32):
                        neut_index=spec.structural_index('struct_neutralization')
                        if hasattr(spec, 'structural_index') else None,
                        avail_index=spec.structural_index('struct_sugar_availability')
-                       if hasattr(spec, 'structural_index') else None).to(dtype)
+                       if hasattr(spec, 'structural_index') else None,
+                       power_index=spec.structural_index(POWER_STRUCTURAL)
+                       if hasattr(spec, 'structural_index') else None,
+                       clip_exempt_index=[spec.columns.index(c) for c in (getattr(mcfg, 'clip_exempt', None) or [])
+                                          if c in spec.columns]).to(dtype)
     m.scales_np = scales
     return m
 
@@ -1048,6 +1094,26 @@ def check_constraints(samples, points, threshold=0.99, tol=1e-3):
         add('neutralization_gate', 'structural', np.where((nf == 0) & np.isfinite(Cn).all(1), en0.astype(float),
                                                           np.nan),
             'neutralization channel = 0 where struct_neutralization = 0', default=True)
+    q_el = qarr('el')
+    if q_el is not None:
+        # ModelConfig.power_gate: net purchased electricity >= 0 where no power
+        # is exported (struct_power_export = 0); per sample: the simulated
+        # per-point intensities (points 'q__el') if recorded, else the
+        # fitted intensity surface at the sample's points
+        pe = power_export_factor(samples)
+        qs = None
+        if points is not None and 'q__el' in points:
+            P_ = points.assign(MPSP=pd.to_numeric(points['q__el'], errors='coerce').fillna(-1e300))
+            _, _, qs, _, mq = pad_points(samples, P_)
+            qs = np.where(mq & (qs > -1e299), qs, np.nan)
+        if qs is None or not np.isfinite(qs).any():
+            qs = np.where(mask, mpsp_equation_np(q_el[:, None, :], 1., Y, T), np.nan)
+        sc_el = np.nanmedian(np.abs(qs)) if np.isfinite(qs).any() else 1.
+        okp = np.isfinite(qs).any(1)
+        v = np.where((pe == 0) & okp, np.all(np.where(np.isfinite(qs), qs >= -tol * sc_el, True), 1).astype(float),
+                     np.nan)
+        add('power_gate', 'structural', v, 'net electricity intensity >= 0 where struct_power_export = 0',
+            default=True)
     chs = sorted({c.split('__')[1] for c in samples.columns if c.startswith('ch__') and c.count('__') == 2})
     if chs:
         S = np.column_stack([np.nansum(np.column_stack([col(f'ch__{c}__{k}') for c in chs]), 1) for k in COEFF_KEYS])
@@ -1090,6 +1156,8 @@ def apply_constraint_report(report, mcfg, lcfg, max_g_margin=0.02):
         mcfg.fs_eta_bound = False
     if 'neutralization_gate' in en and not en['neutralization_gate']:
         mcfg.neutralization_gate = False
+    if 'power_gate' in en and not en['power_gate']:
+        mcfg.power_gate = False
     return mcfg, lcfg
 
 
@@ -1252,7 +1320,10 @@ def train_ensemble(samples, points, n_members=5, mcfg=None, lcfg=None, tcfg=None
         report = check_constraints(s_fit, points, **(check_kwargs or {}))
         if mcfg.kind == 'physics':
             mcfg, lcfg = apply_constraint_report(report, mcfg, lcfg)
-    spec = FeatureSpec(price_explicit=mcfg.price_explicit, **(spec_kwargs or {})).fit(s_fit)
+    skw = dict(spec_kwargs or {})
+    if getattr(mcfg, 'power_gate', False) and mcfg.kind == 'physics' and skw.get('downstream'):
+        skw.setdefault('power_export', True)       # the gate's structural input
+    spec = FeatureSpec(price_explicit=mcfg.price_explicit, **skw).fit(s_fit)
     batch = spec.transform(s_fit)
     layout = make_layout(mcfg, samples.columns)
     scales = fit_target_scales(s_fit, points, layout, batch, spec.continuous_mask(), fs_prior_z(spec, batch))

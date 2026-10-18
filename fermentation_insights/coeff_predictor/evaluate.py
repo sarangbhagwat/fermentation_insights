@@ -38,7 +38,17 @@ Metrics (natural units)
   ``nonneg_fs``/``nonneg_ng`` (price-explicit models), and ``mono_r`` by a
   finite difference in log r (model-agnostic);
 * interval coverage and mean relative width (ensembles with conformal
-  calibration).
+  calibration);
+* channel / price-intensity fidelity (:func:`channel_fidelity`, models with
+  resolved channels): per channel the RMS error of the channel numerator
+  over the sample's points relative to the RMS target total numerator
+  (``ch_<channel>``; price channels as price x intensity), and per price key
+  the error of the predicted price sensitivity dMPSP/dp = (q_a + q_b/y +
+  q_c/t + q_d/(y t)) / g_hat against the simulated per-point intensity
+  (points column ``q__<key>``, exact at fixed design): relative RMS
+  (``sens_<key>``), signed median ratio - 1 (``bias_<key>``) and the response
+  error (dMPSP/dp_hat - dMPSP/dp_sim) p / MPSP (``resp_<key>``, RMS over the
+  points); :func:`fidelity_summary` averages them configuration-balanced.
 
 Methods
 -------
@@ -68,7 +78,8 @@ from .train import (LossConfig, TrainConfig, train_ensemble, make_splits, pad_po
                     setup_torch)
 
 __all__ = ('compute_metrics', 'fit_method', 'run_cv', 'summarize', 'grouped_holdout', 'ABLATIONS',
-           'METHODS', 'main', 'gram_errors', 'spec_determined', 'noise_floor', 'SPEC_KINDS')
+           'METHODS', 'main', 'gram_errors', 'spec_determined', 'noise_floor', 'SPEC_KINDS',
+           'channel_fidelity', 'fidelity_summary', 'PRICE_FIDELITY')
 
 TARGETS = COEFF_KEYS + ('g',)
 METHODS = ('pinn', 'plain', 'ridge', 'hgb', 'knn')
@@ -83,6 +94,12 @@ ABLATIONS = {
     'no_chloss': ({}, dict(w_ch=0.)),
     'no_mpsp_loss': ({}, dict(w_mpsp=0.)),
 }
+
+
+#: price keys of :func:`channel_fidelity`: key -> (channel, price column, points column)
+PRICE_FIDELITY = {'fs': ('feedstock', 'feedstock_price', 'q__fs'),
+                  'el': ('electricity', 'electricity_price', 'q__el'),
+                  'ng': ('natural_gas', 'natural_gas_price', 'q__ng')}
 
 
 # %% Methods
@@ -492,6 +509,96 @@ def summarize(results, metrics=('mpsp_mape', 'oracle_mape', 'R2', 'MAE', 'violat
 
 
 # %% Noise floor of random samples
+
+def channel_fidelity(samples, points, channels, channel_names, intensities, price_keys, g_hat, max_points=48):
+    """Per-sample channel and price-intensity fidelity of predictions.
+
+    ``channels`` (n, C, 4) with ``channel_names`` (price channels as price x
+    intensity, e.g. ``Ensemble.member_outputs(...)['channels']`` averaged
+    over members), ``intensities`` (n, J, 4) with ``price_keys``, ``g_hat``
+    (n,), aligned with the rows of ``samples``. Returns a DataFrame (one row
+    per sample: ``sample_id``, ``config_id``, ``biorefinery``, ``n_pts``,
+    ``ch_<channel>``, ``ch_rms`` = sqrt(sum_c ch_c^2), and per price key
+    ``sens_<k>``, ``bias_<k>``, ``resp_<k>``, ``share_<k>`` = RMS simulated
+    p dMPSP/dp / MPSP; see the module docstring). Channel errors are NaN
+    where the target is missing or ``channels_ok`` is False; price metrics
+    need the points column ``q__<key>``."""
+    s = samples.reset_index(drop=True)
+    n = len(s)
+    ids = s['sample_id'].astype(str)
+    p = points[points['sample_id'].astype(str).isin(set(ids))]
+    p = p[np.isfinite(pd.to_numeric(p['y'], errors='coerce')) & np.isfinite(pd.to_numeric(p['t'], errors='coerce'))
+          & np.isfinite(pd.to_numeric(p['MPSP'], errors='coerce')) & (p['y'] > 0) & (p['t'] > 0)]
+    Y, T, M, _, mask = pad_points(s, p, max_points)
+    Yf, Tf = np.where(mask, Y, 1.), np.where(mask, T, 1.)
+    Phi = np.stack([np.ones_like(Yf), 1 / Yf, 1 / Tf, 1 / (Yf * Tf)], -1)
+    npts = np.maximum(mask.sum(1), 1)
+
+    def rms(e):
+        return np.sqrt(((np.where(mask, e, 0.)) ** 2).sum(1) / npts)
+
+    def col(c):
+        return pd.to_numeric(s[c], errors='coerce').to_numpy(float) if c in s else np.full(n, np.nan)
+
+    rmsN = rms(np.einsum('npk,nk->np', Phi, np.column_stack([col(k) for k in COEFF_KEYS])))
+    ok = s['channels_ok'].astype(bool).to_numpy() if 'channels_ok' in s else np.ones(n, bool)
+    out = pd.DataFrame(dict(sample_id=ids.to_numpy(),
+                            config_id=s['config_id'].astype(str).to_numpy() if 'config_id' in s else '',
+                            biorefinery=s['biorefinery'].astype(str).to_numpy() if 'biorefinery' in s else '',
+                            n_pts=mask.sum(1)))
+    channels = np.asarray(channels, float)
+    names = list(channel_names)
+    for j, nm in enumerate(names):
+        tgt = np.column_stack([col(f'ch__{nm}__{k}') for k in COEFF_KEYS])
+        e = np.einsum('npk,nk->np', Phi, channels[:, j] - tgt)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            v = rms(e) / rmsN
+        out[f'ch_{nm}'] = np.where(ok & np.isfinite(tgt).all(1) & (mask.sum(1) > 0), v, np.nan)
+    chc = [f'ch_{nm}' for nm in names]
+    out['ch_rms'] = np.sqrt((out[chc] ** 2).sum(axis=1, min_count=1)) if chc else np.nan
+    intensities = np.asarray(intensities, float)
+    g_hat = np.asarray(g_hat, float)
+    for key in price_keys:
+        if key not in PRICE_FIDELITY:
+            continue
+        _, pcol, qcol = PRICE_FIDELITY[key]
+        if qcol not in p:
+            continue
+        _, _, qs, _, _ = pad_points(s, p.assign(MPSP=pd.to_numeric(p[qcol], errors='coerce').fillna(1e300)),
+                                    max_points)
+        qs = np.where(mask & (qs < 1e299), qs, np.nan)
+        dh = np.einsum('npk,nk->np', Phi, intensities[:, list(price_keys).index(key)]) / g_hat[:, None]
+        pr = col(pcol)
+        good = ok & np.isfinite(pr) & np.isfinite(np.where(mask, qs, 0.)).all(1) & (mask.sum(1) > 0)
+        qz = np.where(mask, np.nan_to_num(qs), 0.)
+        e = np.where(mask, dh - qz, 0.)
+        Mz = np.where(mask, M, 1.)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            out[f'sens_{key}'] = np.where(good, rms(e) / rms(qz), np.nan)
+            ratio = np.where(mask & (np.abs(qz) > 0), dh / qz - 1, np.nan)
+            med = np.array([np.nanmedian(r) if np.isfinite(r).any() else np.nan for r in ratio])
+            out[f'bias_{key}'] = np.where(good, med, np.nan)
+            out[f'resp_{key}'] = np.where(good, rms(e * pr[:, None] / Mz), np.nan)
+            out[f'share_{key}'] = np.where(good, rms(qz * pr[:, None] / Mz), np.nan)
+    return out
+
+
+def fidelity_summary(fid, by=None, abs_bias=True):
+    """Configuration-balanced means of :func:`channel_fidelity` rows (mean
+    over configurations of the configuration means; ``bias_*`` as absolute
+    values when ``abs_bias``), optionally per group column(s) ``by`` (e.g.
+    'scheme'). Returns a DataFrame (one row per group)."""
+    d = fid.copy()
+    cols = [c for c in d.columns if c.startswith(('ch_', 'sens_', 'bias_', 'resp_', 'share_'))]
+    if abs_bias:
+        for c in [c for c in cols if c.startswith('bias_')]:
+            d[c] = d[c].abs()
+    keys = ([by] if isinstance(by, str) else list(by or []))
+    per_cfg = d.groupby(keys + ['config_id'])[cols].mean()
+    if keys:
+        return per_cfg.groupby(level=list(range(len(keys)))).mean().reset_index()
+    return per_cfg.mean().to_frame().T
+
 
 def noise_floor(samples, points, k=5, seed=0, min_random=10, alphas=np.logspace(-3, 3, 13)):
     """Estimate of the error that unobserved biorefinery-specific parameters
