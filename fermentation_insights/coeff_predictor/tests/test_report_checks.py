@@ -81,3 +81,34 @@ def test_data_violation_rates_of_the_fitted_coefficients():
     assert r['viol_mono_y'] == pytest.approx(.5) and r['viol_mono_t'] == 0 and r['viol_g_le_gmax'] == .5
     byc = RC.data_violations_by_config(S, pts, ['ok', 'bad'])
     assert set(zip(byc['constraint'], byc['config_id'])) == {('mono_y', 'B'), ('g_le_gmax', 'B')}
+
+
+def test_sim_checks_collect_pairs_as_is_and_corrected_runs(tmp_path):
+    import json
+    from fermentation_insights.coeff_predictor.data_generation import sim_checks as SC
+
+    def pts(scale):
+        out = [dict(point='baseline', y=0.5, t=50., status='ok', MPSP=2. * scale, recovery=0.9, biogas_kg_h=10.,
+                    ic_mass_gain_kg_h=5.)]
+        for i, y in enumerate((0.2, 0.4, 0.6)):
+            for j, t in enumerate((20., 40., 60.)):
+                m = 0.5 + 0.2 / y + 5. / t + 1. / (y * t)
+                out.append(dict(point=f'grid_{i}{j}', y=y, t=t, status='ok', recovery=0.9, biogas_kg_h=10.,
+                                ic_mass_gain_kg_h=5., MPSP=m * (scale if y < 0.3 else 1.)))
+        return out
+    rec = dict(config_id='X', capacity=dict(baseline=100., points=[
+        dict(mult=m, p_feedstock_capacity=100. * m, y=0.5, t=50., r=1., status='ok', MPSP=2. / m ** 0.1,
+             recovery=0.9, FCI=1.) for m in (1., 2.)]),
+        ic_biogas=dict(units=[['U1', 'lumped']], as_is=pts(1.), fixed=pts(1.1)))
+    json.dump(rec, open(tmp_path / 'X.json', 'w'))
+    json.dump(dict(config_id='Y', ic_biogas=dict(units=[], skipped='none')), open(tmp_path / 'Y.json', 'w'))
+    written = SC.collect(str(tmp_path), str(tmp_path / 'csv'))
+    names = sorted(p.split('/')[-1] for p in written)
+    assert names == ['capacity_response.csv', 'ic_biogas_bias.csv', 'ic_biogas_points.csv']   # no dup check run
+    b = pd.read_csv(tmp_path / 'csv' / 'ic_biogas_bias.csv').set_index('config_id')
+    assert b.loc['X', 'dMPSP_baseline_pct'] == pytest.approx(10.)
+    assert b.loc['X', 'dMPSP_low_yield_pct'] == pytest.approx(10.)
+    assert b.loc['X', 'dMPSP_grid_min_pct'] == pytest.approx(0., abs=1e-9)
+    assert not b.loc['Y', 'affected']
+    c = pd.read_csv(tmp_path / 'csv' / 'capacity_response.csv')
+    assert list(c['mult']) == [1., 2.]
