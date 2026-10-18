@@ -1,0 +1,11 @@
+{
+ "floor_mape_cfg_mean": 0.07566087601301512,
+ "floor_mape_cfg_gmean": 0.0627738461582327,
+ "with_bp_mape_cfg_mean": 0.08602956926083014,
+ "with_bp_mape_cfg_gmean": 0.07212128958907903,
+ "const_mape_cfg_mean": 0.1251363037812207,
+ "const_mape_cfg_gmean": 0.1141610292624656,
+ "fit_mape_cfg_mean": 0.013856605420718817,
+ "fit_mape_cfg_gmean": 0.012960104620746428,
+ "n_configs": 37
+}
