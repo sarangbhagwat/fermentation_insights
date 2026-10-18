@@ -314,7 +314,9 @@
    "frac_satisfied": 0.861049519586105,
    "enabled": false,
    "stat": null,
-   "note": ""
+   "note": "frac_satisfied is computed by the fit on its training targets after the defective channel targets were masked for the loss (feedstock: TAL; 188 samples, whose masked channel counts as 0 in the sum): it measures the mask, not the data. On the unmasked targets the identity holds for 1353 of 1353 samples (max error 5.8e-14 of the coefficient spread)",
+   "frac_satisfied_unmasked": 1.0,
+   "max_rel_err_unmasked": 5.841436397387433e-14
   },
   {
    "constraint": "price_linear",
@@ -959,6 +961,331 @@
     "mpsp": 0.7029
    },
    "source": "coverage of the release quantiles on the leave-one-feedstock-out / leave-one-product-out out-of-fold scores, pooled over samples (REPORT.md section 6, tables/interval_coverage_by_scheme.csv)"
+  },
+  "coverage_by_family": {
+   "nominal": 0.9,
+   "by_scheme": {
+    "random": {
+     "Ethanol": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "HP": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "Isobutanol": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "LacticAcid": {
+      "a": 0.9872,
+      "b": 0.8718,
+      "c": 0.8846,
+      "d": 0.6026,
+      "g": 0.9744,
+      "mpsp": 0.9872
+     },
+     "OxalicAcid": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "SuccinicAcid": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "TAL": {
+      "a": 0.9521,
+      "b": 1.0,
+      "c": 0.7606,
+      "d": 1.0,
+      "g": 0.4415,
+      "mpsp": 0.9149
+     }
+    },
+    "productivity": {
+     "Ethanol": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "HP": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "Isobutanol": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "LacticAcid": {
+      "a": 1.0,
+      "b": 0.7419,
+      "c": 0.9355,
+      "d": 0.5484,
+      "g": 0.9355,
+      "mpsp": 1.0
+     },
+     "OxalicAcid": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "SuccinicAcid": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "TAL": {
+      "a": 0.974,
+      "b": 1.0,
+      "c": 0.9091,
+      "d": 1.0,
+      "g": 0.4156,
+      "mpsp": 0.8831
+     }
+    },
+    "config": {
+     "Ethanol": {
+      "a": 1.0,
+      "b": 0.6711,
+      "c": 0.7047,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 0.7651
+     },
+     "HP": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "Isobutanol": {
+      "a": 0.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "LacticAcid": {
+      "a": 0.9872,
+      "b": 0.5897,
+      "c": 0.7821,
+      "d": 0.5513,
+      "g": 0.6538,
+      "mpsp": 0.6923
+     },
+     "OxalicAcid": {
+      "a": 0.963,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 0.4762,
+      "g": 1.0,
+      "mpsp": 0.8783
+     },
+     "SuccinicAcid": {
+      "a": 1.0,
+      "b": 1.0,
+      "c": 1.0,
+      "d": 1.0,
+      "g": 1.0,
+      "mpsp": 1.0
+     },
+     "TAL": {
+      "a": 0.867,
+      "b": 0.9787,
+      "c": 0.8457,
+      "d": 1.0,
+      "g": 0.4309,
+      "mpsp": 0.9096
+     }
+    }
+   },
+   "n_configs": {
+    "random": {
+     "Ethanol": 3,
+     "HP": 15,
+     "Isobutanol": 1,
+     "LacticAcid": 3,
+     "OxalicAcid": 1,
+     "SuccinicAcid": 7,
+     "TAL": 7
+    },
+    "productivity": {
+     "Ethanol": 3,
+     "HP": 15,
+     "Isobutanol": 1,
+     "LacticAcid": 3,
+     "OxalicAcid": 1,
+     "SuccinicAcid": 7,
+     "TAL": 7
+    },
+    "config": {
+     "Ethanol": 3,
+     "HP": 15,
+     "Isobutanol": 1,
+     "LacticAcid": 3,
+     "OxalicAcid": 1,
+     "SuccinicAcid": 7,
+     "TAL": 7
+    }
+   },
+   "known_configuration": {
+    "Ethanol": {
+     "a": 1.0,
+     "b": 1.0,
+     "c": 1.0,
+     "d": 1.0,
+     "g": 1.0,
+     "mpsp": 1.0
+    },
+    "HP": {
+     "a": 1.0,
+     "b": 1.0,
+     "c": 1.0,
+     "d": 1.0,
+     "g": 1.0,
+     "mpsp": 1.0
+    },
+    "Isobutanol": {
+     "a": 1.0,
+     "b": 1.0,
+     "c": 1.0,
+     "d": 1.0,
+     "g": 1.0,
+     "mpsp": 1.0
+    },
+    "LacticAcid": {
+     "a": 0.9872,
+     "b": 0.7419,
+     "c": 0.8846,
+     "d": 0.5484,
+     "g": 0.9355,
+     "mpsp": 0.9872
+    },
+    "OxalicAcid": {
+     "a": 1.0,
+     "b": 1.0,
+     "c": 1.0,
+     "d": 1.0,
+     "g": 1.0,
+     "mpsp": 1.0
+    },
+    "SuccinicAcid": {
+     "a": 1.0,
+     "b": 1.0,
+     "c": 1.0,
+     "d": 1.0,
+     "g": 1.0,
+     "mpsp": 1.0
+    },
+    "TAL": {
+     "a": 0.9521,
+     "b": 1.0,
+     "c": 0.7606,
+     "d": 1.0,
+     "g": 0.4156,
+     "mpsp": 0.8831
+    }
+   },
+   "new_configuration": {
+    "Ethanol": {
+     "a": 1.0,
+     "b": 0.6711,
+     "c": 0.7047,
+     "d": 1.0,
+     "g": 1.0,
+     "mpsp": 0.7651
+    },
+    "HP": {
+     "a": 1.0,
+     "b": 1.0,
+     "c": 1.0,
+     "d": 1.0,
+     "g": 1.0,
+     "mpsp": 1.0
+    },
+    "Isobutanol": {
+     "a": 0.0,
+     "b": 1.0,
+     "c": 1.0,
+     "d": 1.0,
+     "g": 1.0,
+     "mpsp": 1.0
+    },
+    "LacticAcid": {
+     "a": 0.9872,
+     "b": 0.5897,
+     "c": 0.7821,
+     "d": 0.5513,
+     "g": 0.6538,
+     "mpsp": 0.6923
+    },
+    "OxalicAcid": {
+     "a": 0.963,
+     "b": 1.0,
+     "c": 1.0,
+     "d": 0.4762,
+     "g": 1.0,
+     "mpsp": 0.8783
+    },
+    "SuccinicAcid": {
+     "a": 1.0,
+     "b": 1.0,
+     "c": 1.0,
+     "d": 1.0,
+     "g": 1.0,
+     "mpsp": 1.0
+    },
+    "TAL": {
+     "a": 0.867,
+     "b": 0.9787,
+     "c": 0.8457,
+     "d": 1.0,
+     "g": 0.4309,
+     "mpsp": 0.9096
+    }
+   },
+   "source": "coverage of this checkpoint's interval quantiles on the development out-of-fold scores (tables/cv_oof_scores.csv.gz), pooled over the held-out samples of each fermentation product: known_configuration = min(random CV, productivity tails), new_configuration = leave-one-configuration-out (REPORT.md section 6, tables/interval_coverage_in_distribution_by_family.csv, tables/interval_coverage_by_family.csv)"
   }
  }
 }

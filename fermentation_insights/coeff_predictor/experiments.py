@@ -1845,6 +1845,120 @@ def annotate_unseen_coverage(shc, paths):
         log(f'tables: {os.path.relpath(path, PKG_DIR)}/meta.json: coverage for a new feedstock / product recorded')
 
 
+#: interval schemes of ``meta['coverage_by_family']``: the CV schemes whose
+#: out-of-fold scores measure the coverage for a known configuration (new
+#: parameter draws; productivities beyond the sampled range) and for a new
+#: configuration of a known product (leave-one-configuration-out)
+FAMILY_COVERAGE_SCHEMES = {'known_configuration': ('random', 'productivity'), 'new_configuration': ('config',)}
+
+
+def annotate_family_coverage(sc, samples, paths):
+    """Store, per fermentation product (family) and interval key, the
+    coverage of each checkpoint's OWN shipped quantiles on the development
+    out-of-fold scores (``report_checks.family_coverage``; random CV and
+    productivity tails = a known configuration, the minimum of the two;
+    LOCO = a new configuration of a known product) in its ``meta.json``
+    (``meta['coverage_by_family']``), so that ``CoefficientPredictor`` flags
+    the keys that under-cover the row's family (``intervals_undercovered``).
+    Report-only metadata: the networks, quantiles and domain are unchanged,
+    and no test sample is read (the scores are development CV scores)."""
+    import pandas as pd
+    from fermentation_insights.coeff_predictor import report_checks as RC
+    from fermentation_insights.coeff_predictor.train import CONF_KEYS
+    fam = dict(zip(samples['config_id'].astype(str), samples['fermentation_product'].astype(str)))
+    for path in paths:
+        mp = os.path.join(path, 'meta.json')
+        if not os.path.exists(mp):
+            continue
+        with open(mp) as fh:
+            m = json.load(fh)
+        conf = m.get('conformal') or {}
+        if not conf:
+            continue
+        cov = dict(nominal=round(1 - float(conf.get('alpha', ALPHA)), 4))
+        for name, schemes in FAMILY_COVERAGE_SCHEMES.items():
+            per = {}
+            for sch in schemes:
+                f_, _ = RC.family_coverage(sc, conf, scheme=sch, keys=CONF_KEYS, families=fam)
+                if not len(f_):
+                    continue
+                cov.setdefault('by_scheme', {})[sch] = {
+                    str(fp): {x.key: round(float(x.coverage), 4) for x in g.itertuples()}
+                    for fp, g in f_.groupby('family')}
+                cov.setdefault('n_configs', {})[sch] = {
+                    str(fp): int(g['n_configs'].max()) for fp, g in f_.groupby('family')}
+                for x in f_.itertuples():
+                    d = per.setdefault(str(x.family), {})
+                    d[x.key] = round(min(float(x.coverage), d.get(x.key, float('inf'))), 4)
+            if per:
+                cov[name] = per
+        cov['source'] = ('coverage of this checkpoint\'s interval quantiles on the development out-of-fold scores '
+                         '(tables/cv_oof_scores.csv.gz), pooled over the held-out samples of each fermentation '
+                         'product: known_configuration = min(random CV, productivity tails), new_configuration = '
+                         'leave-one-configuration-out (REPORT.md section 6, '
+                         'tables/interval_coverage_in_distribution_by_family.csv, '
+                         'tables/interval_coverage_by_family.csv)')
+        if (m.get('meta') or {}).get('coverage_by_family') == cov:
+            continue
+        m.setdefault('meta', {})['coverage_by_family'] = cov
+        with open(mp, 'w') as fh:
+            json.dump(m, fh, indent=1)
+        log(f'tables: {os.path.relpath(path, PKG_DIR)}/meta.json: interval coverage per fermentation product recorded')
+
+
+def annotate_channel_sum(samples, train_ids, masked=None):
+    """Note on the ``channel_sum`` entry of the checkpoints' constraint
+    report: the fit checks the identity (channel coefficients sum to a', b',
+    c', d') on its training targets AFTER the defective channel targets were
+    masked for the loss (``DEFECTIVE_TARGETS``, ``train.mask_channel_targets``),
+    so the masked samples count as failing. Adds the identity on the
+    unmasked targets (``frac_satisfied_unmasked``, max error relative to the
+    coefficient spread) and a note. ``train_ids``: {checkpoint path: its
+    training sample ids}. Report-only metadata."""
+    import numpy as np
+    import pandas as pd
+    from fermentation_insights.coeff_predictor.train import COEFF_KEYS
+    masked = DEFECTIVE_TARGETS if masked is None else masked
+    chs = sorted({c.split('__')[1] for c in samples.columns if c.startswith('ch__') and c.count('__') == 2})
+    if not chs:
+        return
+    col = lambda c: pd.to_numeric(samples[c], errors='coerce').to_numpy(float) if c in samples else \
+        np.full(len(samples), np.nan)
+    coef = np.column_stack([col(k) for k in COEFF_KEYS])
+    S_ = np.column_stack([np.nansum(np.column_stack([col(f'ch__{c}__{k}') for c in chs]), 1) for k in COEFF_KEYS])
+    fp = samples['fermentation_product'].astype(str).to_numpy() if 'fermentation_product' in samples else None
+    for path, ids in train_ids.items():
+        mp = os.path.join(path, 'meta.json')
+        if not os.path.exists(mp):
+            continue
+        with open(mp) as fh:
+            m = json.load(fh)
+        rep = m.get('constraint_report') or []
+        ent = [r for r in rep if r.get('constraint') == 'channel_sum']
+        rows = np.flatnonzero(samples['sample_id'].astype(str).isin(set(map(str, ids))).to_numpy())
+        if not ent or len(rows) != int(ent[0].get('n_cases') or -1):
+            continue
+        s_tot = np.nanstd(coef[rows], 0) + 1e-12
+        err = (np.abs(S_[rows] - coef[rows]) / s_tot).max(1)
+        ok = np.isfinite(err)
+        nm = int(sum((fp[rows] == p).sum() for ps in masked.values() for p in ps)) if fp is not None else 0
+        what = '; '.join(f'{k}: ' + ', '.join(v) for k, v in masked.items())
+        upd = dict(frac_satisfied_unmasked=float((err[ok] <= 1e-4).mean()) if ok.any() else float('nan'),
+                   max_rel_err_unmasked=float(err[ok].max()) if ok.any() else float('nan'),
+                   note=(f'frac_satisfied is computed by the fit on its training targets after the defective '
+                         f'channel targets were masked for the loss ({what}'
+                         f'; {nm} samples, whose masked channel counts as 0 in the sum): it measures the mask, not '
+                         f'the data. On the unmasked targets the identity holds for '
+                         f'{int((err[ok] <= 1e-4).sum())} of {int(ok.sum())} samples (max error '
+                         f'{float(err[ok].max()):.1e} of the coefficient spread)'))
+        if all(ent[0].get(k) == v for k, v in upd.items()):
+            continue
+        ent[0].update(upd)
+        with open(mp, 'w') as fh:
+            json.dump(m, fh, indent=1)
+        log(f'tables: {os.path.relpath(path, PKG_DIR)}/meta.json: channel_sum note recorded')
+
+
 def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
     """Report-only statistics from the saved outputs (``report_checks``;
     none is used to fit, tune, select or calibrate anything): paired
@@ -1869,6 +1983,9 @@ def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
         checks['shipped_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_by_scheme.csv'), index=False)
         annotate_unseen_coverage(checks['shipped_coverage'], [os.path.join(a.models, m)
                                                               for m in ('release', 'final_dev')])
+        annotate_family_coverage(sc, D['samples'], [os.path.join(a.models, m) for m in ('release', 'final_dev')])
+    annotate_channel_sum(D['samples'], {j['save_model']: j['train_ids'] for j in (fin.get('jobs') or ())
+                                        if j.get('save_model')})
     checks['baseline_paired'] = RC.baseline_fold_stats(cv['results'], methods=[m for m in BASE_METHODS
                                                                                if m != 'pinn'])
     checks['baseline_paired'].to_csv(os.path.join(tdir, 'cv_baselines_paired.csv'), index=False)
@@ -1876,7 +1993,8 @@ def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
     checks['id_family_coverage'] = checks['id_config_coverage'] = None
     if conf and sc is not None and len(sc):
         fam = dict(zip(D['samples']['config_id'].astype(str), D['samples']['biorefinery'].astype(str)))
-        checks['family_coverage'], checks['config_coverage'] = RC.family_coverage(sc, conf, families=fam)
+        from fermentation_insights.coeff_predictor.train import CONF_KEYS as _CK
+        checks['family_coverage'], checks['config_coverage'] = RC.family_coverage(sc, conf, keys=_CK, families=fam)
         checks['family_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_by_family.csv'), index=False)
         checks['config_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_loco_per_config.csv'), index=False)
         # a KNOWN configuration: random-CV (new parameter draws) and
@@ -2847,6 +2965,26 @@ def ablation_results(res, ablation_folds):
     return r.reset_index(drop=True)
 
 
+def _round_up(x, sig=3):
+    """``x`` > 0 rounded UP to ``sig`` significant digits (a printed upper
+    bound that holds: 1.4032 -> '1.41')."""
+    import math
+    if not math.isfinite(x) or x <= 0:
+        return f'{x:g}'
+    e = math.floor(math.log10(x)) - sig + 1
+    return f'{math.ceil(x / 10 ** e - 1e-9) * 10 ** e:.{max(-e, 0)}f}'
+
+
+def _round_down(x, sig=2):
+    """``x`` > 0 rounded DOWN to ``sig`` significant digits (a printed lower
+    bound that holds: 0.0771 -> '0.077')."""
+    import math
+    if not math.isfinite(x) or x <= 0:
+        return f'{x:g}'
+    e = math.floor(math.log10(x)) - sig + 1
+    return f'{math.floor(x / 10 ** e + 1e-9) * 10 ** e:.{max(-e, 0)}f}'
+
+
 def _abl_label(m):
     return METHOD_LABEL[m].replace('PI-NN ', '')
 
@@ -2873,8 +3011,8 @@ def ablation_summary(st):
     a = own[own['variant'].isin(ABLATIONS)]
     sig = a[(a['t'].abs() >= 2) & (a['p_wilcoxon'] < 0.05)]
     if len(a) and not len(sig):
-        L.append(f'* No ablation effect is established at the fold level (|t| <= {np.nanmax(a["t"].abs()):.1f}, '
-                 f'Wilcoxon p >= {np.nanmin(a["p_wilcoxon"]):.2f}; the means are driven by single folds). The '
+        L.append(f'* No ablation effect is established at the fold level (|t| <= {_round_up(np.nanmax(a["t"].abs()))}, '
+                 f'Wilcoxon p >= {_round_down(np.nanmin(a["p_wilcoxon"]))}; the means are driven by single folds). The '
                  'channel (intermediate-data) supervision, the price-explicit structure and the physics residuals / '
                  'collocation are kept for what they guarantee by construction -- exact linearity in the prices, '
                  'dMPSP/dr <= 0, coefficient bounds, an additive channel breakdown -- not for a measured accuracy '
@@ -3432,6 +3570,73 @@ def intervals_section(fin, protocol):
     return '\n'.join(L)
 
 
+#: tables of the ``unit_bounds`` simulation check (known data defect D18),
+#: relative to the package directory
+UNIT_BOUNDS_CSV = os.path.join('data_generation', 'checks', 'unit_bounds.csv')
+COLUMN_TRAYS_CSV = os.path.join('data_generation', 'checks', 'column_trays_bias.csv')
+COLUMN_TRAYS_CAPACITY_CSV = os.path.join('data_generation', 'checks', 'column_trays_capacity.csv')
+
+
+def _family_undercoverage(checks, key, tol=0.1):
+    """Text: the families whose coverage of the shipped ``key`` quantile on
+    the LOCO out-of-fold scores is more than ``tol`` below nominal."""
+    fc = checks.get('family_coverage')
+    if fc is None or not len(fc):
+        return ''
+    f = fc[fc['key'] == key]
+    low = f[f['coverage'] < 1 - ALPHA - tol]
+    if not len(low):
+        return ''
+    cc = checks.get('config_coverage')
+    worst = ''
+    if cc is not None and len(cc):
+        c = cc[cc['key'] == key].sort_values('coverage').head(2)
+        worst = '; worst configurations ' + ', '.join(f'{x.config_id} {x.coverage:.2f}' for x in c.itertuples())
+    return ('; but per family the shipped quantile UNDER-covers the new configurations of '
+            + ', '.join(f'{x.family} ({x.coverage:.2f})' for x in low.itertuples())
+            + f' (LOCO out-of-fold scores{worst}; `predict()` / `mpsp()` flag such rows in '
+            '`intervals_undercovered`, section 6)')
+
+
+def _column_trays_note(rise_cfgs):
+    """Text: the mechanism of the super-linear capital of the configurations
+    ``rise_cfgs`` from the ``unit_bounds`` simulation check (D18), or the
+    plain statement when its tables are missing."""
+    import pandas as pd
+    try:
+        ub = pd.read_csv(os.path.join(PKG_DIR, UNIT_BOUNDS_CSV))
+        cb = pd.read_csv(os.path.join(PKG_DIR, COLUMN_TRAYS_CSV))
+        cc = pd.read_csv(os.path.join(PKG_DIR, COLUMN_TRAYS_CAPACITY_CSV))
+    except (OSError, ValueError):
+        return ': cost correlations used beyond their size ranges, not investigated'
+    wide = set(cb.loc[cb['affected'].astype(str) == 'True', 'config_id'].astype(str))
+    if not wide:
+        return ''
+    d = ub[ub['key'].astype(str).str.lower().str.endswith('diameter') & (ub['side'] == 'above')]
+    dmax = d.groupby('config_id')['value'].max()
+    cov = [c for c in rise_cfgs if c in wide]
+    out = (f'; known data defect D18, DESIGN.md section 1: the purification columns of all {len(wide)} '
+           f'HP configurations are wider than BioSTEAM\'s own 24 ft diameter bound already at the baseline '
+           f'({dmax.min():.1f}-{dmax.max():.1f} ft, `data_generation/checks/unit_bounds.csv`), and BioSTEAM prices '
+           'their trays with an exponential correlation in the diameter (fitted to about 16 ft), so their '
+           f'capital grows super-linearly with the flow; {len(cov)} of the {len(rise_cfgs)} configurations above '
+           'have such a column')
+    a = cc[(cc['mode'] == 'as_is')].set_index(['config_id', 'mult'])
+    f = cc[(cc['mode'] == 'fixed')].set_index(['config_id', 'mult'])
+    if (len(a) and (1.15 in a.index.get_level_values('mult')) and (2. in a.index.get_level_values('mult'))):
+        fci = a.xs(1.15, level='mult')['FCI_rel_to_1x']
+        worst = str(fci.idxmax())
+        m15, m2 = a.loc[(worst, 1.15), 'MPSP_rel_to_1x'], a.loc[(worst, 2.), 'MPSP_rel_to_1x']
+        out += (f'. The effect starts INSIDE the sampled capacity range (0.81-1.19x): {worst} FCI '
+                f'x{fci.max():.2f} and MPSP {100 * (m15 - 1):+.1f} % at 1.15x, MPSP {100 * (m2 - 1):+.0f} % at 2x')
+        if (worst, 2.) in f.index and (worst, 1.15) in f.index:
+            out += (f'; with the trays of a column wider than 24 ft priced as parallel stacks of the same area (a '
+                    f'sensitivity, `data_generation/checks/column_trays_capacity.csv`) {100 * (f.loc[(worst, 1.15), "MPSP_rel_to_1x"] - 1):+.1f} '
+                    f'% at 1.15x and {100 * (f.loc[(worst, 2.), "MPSP_rel_to_1x"] - 1):+.0f} % at 2x, a normal '
+                    'economy of scale')
+    return out
+
+
 def coverage_reading(c, fam_cov=None, cfg_cov=None, nominal=None, tol=0.02):
     """Data-driven reading of the cross-fitted LOCO coverage per key
     (pooled, mean and 10 % quantile over configurations vs. nominal) and,
@@ -3461,6 +3666,11 @@ def coverage_reading(c, fam_cov=None, cfg_cov=None, nominal=None, tol=0.02):
                 seg += (f' ({int((cc["coverage"] >= 0.999).sum())} of {len(cc)} configurations covered at 1.0, '
                         f'{int((cc["coverage"] < 0.7).sum())} below 0.7)')
             parts.append(seg)
+        low = fam_cov[fam_cov['key'].isin(('a', 'b', 'c', 'd')) & (fam_cov['coverage'] < nominal - 0.1)]
+        if len(low):
+            parts.append('the coefficient intervals more than 0.1 below nominal: ' + ', '.join(
+                f"{k}' " + ', '.join(f'{x.family} {x.coverage:.2f}' for x in g.itertuples())
+                for k, g in low.groupby('key')))
         if parts:
             out += (' Per family, coverage of the shipped quantiles on the LOCO out-of-fold scores (pooled over '
                     'the family\'s held-out samples; `tables/interval_coverage_by_family.csv`, per configuration '
@@ -3517,7 +3727,13 @@ def in_distribution_coverage(shc, idf, idc=None, nominal=None, tol=0.1):
              'decarboxylation conversion of the separation, `bp_separation_tal_decarboxylation_conversion`; '
              'sd(ln g) 0.11, DESIGN.md section 6, round 4), i.e. noise for the model, which the score |error| / '
              '(member spread + floor) does not represent; a per-family calibration or a score with a noise term '
-             'for g is an open item.' if tal_g else '') + '\n')
+             'for g is an open item.' if tal_g else '')
+          + f' `predict()` / `mpsp()` list, per row, the keys whose coverage for the row\'s fermentation product is '
+          f'more than {tol:.1f} below nominal in `intervals_undercovered`, with an ApplicabilityWarning (the '
+          'coverage of each checkpoint\'s own quantiles on these development out-of-fold scores, '
+          '`meta[\'coverage_by_family\']`: for a training `config_id` the lower of the random-CV and '
+          'productivity-tail coverage, for any other row of a known product the LOCO coverage; report-only '
+          'metadata, the quantiles are unchanged).\n')
     summ = ('* For a KNOWN configuration the shipped intervals are conservative pooled ('
             + '; '.join(pooled) + ')' + (', but not for every family: ' + low_txt if low_txt else '')
             + ' (section 6).') if pooled else ''
@@ -3644,9 +3860,8 @@ def capacity_response_text(t, samples=None):
             + ', '.join(f'{m:g}x {v:.2f} (n = {int(big.loc[big["mult"] == m, "share_of_simulated_change"].notna().sum())})'
                         for m, v in sh.items() if np.isfinite(v)) + '.' + span
             + (' The simulated MPSP RISES at 2x or 3x for ' + ', '.join(sorted(rise['config_id'].unique()))
-               + ' (their simulated fixed capital investment grows faster than the capacity there, e.g. 8.8x at 3x '
-               'for HP_hexanol_sugarcane: cost correlations used beyond their size ranges, not investigated; far '
-               'outside the training range).' if len(rise) else '')
+               + ' (their simulated fixed capital investment grows faster than the capacity'
+               + _column_trays_note(sorted(rise['config_id'].unique())) + ').' if len(rise) else '')
             + f' The global applicability-domain check keeps {100 * ind:.0f} % of the 2-3x queries in_domain (the '
             'global capacity range is wide because the configurations differ in scale); the per-configuration '
             f'contextual range check flags {100 * out_flag:.0f} % of them (`contextual_outside_range`, with an '
@@ -4128,7 +4343,7 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
               + ', '.join(f'{st} {g(st, "coverage"):.2f} / {g(st, "coverage_cfg_mean"):.2f}' for st in sets)
               + _no_twin_cov(checks, 'mpsp')
               + f'; cross-fitted estimate pooled {g(sets[0], "crossfit_pooled"):.2f} / mean over configurations '
-              f'{g(sets[0], "crossfit_mean"):.2f}.')
+              f'{g(sets[0], "crossfit_mean"):.2f}' + _family_undercoverage(checks, 'mpsp') + '.')
         rg = iv[(iv['method'] == 'pinn') & (iv['key'] == 'g') & iv['calibration'].isin(['loco', 'holdout'])]
         if len(rg):
             gg = lambda st, c: float(rg[rg['set'] == st][c].iloc[0])

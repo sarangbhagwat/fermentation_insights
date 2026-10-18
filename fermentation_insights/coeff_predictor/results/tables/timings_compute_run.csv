@@ -1,0 +1,10 @@
+stage,minutes,note
+data,0.0199694116910298,
+split,0.000310214360555,
+hpo,23.506648655732477,
+cv,83.13474593559901,
+final+release,3.5893182277679445,
+tables,0.2179058114687601,
+figures,0.1607085227966308,
+"total (this run, incl. cached)",110.6978376309077,
+median s per (member-epoch x training sample),,0.00013

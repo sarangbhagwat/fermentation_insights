@@ -6916,6 +6916,44 @@
    }
   },
   "version": 2,
+  "y_domain": {
+   "Ethanol|Ethanol": {
+    "y_min": 0.0385239700672778,
+    "y_max": 0.506314371754061
+   },
+   "HP|AcrylicAcid": {
+    "y_min": 0.05,
+    "y_max": 0.755
+   },
+   "Isobutanol|Isobutanol": {
+    "y_min": 0.05,
+    "y_max": 0.3607426750935716
+   },
+   "LacticAcid|LacticAcid": {
+    "y_min": 0.3,
+    "y_max": 0.91
+   },
+   "OxalicAcid|OxalicAcid": {
+    "y_min": 0.0499760984764971,
+    "y_max": 0.819608015014553
+   },
+   "SuccinicAcid|SuccinicAcid": {
+    "y_min": 0.0498162537908837,
+    "y_max": 1.0592508700798444
+   },
+   "TAL|KSA": {
+    "y_min": 0.0247335145541738,
+    "y_max": 0.2671406239885149
+   },
+   "TAL|TAL": {
+    "y_min": 0.0247335145541738,
+    "y_max": 0.2671406239885149
+   },
+   "__all__": {
+    "y_min": 0.0247335145541738,
+    "y_max": 1.0592508700798444
+   }
+  },
   "pair_descriptors": {
    "Ethanol|Ethanol": {
     "fp_MW": 46.06844,
