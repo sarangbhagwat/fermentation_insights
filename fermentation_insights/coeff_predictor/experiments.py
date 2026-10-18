@@ -194,7 +194,7 @@ DEFECTIVE_TARGETS = {'feedstock': ('TAL',)}
 #: the corrected development rows (DESIGN.md section 6, round 5, 5f)
 ROUND5_RECHECK = (
     '**Re-check on the corrected development rows** (data hash c345efda41c4fdca, 1353 samples / 37 '
-    'configurations; v2 model settings vs. changes 1-4 of this run, v2-selected hyperparameters, one member per '
+    'configurations; v2 model settings vs. changes 1-4 of v3, v2-selected hyperparameters, one member per '
     'fit, paired over 3 seeds on the same folds; mean over seeds (difference, seed t); `*` = without TAL and '
     'lactic; `wrong-sign el.` = share of the held-out samples of configurations without power export predicted '
     'to export; %; DESIGN.md 5f):\n\n'
@@ -241,8 +241,8 @@ FIGURE_CAPTIONS = {
                              'price intensities, final dev-trained models on the test set.',
     'channels_test.png': 'Per-channel coefficient breakdown on the held-out test configurations: prediction vs. '
                          'decomposed simulation data.',
-    'publication_comparison.png': 'Baseline coefficients of this work (current BioSTEAM, harness v2/v3, '
-                                  'D3-patched) vs. the publication.',
+    'publication_comparison.png': 'Baseline coefficients of this work (current BioSTEAM, harness v2-v4, '
+                                  'D3-patched; D16 / D17 corrected) vs. the publication.',
     'hpo_search.png': 'HPO candidates ranked by the criterion (configuration-balanced held-out MPSP MAPE, fold '
                       'mean); the selected one in blue.',
 }
@@ -2264,9 +2264,30 @@ def protocol_table(cv, fin, hpo, plan):
 #: (report comparison; their report and headline tables are kept in
 #: ``results/<run>/``): (label, provenance)
 PRIOR_RUNS = (('v1', 'commit fd3f386'),
-              ('v2', 'commit 725ae11 (report regenerated from cached fits in b7b0f53)'))
-#: label of the run this code produces (the third use of the frozen test split)
-THIS_RUN = 'v3'
+              ('v2', 'commit 725ae11 (report regenerated from cached fits in b7b0f53)'),
+              ('v3', 'commit 2060257 (report regenerated from cached fits in 056c0fc)'))
+#: label of the run this code produces (the fourth use of the frozen test split)
+THIS_RUN = 'v4'
+#: every run that evaluated on the frozen test split, this one last
+ALL_RUNS = tuple(r for r, _ in PRIOR_RUNS) + (THIS_RUN,)
+#: title of the report's changelog section
+CHANGES_TITLE = 'Changes ' + ' -> '.join(ALL_RUNS)
+#: how many times this run uses the frozen test split ('fourth')
+TEST_USE = ('first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth')[len(ALL_RUNS) - 1]
+#: the data and code of the v3 run (results/v3; DESIGN.md section 1,
+#: "Previous data set"): the v3 -> v4 changelog compares this run with them
+V3_RUN = dict(data_hash='c345efda41c4fdca', code_version='5', n_samples=1600, n_points=35583, n_dev=1353,
+              n_dev_configs=37, fit_mape_median=0.0132)
+#: plan keys that define the training protocol and the search (v3 -> v4 check)
+PLAN_KEYS = ('hpo_k', 'hpo_candidates', 'hpo_members', 'hpo_lopo_weight', 'cv_members', 'final_members',
+             'release_members', 'random_k', 'loco_folds', 'ablation_loco_folds', 'epochs', 'patience', 'min_epochs',
+             'batch_size')
+
+
+def _and(items):
+    """'a', 'a and b', 'a, b and c'."""
+    items = [str(x) for x in items]
+    return ' and '.join(items) if len(items) < 3 else ', '.join(items[:-1]) + ' and ' + items[-1]
 
 
 def load_run_tables(out_dir, run, fallback=True):
@@ -2289,6 +2310,14 @@ def load_run_tables(out_dir, run, fallback=True):
                         res[name] = pd.read_csv(f)
                     except Exception:
                         pass
+            # selected hyperparameters and plan of that run ({'selected', 'plan', ...})
+            f = os.path.join(d, 'selected_hyperparameters.json')
+            if os.path.exists(f):
+                try:
+                    with open(f) as fh:
+                        res['selected_hyperparameters'] = json.load(fh)
+                except Exception:
+                    pass
             res['dir'] = d
             return res
     return {}
@@ -2694,7 +2723,8 @@ def fig_pub(path, pub, made):
         ax.set_ylabel(f'this work {TARGET_LABEL[k]}')
     h, l = axs[0].get_legend_handles_labels()
     fig.legend(h, l, loc='lower center', ncol=len(l), bbox_to_anchor=(0.5, -0.06))
-    fig.suptitle('Baseline coefficients: this work (current BioSTEAM, harness v2/v3, D3-patched) vs. publication',
+    fig.suptitle('Baseline coefficients: this work (current BioSTEAM, harness v2-v4, D3-patched, D16 / D17 '
+                 'corrected) vs. publication',
                  x=0.01, ha='left', fontsize=11)
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
     _save(fig, path, made)
@@ -2934,10 +2964,21 @@ def ablation_deltas(res):
     return out
 
 
-def runs_comparison(fh, head, prior):
+def _regen_test_clause(regen):
+    """'k of the n out-of-distribution test samples, those of <configs>, and k
+    of the n in-distribution ones' (the v3 -> v4 corrected test rows)."""
+    if not regen:
+        return 'the test samples of the regenerated configurations'
+    oc = f', those of {_and(regen["ood_configs"])},' if regen['ood_configs'] else ''
+    return (f'{regen["test_ood"]} of the {regen["n_test_ood"]} out-of-distribution test samples{oc} and '
+            f'{regen["test_id"]} of the {regen["n_test_id"]} in-distribution ones')
+
+
+def runs_comparison(fh, head, prior, regen=None, dev3=()):
     """Markdown: the final-test and CV headline numbers of the earlier runs
     (``prior`` = {run: tables of :func:`load_run_tables`}, PRIOR_RUNS) and of
-    this run (THIS_RUN) side by side."""
+    this run (THIS_RUN) side by side; ``regen``: ``report_checks.regenerated_rows``;
+    ``dev3``: :func:`settings_vs_v3`."""
     import pandas as pd
     runs = [r for r, _ in PRIOR_RUNS]
     allr = runs + [THIS_RUN]
@@ -2966,17 +3007,22 @@ def runs_comparison(fh, head, prior):
     for c in [c for c in T if c.endswith('_n_test')]:
         T[c] = T[c].map(lambda v: '' if v != v else f'{int(v)}')
     prov = '; '.join(f'{r} = {p}' for r, p in PRIOR_RUNS)
-    L.append(f'**Final test** (the same frozen split of configurations and sample ids, used for the third time: '
-             f'the {THIS_RUN} numbers are likely optimistic, see the notice above; {prov}; MAPE in %):\n')
+    L.append(f'**Final test** (the same frozen split of configurations and sample ids, used for the {TEST_USE} '
+             f'time: the {THIS_RUN} numbers are likely optimistic, see the notice above; {prov}; MAPE in %):\n')
     L.append(md_table(T, pct_cols=tuple(c for c in T if c.endswith(('_mape', '_median')))) + '\n')
     L.append('v1 fit every method, the baselines included, without its 6 calibration configurations (15 % of the '
              'development configurations, configuration-grouped calibration hold-out of the v1 protocol); v2 and '
-             f'{THIS_RUN} fit every method on all development rows. So the v1 -> v2 change of the baselines '
-             '(ridge, HGB, kNN, plain MLP) comes from the protocol, not from the methods. Between v2 and '
-             f'{THIS_RUN} the data were corrected (D15, H1; "Changes v1 -> v2 -> {THIS_RUN}"): the training rows '
-             'AND the test rows of the regenerated configurations changed (`n_test`; the corrected rows replace '
-             'the defective ones), so the v2 -> ' + THIS_RUN + ' test differences of every method, the baselines '
-             'included, mix the model changes, the corrected training data and changed test rows.\n')
+             'later runs fit every method on all development rows. So the v1 -> v2 change of the baselines '
+             '(ridge, HGB, kNN, plain MLP) comes from the protocol, not from the methods. Between v2 and v3 the data '
+             'were corrected (D15, H1) and the PI-NN changed (round 5); between v3 and ' + THIS_RUN
+             + (' only the data were corrected' if not dev3 else ' the data were corrected and the settings differ ('
+                + ', '.join(f'`{f}`' for f in dev3) + ')')
+             + f' (D16, D17; "{CHANGES_TITLE}"). Each correction replaced the training rows AND '
+             'the test rows of the regenerated configurations: v2 -> v3 also their number (`n_test`), v3 -> '
+             f'{THIS_RUN} the simulated values of the same samples ({_regen_test_clause(regen)}). So the v2 -> v3 '
+             f'and v3 -> {THIS_RUN} test differences of every method, the baselines included, mix any change of the '
+             'methods with the corrected training data and changed test targets'
+             + (f'; v3 -> {THIS_RUN} measures no model change.\n' if not dev3 else '.\n'))
     cvs = {r: prior[r].get('cv_headline') for r in have if prior[r].get('cv_headline') is not None}
     if cvs and len(head):
         cvs[THIS_RUN] = head
@@ -2988,28 +3034,160 @@ def runs_comparison(fh, head, prior):
                     rows.append(dict(scheme=sch, method=m, **{f'{r}_mpsp_mape': g(sel[r], 'mpsp_mape')
                                                              for r in allr if r in sel}))
         T = pd.DataFrame(rows)
+        later = [r for r in allr if r != 'v1']
         L.append('**Development CV** (fold-mean MPSP MAPE, %; v1 used the v1 protocol and settings, and the '
-                 f'development rows of v2 and {THIS_RUN} differ by the corrected data (section 1), so '
-                 'the CV estimates changed as well; each version\'s changes were designed and chosen on these '
-                 'development folds, so its numbers are post-selection estimates and the differences, above all '
-                 'LOFO and LOPO with only 4 and 7 held-out groups, are likely optimistic -- see '
-                 f'"Changes v1 -> v2 -> {THIS_RUN}"):\n')
+                 f'development rows of {_and(later)} differ by the corrected data (section 1; v3 -> {THIS_RUN}: '
+                 'the same samples, the values of the regenerated configurations corrected), so the CV estimates '
+                 'changed as well; each version\'s changes were designed and chosen on these development folds, '
+                 'so its numbers are post-selection estimates'
+                 + (f' ({THIS_RUN} changed only the data and is as post-selection as v3)' if not dev3 else '')
+                 + ' and the differences, above all LOFO and LOPO with only 4 and 7 held-out '
+                 f'groups, are likely optimistic -- see "{CHANGES_TITLE}"):\n')
         L.append(md_table(T, pct_cols=tuple(c for c in T if c.endswith('_mpsp_mape'))) + '\n')
     return '\n'.join(L)
 
 
-def changelog(ctx, plan=None):
+def settings_vs_v3(ctx, plan=None):
+    """CLI flags by which this run's model, protocol and HPO settings differ
+    from those of the v3 run (the pipeline defaults since round 5); [] if
+    none."""
+    mk, lk = ctx.get('mk_extra') or {}, ctx.get('lk_extra') or {}
+    down = bool((ctx.get('spec_kw') or {}).get('downstream'))
+    return [flag for off, flag in (
+        (not down, '--no-downstream'),
+        (down and not mk.get('water_gate'), '--no-water-gate'),
+        (mk.get('channel_inputs') is None, '--no-masking'),
+        (mk.get('channel_inputs') == 'physics', '--v1-g-inputs'),
+        (not mk.get('r_structure'), '--no-r-structure'),
+        (down and not mk.get('fs_prior'), '--no-extrapolation-safeguards'),
+        (down and not mk.get('power_gate'), '--no-power-gate'),
+        (not mk.get('clip_exempt'), '--no-clip-exempt'),
+        (bool(mk.get('fs_b_only')), '--fs-b-only'),
+        (lk.get('ch_space') != 'surface', '--v2-channel-loss'),
+        (not ctx.get('target_mask'), '--no-target-mask'),
+        ((ctx.get('protocol') or PROTOCOL)['name'] != 'v2', '--v1-protocol'),
+        (float((plan or {}).get('hpo_lopo_weight', 0.) or 0.) > 0, '--hpo-lopo-weight')) if off]
+
+
+def changelog(ctx, plan=None, info=None):
     """Markdown section: what changed between the runs that used the frozen
-    test split (v1 -> v2 -> THIS_RUN) and why (development evidence only;
-    details in DESIGN.md section 6, rounds 4 and 5)."""
-    L = [f'## Changes v1 -> v2 -> {THIS_RUN} (development-set evidence only)\n',
-         'Each change was chosen on the development set (paired over seeds or draws, test split never used); '
-         'DESIGN.md section 1 (data corrections, known data defects) and section 6 ("Development-set '
-         'diagnostics", rounds 4 and 5) have the full evidence. Each model change has a CLI flag that restores '
-         'the behaviour of the previous version. "Seed t" below is a t over training seeds on fixed folds: it '
-         'measures seed noise only, not whether a new configuration, feedstock or product benefits; the '
-         'fold-level statistics (seeds averaged per fold, paired over folds) answer that.\n']
-    return '\n'.join(L) + '\n' + changes_since_v1(ctx) + '\n' + changes_v2_v3(ctx, plan)
+    test split (ALL_RUNS) and why (development evidence only; details in
+    DESIGN.md section 1 and section 6, rounds 4 and 5). ``info``: see
+    :func:`changes_v3_v4`."""
+    L = [f'## {CHANGES_TITLE} (development-set evidence only)\n',
+         'Each change was chosen on the development set (paired over seeds or draws, test split never used); the '
+         'data corrections (v2 -> v3, v3 -> ' + THIS_RUN + ') fix simulation defects and were verified on '
+         'development rows only. DESIGN.md section 1 (data corrections, known data defects) and section 6 '
+         '("Development-set diagnostics", rounds 4 and 5) have the full evidence. Each model change has a CLI '
+         'flag that restores the behaviour of the previous version. "Seed t" below is a t over training seeds on '
+         'fixed folds: it measures seed noise only, not whether a new configuration, feedstock or product '
+         'benefits; the fold-level statistics (seeds averaged per fold, paired over folds) answer that.\n']
+    return ('\n'.join(L) + '\n' + changes_since_v1(ctx) + '\n' + changes_v2_v3(ctx, plan) + '\n'
+            + changes_v3_v4(ctx, plan, info))
+
+
+#: report text (changelog v3 -> v4): the effect of the D16 / D17
+#: corrections on the data (development samples only; DESIGN.md section 1,
+#: "Known data defects" D16 / D17 and "Data set")
+D16_D17_EFFECTS = (
+    '1. **D17, the anaerobic IC reactor of the wastewater treatment counted its biogas twice** (BioSTEAM\'s '
+    '`InternalCirculationRx`, default lumped method: it reacted a helper copy of the influent and degassed it '
+    'into the biogas, then degassed the reacted waste and effluent into it again; every HP and TAL '
+    'configuration, ethanol_sugarcane, '
+    'IBO_EtOH_corn and oxalic_neutral_sugarcane). The boiler burned methane that was never produced, so the '
+    'steam / power credit was too high and the MPSP too low, most where the wastewater load is high (corn, '
+    'corn stover, low yields). Harness v4 applies the runtime correction `ic_biogas` '
+    '(`data_generation/biosteam_fixes.py`; BioSTEAM itself is unchanged) in every campaign process and records '
+    'it in every sample (`biosteam_fixes`); older samples of these configurations are rejected '
+    '(`unpatchable_D17`). Verified: the reactor\'s mass balance closes (HP_neutral_cornstover baseline: -45 '
+    'kg/h on an 829 t/h inlet, before +18.5 t/h) and the biogas halves. Regenerated vs. v3 rows at identical '
+    'TY points (development samples; median per configuration): HP glucose +0.7-0.9 %, HP sugarcane +1.0-1.2 %, '
+    'HP corn +5.4-6.4 %, HP corn stover +7.5-10.0 % (5-95 %: 2.1-15.7), TAL_SA_glucose +0.9 %, TAL_glucose '
+    '+2.1 %, TAL_SA_corn +3.6 %, TAL_corn +7.9 %, TAL_SA_cornstover +6.7 %, TAL_cornstover +12.2 %, '
+    'ethanol_sugarcane +3.4 % (up to 18 % at the lowest yields), IBO_EtOH_corn +0.57 %, oxalic < 0.01 %; b′ '
+    '(median over samples) +9.5-22 % for HP and TAL on corn and corn stover and +11 % for ethanol_sugarcane '
+    '(the phantom gas grew as the yield fell), within ±2 % on glucose and sugarcane.',
+    '2. **D16, TAL_SA_sugarcane fed the juice recycle to the cane mill twice** (a duplicate `ins.append` in '
+    'the Bioindustrial-Park system file; the six other TAL systems comment it out): its fermentation received '
+    '1.088 x the sugar the cane holds, now 0.946 as the other sugarcane configurations '
+    '(`tables/sugar_balance_check.csv`). Fixed on the fi-TAL branch (`data_generation/bip_patches/fi-TAL.patch`); '
+    'TAL adapter v3 for this configuration, its maximum-titer line recalibrated on the corrected system (679 y '
+    '- 1.3 g/L, before 614 y - 0.6); older rows rejected (`unpatchable_D16`). With D17, the regenerated '
+    'samples\' fitted MPSP at the baseline point is +4.0 % (median; 2.7-5.2 %) and b′ +11.9 % above the v3 '
+    'rows.',
+    '3. **Unchanged**: the 14 configurations without an IC reactor (lactic, succinic, ethanol corn and corn '
+    'stover; identical rows), the seeds, sample plans and TY designs, the quality-filter rejections (the same '
+    '23 lactic samples) and the frozen split (the same sample ids). Isobutanol: 14 of its development samples '
+    'changed their feedstock composition slightly (up to 0.027 mass fraction; the history-dependent starch '
+    'setter, open defect D10).')
+
+
+def changes_v3_v4(ctx, plan=None, info=None):
+    """Markdown subsection: what changed between v3 and THIS_RUN -- the
+    training data only (the D16 / D17 simulation corrections of the final
+    review of v3); the model, protocol and search settings are compared with
+    v3's. ``info``: dict(regen=``report_checks.regenerated_rows``, n_samples, n_points,
+    n_dev, n_dev_configs, n_configs, fit_mape_median, data_hash, selected (this run),
+    prior (v3 tables of :func:`load_run_tables`))."""
+    import numpy as np
+    info = info or {}
+    regen, v3 = info.get('regen'), (info.get('prior') or {}).get('selected_hyperparameters') or {}
+    dev3 = settings_vs_v3(ctx, plan)
+    fmt = lambda v: ('' if v is None else (f'{v:,}'.replace(',', ' ') if v >= 10000 else str(v))
+                     if isinstance(v, (int, np.integer)) else str(v))
+    L = [f'### v3 -> {THIS_RUN} (data corrections D16 / D17 only)\n',
+         '**Data** (simulation defects found by the final review of v3; DESIGN.md section 1, "Data corrections", '
+         '"Known data defects" D16 / D17 and "Data set"). Both were fixed at the source and the affected '
+         'configurations regenerated with the seeds, sample plans and TY designs of `run_all.sh`; the corrected '
+         'rows replace the defective ones in training and in the test split. The simulation checks that found '
+         'them and define the affected configurations (`data_generation/sim_checks.py`, '
+         '`data_generation/checks/`) re-simulate every configuration, the test configurations included, at '
+         'baseline parameters (not their recorded rows), and the correction applies by configuration to every '
+         'configuration with the defect; every number below is from development samples.\n']
+    L += list(D16_D17_EFFECTS)
+    if regen:
+        L.append(f'4. **Rows**: {fmt(regen["n"])} samples of {regen["n_configs"]} configurations regenerated '
+                 f'(harness v4): {fmt(regen["dev"])} of the {fmt(regen["n_dev"])} development samples, '
+                 f'{_regen_test_clause(regen)}. Data hash {V3_RUN["data_hash"]} -> '
+                 f'{info.get("data_hash", "?")}; {fmt(V3_RUN["n_samples"])} -> {fmt(info.get("n_samples"))} '
+                 f'samples, {fmt(V3_RUN["n_points"])} -> {fmt(info.get("n_points"))} feasible points; development '
+                 f'set {fmt(V3_RUN["n_dev"])} -> {fmt(info.get("n_dev"))} samples ({V3_RUN["n_dev_configs"]} -> '
+                 f'{info.get("n_dev_configs")} configurations); median fit MAPE of the samples '
+                 f'{100 * V3_RUN["fit_mape_median"]:.2f} -> '
+                 + (f'{100 * info["fit_mape_median"]:.2f} %.' if info.get('fit_mape_median') is not None
+                    else '? %.'))
+    L.append('')
+    # model / protocol / search
+    p3 = v3.get('plan') or {}
+    pdiff = [f'`{k}` {p3.get(k)} -> {(plan or {}).get(k)}' for k in PLAN_KEYS
+             if p3 and k in p3 and (plan or {}).get(k) != p3.get(k)]
+    sel, sel3 = info.get('selected') or {}, v3.get('selected') or {}
+    sdiff = [f'{k} {sel3.get(k)} -> {sel.get(k)}' for k in sorted(set(sel) | set(sel3)) if sel.get(k) != sel3.get(k)]
+    differs = bool(dev3) or CODE_VERSION != V3_RUN['code_version'] or bool(pdiff)
+    same = not differs and bool(p3)
+    L.append('**Model, training protocol and hyperparameter search: '
+             + ('NOT identical to v3**' if differs else 'unchanged**' if same else
+                'settings unchanged, plan not compared**') + ' (round-5 settings, code version '
+             f'{CODE_VERSION}' + ('' if CODE_VERSION == V3_RUN['code_version'] else
+                                   f' (v3: {V3_RUN["code_version"]})')
+             + (f'; this run differs from v3 by {", ".join(f"`{f}`" for f in dev3)}' if dev3 else '')
+             + ('; the same seed, deterministic folds, search candidates and criterion' if same else '')
+             + (f'; plan differences from v3: {"; ".join(pdiff)}' if pdiff else
+                ('' if p3 else '; v3 plan not found (`results/v3/tables/selected_hyperparameters.json`)'))
+             + '). The HPO was re-run on the corrected development rows and '
+             + ((('selected the same hyperparameters as v3.' if not sdiff else
+                  'selected different hyperparameters from v3: ' + '; '.join(sdiff) + '.')) if sel3 else
+                'its selection is in section 4 (v3 selection not found).') + '\n')
+    L.append(f'**Reading the v3 -> {THIS_RUN} differences.** The targets themselves changed for '
+             + (f'{regen["n_configs"]} of the {info.get("n_configs") or "?"}' if regen else 'the regenerated')
+             + ' configurations (a higher '
+             'MPSP, a larger b′ on corn and corn stover), in training and in every held-out fold and test set, so '
+             f'the v3 -> {THIS_RUN} changes of the CV and test errors of every method, the baselines included, '
+             'measure how well the methods learn the corrected data, not a model improvement (the MAPE '
+             f'denominators changed as well). The v3 checkpoints (`results/v3`) learned the D16 / D17 bias (MPSP '
+             f'about 1-13 % low at the baseline point for HP and TAL); {THIS_RUN} replaces them whatever the '
+             'comparison shows.\n')
+    return '\n'.join(L)
 
 
 def changes_since_v1(ctx):
@@ -3102,17 +3280,18 @@ def changes_since_v1(ctx):
 
 
 def changes_v2_v3(ctx, plan=None):
-    """Markdown subsection: what changed between v2 and THIS_RUN and why --
-    the data corrections of the final review of v2 and the round-5 model
-    changes (development evidence only; DESIGN.md section 1 and section 6,
-    round 5)."""
+    """Markdown subsection: what changed between v2 and v3 and why -- the
+    data corrections of the final review of v2 and the round-5 model changes
+    (development evidence only; DESIGN.md section 1 and section 6, round 5).
+    The "Not used in this run" marks refer to the run that writes the report
+    (THIS_RUN keeps the round-5 settings)."""
     mk = ctx.get('mk_extra') or {}
     lk = ctx.get('lk_extra') or {}
     tm = ctx.get('target_mask') or {}
     w_lopo = float((plan or {}).get('hpo_lopo_weight', 0.) or 0.)
     on = lambda b, flag: '' if b else f' **Not used in this run (`{flag}`).**'
     masked = '; '.join(f"{k}: {', '.join(v)}" for k, v in tm.items()) or 'none'
-    L = [f'### v2 -> {THIS_RUN} (data corrections and round 5)\n',
+    L = ['### v2 -> v3 (data corrections and round 5)\n',
          '**Data** (defects found by the final review of v2; DESIGN.md section 1, "Data corrections" and "Known '
          'data defects"). The corrected rows replace the defective ones in training and in the test split: '
          '1550 -> 1600 samples (TAL 185 -> 232, succinic 141 -> 144), development set 1306 -> 1353.\n',
@@ -3184,7 +3363,7 @@ def changes_v2_v3(ctx, plan=None):
          ROUND5_RECHECK,
          '**Post-selection caveat.** The round-5 options were designed and selected on the same deterministic '
          'development folds as this report\'s CV (first on the v2 rows, then re-checked on the corrected rows), '
-         'so the CV estimates of this run are post-selection like v2\'s; the v2 -> ' + THIS_RUN + ' differences of '
+         'so the CV estimates of v3 and later runs are post-selection like v2\'s; the v2 -> v3 differences of '
          'the CV tables also include the data corrections (the development rows changed). Fresh folds do not '
          'exist for LOFO and LOPO.\n',
          '']
@@ -3728,10 +3907,10 @@ def ad_section(ad, per):
     return '\n'.join(L)
 
 
-def test_reuse_notice(ctx, plan=None):
-    """Markdown notice of the report: the third use of the frozen test split
+def test_reuse_notice(ctx, plan=None, regen=None):
+    """Markdown notice of the report: the fourth use of the frozen test split
     (THIS_RUN after PRIOR_RUNS), what changed in between and why the test
-    numbers are optimistic."""
+    numbers are optimistic. ``regen``: ``report_checks.regenerated_rows``."""
     mk = ctx.get('mk_extra') or {}
     model = [lab for on, lab in (
         ((ctx.get('lk_extra') or {}).get('ch_space') == 'surface',
@@ -3742,28 +3921,42 @@ def test_reuse_notice(ctx, plan=None):
         (bool(mk.get('clip_exempt')), 'never clipping the exact final-product stoichiometric ratio'),
         (float((plan or {}).get('hpo_lopo_weight', 0.) or 0.) > 0,
          'leave-one-product-out folds in the HPO criterion')) if on]
+    dev3 = settings_vs_v3(ctx, plan)
+    prior = [r for r, _ in PRIOR_RUNS]
     prov = '; '.join(f'{r}: {p}, `results/{r}/`' for r, p in PRIOR_RUNS)
-    return ('> **Third use of the frozen test split.** This is the third run of the pipeline that evaluates on the '
-            f'frozen test split (`split.json`, unchanged): {THIS_RUN}, after v1 and v2 ({prov}; each folder keeps '
-            'that run\'s report and headline tables). Between the runs the pipeline was changed on development-set '
-            'evidence only: v1 -> v2 the training protocol and the model (DESIGN.md section 6, round 4); v2 -> '
-            f'{THIS_RUN} the training data, by the data corrections found by the final review of v2 (D15: the '
-            'succinic neutral configurations never simulated the salt formation, acidulation and gypsum '
-            'filtration, regenerated; H1: 47 TAL_SA samples lost to a failed simulator reset, re-run; DESIGN.md '
-            'section 1)'
+    return (f'> **{TEST_USE.capitalize()} use of the frozen test split.** This is the {TEST_USE} run of the '
+            f'pipeline that evaluates on the frozen test split (`split.json`, unchanged): {THIS_RUN}, after '
+            f'{_and(prior)} ({prov}; each folder keeps that run\'s report and headline tables). Between the runs '
+            'the pipeline was changed on development-set evidence only: v1 -> v2 the training protocol and the '
+            'model (DESIGN.md section 6, round 4); v2 -> v3 the training data, by the data corrections found by '
+            'the final review of v2 (D15: the succinic neutral configurations never simulated the salt formation, '
+            'acidulation and gypsum filtration, regenerated; H1: 47 TAL_SA samples lost to a failed simulator '
+            'reset, re-run; DESIGN.md section 1)'
             + (', and the model (round 5, DESIGN.md section 6: ' + '; '.join(model) + ')' if model else '')
-            + f'; summary in "Changes v1 -> v2 -> {THIS_RUN}" below. No test sample was used to fit, tune, select '
-            'or calibrate anything. But the test results of v1 and v2 had been seen: the v1 results set the '
-            'round-4 agenda, and the review that found the v2 -> ' + THIS_RUN + ' data defects and set the '
-            'round-5 agenda read the v2 report, test results included. The test split is therefore an '
-            f'adaptively re-used hold-out: the {THIS_RUN} test MAPE and the v1 -> v2 -> {THIS_RUN} test changes are '
-            'likely optimistic and are not an independent confirmation of the changes. The data corrections also '
-            'replace the test rows of the regenerated configurations, so the test sets of v2 and '
-            f'{THIS_RUN} are not identical (`n_test` below). The primary evidence is the development CV and its '
-            'matched LOCO estimate of the OOD test (themselves optimistic after selection). '
+            + f'; v3 -> {THIS_RUN} '
+            + ('ONLY the training data' if not dev3 else
+               'the training data, and the settings (' + ', '.join(f'`{f}`' for f in dev3) + ')')
+            + ', by the simulation corrections found by the final review of v3 (D16: the TAL_SA_sugarcane system '
+            'fed the juice recycle to the cane mill twice; D17: BioSTEAM\'s anaerobic IC reactor of the '
+            'wastewater treatment counted its biogas twice, in every HP and TAL configuration, ethanol_sugarcane, '
+            'IBO_EtOH_corn and oxalic_neutral_sugarcane; the 27 affected configurations regenerated; DESIGN.md '
+            'section 1)' + ('; the model, training protocol and hyperparameter search are those of v3, the HPO '
+                            're-run on the corrected rows' if not dev3 else '')
+            + f'; summary in "{CHANGES_TITLE}" below. No test sample was used to fit, tune, select or calibrate '
+            f'anything. But the test results of {_and(prior)} had been seen: the v1 results set the round-4 '
+            'agenda, the review that found the v2 -> v3 data defects and set the round-5 agenda read the v2 '
+            'report, and the final review that found D16 and D17 read the v3 report, test results included. '
+            f'The test split is therefore an adaptively re-used hold-out: the {THIS_RUN} test MAPE and the '
+            f'{" -> ".join(ALL_RUNS)} test changes are likely optimistic and are not an independent '
+            'confirmation of the changes. The data corrections also replace the test rows of the regenerated '
+            'configurations: v2 -> v3 changed the test sets (`n_test` below), and v3 -> ' + THIS_RUN
+            + f' corrected the simulated values of {_regen_test_clause(regen)} (the same sample ids), so no two '
+            'runs since v2 are scored on identical test targets. The primary evidence is the development CV and '
+            'its matched LOCO estimate of the OOD test (themselves optimistic after selection). '
             f'{THIS_RUN} was fixed before its test evaluation (code version, protocol and settings in '
-            f'`plan.json`) and is the released model whatever the comparison with v1 / v2 shows; that comparison '
-            'is not used to choose a version. The v1 release intervals had been calibrated partly on the test '
+            f'`plan.json`) and is the released model whatever the comparison with {" / ".join(prior)} shows: '
+            'that comparison is not used to choose a version, and the v3 checkpoints carry the D16 / D17 bias of '
+            'their training data. The v1 release intervals had been calibrated partly on the test '
             'configurations, which v2 and later no longer do.\n')
 
 
@@ -3799,7 +3992,23 @@ def publication_notes(pub, samples=None):
                  'identified (the Bioindustrial-Park patches change no process value, '
                  '`data_generation/bip_patches/README.md`); the productivity conclusions for HP carry this '
                  'uncertainty.')
+    from fermentation_insights.coeff_predictor import report_checks as RC
+    d17 = RC.corrected_configs(samples)
+    if d17 and 'b_ratio' in pub:
+        on, rest = cid.isin(d17), ~cid.isin(d17)
+        rng = lambda m: (f'{pub.loc[m, "b_ratio"].min():.2f}-{pub.loc[m, "b_ratio"].max():.2f} x (median '
+                         f'{_nanmedian(pub.loc[m, "b_ratio"]):.2f})')
+        if on.any() and pub.loc[on, 'b_ratio'].notna().any():
+            L.append(f'The {int(on.sum())} of these configurations regenerated with the D17 correction (harness v4; '
+                     'DESIGN.md section 1) no longer burn the biogas that BioSTEAM\'s anaerobic IC reactor counted '
+                     "twice, which the publication's modules very likely did as well"
+                     + (', and TAL_SA_sugarcane no longer feeds its mill the juice recycle twice (D16)'
+                        if 'TAL_SA_sugarcane' in set(cid[on]) else '')
+                     + ': their b′ is ' + rng(on) + " the publication's"
+                     + (', the other configurations\' ' + rng(rest) if rest.any() and pub.loc[rest, 'b_ratio'].notna().any()
+                        else '') + ' (the correction raises b′ most on corn and corn stover).')
     return ' '.join(L)
+
 
 
 def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
@@ -3846,8 +4055,9 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       f'models (protocol `{protocol["name"]}`, section 3). (2) *Final-test estimate*: the selected PI-NN '
       f'ensemble ({plan["final_members"]} members, `models/final_dev`) and the baselines, trained once on the whole '
       'development set and evaluated on the frozen test split. No test sample was used to fit, tune, select or '
-      'calibrate anything, but the test results of the earlier runs (v1, v2) were seen before this run was '
-      'designed, so the test split is a re-used hold-out (notice below). '
+      'calibrate anything, but the test results of the earlier runs ('
+      + ', '.join(r for r, _ in PRIOR_RUNS) + ') were seen before this run was designed, so the test split is a '
+      're-used hold-out (notice below). '
       f'(3) *Release model*: {plan["release_members"]}-member PI-NN ensemble with the same hyperparameters and '
       'procedure trained on ALL data '
       '(`models/release`); it has no independent test estimate -- the CV and final-test numbers are the estimates '
@@ -3855,7 +4065,12 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       'MPSP over the held-out samples\' simulated TY points; '
       '"fit MAPE" is the irreducible error of the per-sample 4-coefficient fit on the same points.\n')
     v1 = checks.get('v1') or {}
-    P(test_reuse_notice(ctx, plan))
+    prior = checks.get('prior') or {'v1': v1}
+    from fermentation_insights.coeff_predictor import report_checks as RC
+    regen = RC.regenerated_rows(D.get('samples'), dev['sample_id'],
+                                [c['config_id'] for c in sp.get('test_configs', [])])
+    dev3 = settings_vs_v3(ctx, plan)
+    P(test_reuse_notice(ctx, plan, regen))
     # summary
     head, fh = cv['headline'], fin['headline']
     P('## Summary\n')
@@ -3946,8 +4161,14 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         if summ:
             P(summ)
     P('')
-    P(runs_comparison(fh, head, checks.get('prior') or {'v1': v1}))
-    P(changelog(ctx, plan))
+    P(runs_comparison(fh, head, prior, regen, dev3))
+    fmm = pd.to_numeric(D['samples'].get('fit_mape'), errors='coerce') if 'fit_mape' in D['samples'] else None
+    P(changelog(ctx, plan, dict(
+        regen=regen, data_hash=ctx.get('data_hash'), n_samples=len(D['samples']), n_points=len(D['points']),
+        n_dev=len(dev), n_dev_configs=int(dev['config_id'].nunique()),
+        n_configs=int(D['samples']['config_id'].nunique()),
+        fit_mape_median=float(np.nanmedian(fmm)) if fmm is not None and fmm.notna().any() else None,
+        selected=(hpo or {}).get('selected'), prior=prior.get('v3') or {})))
     # data
     ds = checks['data_summary']
     rep = D['report']
@@ -4006,9 +4227,12 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
              'sugar losses before fermentation). ' if len(ok) else '')
           + ('MORE sugar fed than the feedstock holds (> 1.01): ' + '; '.join(
               f'`{x.config_id}` {x.ratio_min:.4f}-{x.ratio_max:.4f}' for x in ex.itertuples())
-             + ' -- known data defect D16 (DESIGN.md section 1: the TAL_SA_sugarcane system appends the juice '
-             'recycle to the crushing mill a second time; the defect is in the data and is not corrected).'
-             if len(ex) else 'None exceeds 1.01.') + '\n')
+             + ' -- a mass-balance defect of the process model, like D16 (DESIGN.md section 1: the '
+             'TAL_SA_sugarcane system of the v3 data appended the juice recycle to the crushing mill a second '
+             'time, 1.088; corrected and regenerated since).'
+             if len(ex) else 'None exceeds 1.01 (the v3 data had TAL_SA_sugarcane at 1.088: data defect D16, its '
+             'system fed the juice recycle to the crushing mill twice; corrected and regenerated since, DESIGN.md '
+             'section 1).') + '\n')
     cov = checks.get('data_coverage')
     if cov is not None and len(cov):
         short = cov[(cov['retained'] < cov['planned'].fillna(0)) | (cov['empty_reset_failed'] > 0)]
@@ -4016,7 +4240,7 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           'random samples of `data_generation/scripts/run_all.sh`, completed = `sample_end` written, '
           '`empty_reset_failed` = completed without any simulated point because the system state could not be '
           'restored after a convergence failure -- a defect of the harness of the earlier data, fixed before '
-          'this run (such samples are retried and were re-run, H1); retained = after the quality filters). '
+          'the v3 run (such samples are retried and were re-run, H1); retained = after the quality filters). '
           + (f'{len(short)} of {len(cov)} configurations keep fewer samples than planned:\n' if len(short)
              else 'Every configuration keeps its planned samples.\n'))
         if len(short):
@@ -4123,9 +4347,9 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       'Caveats: the HPO selected the hyperparameters on this development set and is not nested in the CV; and '
       'the leave-one-configuration-out, -feedstock-out, -product-out and productivity folds are deterministic '
       f'(random CV: seed {a.seed}), so they are the folds on which rounds 4 and 5 diagnosed and selected the v2 and '
-      f'{THIS_RUN} changes -- post-selection estimates, optimistic, most of all leave-one-feedstock-out (4 folds) and '
-      'leave-one-product-out (7 folds), whose v1 -> v2 gains are not established at the fold level ("Changes '
-      f'v1 -> v2 -> {THIS_RUN}").\n')
+      f'v3 changes ({THIS_RUN} changed only the training data) -- post-selection estimates, optimistic, most of all '
+      'leave-one-feedstock-out (4 folds) and leave-one-product-out (7 folds), whose v1 -> v2 gains are not '
+      f'established at the fold level ("{CHANGES_TITLE}").\n')
     cols = ['scheme', 'method', 'n_folds_common', 'mpsp_mape', 'mpsp_mape_se', 'mpsp_mape_median', 'mpsp_mape_pooled',
             'fit_mape'] + [f'R2_{k}' for k in TARGETS]
     P(md_table(head[cols], pct_cols=('mpsp_mape', 'mpsp_mape_se', 'mpsp_mape_median', 'mpsp_mape_pooled',
@@ -4790,6 +5014,16 @@ def main(argv=None):
     rpath = write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, made, timings)
     log(f'figures: {len(made)} written{"; errors: " + str(figure_errors) if figure_errors else ""}')
     log(f'report: {rpath}')
+    if not a.quick and os.path.realpath(a.out) == os.path.realpath(DEFAULT_RESULTS):
+        # the generated accuracy block of README.md quotes these tables (tests/test_readme_numbers.py);
+        # the figures quoted in the README prose are checked by that test, not rewritten
+        try:
+            from fermentation_insights.coeff_predictor import report_checks as RC
+            log('README.md accuracy block '
+                + ('updated' if RC.update_readme(os.path.join(PKG_DIR, 'README.md'), tdir) else 'unchanged'))
+        except Exception as e:
+            log(f'README.md accuracy block NOT updated ({type(e).__name__}: {e}); run '
+                'python -m fermentation_insights.coeff_predictor.report_checks')
     log(f'===== done in {(time.time() - t_start) / 60:.1f} min (stages: '
         + ', '.join(f'{k} {v / 60:.1f}' for k, v in stage_t.items()) + ' min)')
     return 0

@@ -85,9 +85,10 @@ before that (v2) still carry them. D16 and D17 were found in the final data
 review (round 4, 2026-10-18); they are in the training data of the v3
 models (`results/v3`) and were fixed afterwards by regenerating the 27
 affected configurations (2026-10-18; harness v4, TAL adapter v3; "Data
-set" below). The v3 pipeline trains on the D15 / H1-corrected
-data and masks the D8-affected feedstock-channel targets in the loss (§6,
-round 5).
+set" below). The v3 pipeline trained on the D15 / H1-corrected data; the
+v4 pipeline (the shipped checkpoints; model, protocol and search of v3)
+trains on the D15 / H1 / D16 / D17-corrected data. Both mask the
+D8-affected feedstock-channel targets in the loss (§6, round 5).
 
 Disclosure (test split, data verification only): while verifying the D15
 regeneration and the D8 identity, the data work of round 5 read recorded
@@ -363,7 +364,7 @@ other 87 rise by +0.45 to +0.74 % (median of the sample's points; median
 9.8 kg/h) reproduces its 5242 stored MPSPs to 3.5e-5. The MPSP and
 coefficient changes of the regenerated configurations are in D16 / D17
 ("Known data defects"). The v3 models and report (`results/v3`) were
-trained on the tables before this regeneration.
+trained on the tables before this regeneration; the v4 run trains on these.
 
 #### Previous data set (regeneration of 2026-10-17; v3 models)
 
@@ -880,8 +881,11 @@ so a predicted natural-gas intensity can be negative where the fitted
 targets are (`models/release/meta.json` → `constraint_report`,
 `loss_config`).
 
-**Settings of the v3 pipeline and the shipped checkpoints**
-(`models/release/meta.json` → `loss_config`): channel term in surface space
+**Settings of the v3 / v4 pipeline and the shipped checkpoints**
+(`models/release/meta.json` → `loss_config`; the HPO-selected values below,
+`w_mpsp`, `w_phys` and the collocation ratio, are the v3 selection, and the
+v4 run re-runs the same search on the corrected data: REPORT.md section 4
+and the checkpoint have the shipped values): channel term in surface space
 (`ch_space='surface'`) with the total in coefficient space
 (`coef_space='coef'`), `w_ch = 3` (fixed, chosen on out-of-fold channel
 fidelity, §6 round 5), `w_mpsp = 0.3`, `w_tot = w_g = 1`, `w_phys = 0.03`,
@@ -1098,7 +1102,13 @@ price, so prices outside the training range are reported separately.
   v2 → v3 data defects and set the round-5 agenda had read the v2 report,
   test results included, so the v3 test numbers are likewise optimistic;
   the data corrections also replaced the test rows of the regenerated
-  configurations (REPORT.md notice). It is **frozen** in
+  configurations (REPORT.md notice). The v4 run is its fourth use: v3 → v4
+  changed only the training data (the simulation corrections D16 / D17,
+  §1, found by the final review of v3, which had read the v3 report, test
+  results included; the model, protocol and search are v3's), and the
+  corrected rows replace the test rows of the regenerated configurations
+  (among them the held-out HP_corn and TAL_sugarcane); v4 is released
+  whatever its comparison with v1-v3 shows. It is **frozen** in
   `results/split.json` (committed 2026-10-16, before any modelling) from the
   41 *planned* configurations (`experiments.PLANNED_CONFIGS`, = the adapters'
   `configurations()`) and the seed 2026 only, never from the data that
@@ -2519,6 +2529,22 @@ here:
    known-product folds only would match the intervals' stated target (a new
    configuration of a known product; coverage of the shipped quantiles on
    those folds: MPSP 0.90, g 0.87).
+
+**v4 run (data corrections D16 / D17 only).** The final review of v3 found
+two simulation defects (§1, D16 and D17); the 27 affected configurations
+were regenerated (harness v4, TAL adapter v3; "Data set" in §1) and the
+pipeline re-run with the code, protocol, settings and search of v3
+(`CODE_VERSION` 5: the fit-job semantics are unchanged, the new data hash
+keys the cache; the HPO re-runs the search on the same folds with v3's
+budget, which allowed the maximum of 16 candidates; the changelog lists any
+plan difference from v3).
+None of the open items above is adopted. The report's notice, the v1 / v2
+/ v3 / v4 headline tables and the changelog subsection "v3 -> v4" say how
+the corrected targets enter every comparison (`experiments.changes_v3_v4`,
+`report_checks.regenerated_rows`): the targets of 27 of the 41
+configurations changed in training and in every held-out set, so the v3 →
+v4 changes of the CV and test errors measure the corrected data, not a
+model change.
 
 ### Validation-design checks (final review, round 3; report only)
 

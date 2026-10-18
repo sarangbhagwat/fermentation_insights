@@ -13,20 +13,22 @@ structure. The design is documented in [DESIGN.md](DESIGN.md); § below
 refers to its sections.
 
 > **Status of the numbers.** The figures in this README are those of the
-> **v3 run** ([`results/REPORT.md`](results/REPORT.md)). The shipped
-> checkpoints `models/release` and `models/final_dev` are the v3 models:
-> trained on the corrected data (D15, H1; DESIGN.md §1) with the round-5
-> settings (§2 below). The v1 and v2 reports are kept in `results/v1/` and
-> `results/v2/` as history only.
+> **v4 run** ([`results/REPORT.md`](results/REPORT.md)). The shipped
+> checkpoints `models/release` and `models/final_dev` are the v4 models:
+> trained on the corrected data (D15, H1 and D16, D17; DESIGN.md §1) with
+> the round-5 settings of v3 (§2 below; v3 -> v4 changed only the training
+> data). The v1, v2 and v3 reports are kept in `results/v1/`, `results/v2/`
+> and `results/v3/` as history only.
 
-**Accuracy at a glance** (v3 run; MPSP absolute percentage error over each
+**Accuracy at a glance** (v4 run; MPSP absolute percentage error over each
 held-out sample's simulated titer-yield points. The CV rows give its mean
 over the folds, in which each held-out configuration, feedstock or product
 counts once, and its value pooled over all held-out samples, which weights
 the configurations by their numbers of samples and is larger where the
 worst-predicted configurations are also the largest (leave-one-configuration-out:
 oxalic acid, isobutanol, ethanol); the final-test lines are pooled over the
-test samples. Generated from `results/tables` by
+test samples. Generated from `results/tables` at the end of a full run of
+`experiments.py`, or by
 `python -m fermentation_insights.coeff_predictor.report_checks`, checked by
 `tests/test_readme_numbers.py`):
 
@@ -52,13 +54,13 @@ intervals under-cover every TAL configuration, known or new, and new lactic
 configurations, the d′ intervals the lactic ones, and the others are
 over-covered (section 4.5). The model does not reproduce the economy of
 scale: it gives about half of the simulated MPSP change for a 2-3x larger
-plant (section 7). The training data of the shipped (v3) checkpoints
-understate the MPSP of the HP and TAL plants (and, slightly, of sugarcane
+plant (section 7). The shipped (v4) checkpoints train on the data
+regenerated with the D16 / D17 corrections (2026-10-18; the processed
+tables in git): the training data of the v3 checkpoints (`results/v3/`)
+understated the MPSP of the HP and TAL plants (and, slightly, of sugarcane
 ethanol and isobutanol) by about 1-13 % at the baseline point, because
-BioSTEAM's anaerobic wastewater reactor counts its biogas twice (data
-defect D17, section 7), and the checkpoints inherit that bias; the
-processed tables in git hold the data regenerated with the correction
-(2026-10-18), on which the next pipeline run trains. For a new feedstock or a new product family the PI-NN
+BioSTEAM's anaerobic wastewater reactor counted its biogas twice (data
+defect D17, section 7). For a new feedstock or a new product family the PI-NN
 is **not better than a nearest-configuration lookup** at the fold level,
 and its intervals are not calibrated (sections 4.2, 4.3, 7).
 
@@ -185,8 +187,9 @@ final-product stoichiometric ratio is never clipped by the input clipping
 leave-one-product-out failure for HP). The hyperparameter search keeps the
 v2 criterion (leave-configurations-out only; `--hpo-lopo-weight w` mixes in
 leave-one-product-out folds, not adopted). `--v2-model` restores the v2 model
-settings. The library defaults are unchanged. The v3 run trains on the
-corrected data (D15, H1; DESIGN.md §1) with these settings.
+settings. The library defaults are unchanged. The v3 and v4 runs use these
+settings, v3 on the D15 / H1-corrected data and v4 also on the D16 /
+D17-corrected data (DESIGN.md §1).
 
 ## 3. Installation
 
@@ -522,14 +525,13 @@ over configurations is 0.3 % for the feedstock, 0.7 % for electricity and
 0.3 % for natural gas. The exception is TAL: its feedstock-channel targets
 are masked in the loss (data defect D8), so its feedstock sensitivity comes
 from the product-blind feedstock head (relative error +22.4 % for TAL_corn
-on the test set). The largest in-sample error, +19.5 % for
-TAL_SA_sugarcane, is mostly a defect of that configuration's training data
-(D16, section 7; corrected in the regenerated data): its simulated cane mill
-received the juice recycle twice, so
-its fermentation gets about 15 % more sugar per kg cane than the other
-sugarcane configurations (more than the cane holds) and its simulated
-feedstock demand is too low, while the product-blind head predicts about
-the physical demand. Out of
+on the test set). The largest in-sample error of the v3 checkpoint, +19.5 %
+for TAL_SA_sugarcane, was mostly a defect of that configuration's training
+data (D16, section 7; corrected in the v4 training data): its simulated cane
+mill received the juice recycle twice, so its fermentation got about 15 %
+more sugar per kg cane than the other sugarcane configurations (more than
+the cane holds) and its simulated feedstock demand was too low, while the
+product-blind head predicted about the physical demand. Out of
 fold the errors are larger (REPORT.md section 5, per configuration): for a
 new configuration the electricity response is off by 112 % of MPSP for
 isobutanol (118 % in leave-one-product-out, 163 % in
@@ -797,12 +799,20 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   were fixed by regenerating those data, and round 5 changed the model on
   development evidence (DESIGN.md §6, round 5: channel loss, power gate,
   masked TAL feedstock targets (D8), no clipping of the stoichiometric
-  ratio). The v3 run uses the test split a third time and its report shows
-  v1, v2 and v3 side by side. Because the earlier test results were seen
-  before each next round was designed, the v2 and v3 test numbers (and the
-  changes between the runs) are likely optimistic and are not an
-  independent confirmation; the v2 -> v3 test changes also mix in the
-  corrected test rows of the regenerated configurations. The development CV
+  ratio). The v3 run (commit 2060257; [`results/v3/`](results/v3/README.md))
+  used the test split a third time. The final review of v3 found two
+  simulation defects (DESIGN.md §1: D16, the TAL_SA_sugarcane mill fed the
+  juice recycle twice; D17, BioSTEAM's anaerobic wastewater reactor counted
+  its biogas twice in all HP and TAL configurations, sugarcane ethanol,
+  isobutanol and sugarcane oxalic acid), fixed by regenerating the 27
+  affected configurations. The v4 run changes only the training data (model,
+  protocol and hyperparameter search of v3), uses the test split a fourth
+  time, and its report shows v1, v2, v3 and v4 side by side. Because the
+  earlier test results were seen before each next round was designed, the
+  v2, v3 and v4 test numbers (and the changes between the runs) are likely
+  optimistic and are not an independent confirmation; the v2 -> v3 and
+  v3 -> v4 test changes also mix in the corrected test rows of the
+  regenerated configurations. The development CV
   is the primary evidence, and it too is optimistic for the
   leave-one-feedstock-out and leave-one-product-out schemes, whose folds
   were used to design the changes (4 and 7 folds; at the fold level the
@@ -874,9 +884,10 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   shape (section 4.2). v3 is worse here than v2 (23.9 %): the power gate
   removed the corn-ethanol prediction's compensating wrong-sign electricity
   credit (corn fold 71.5 %), and the surface channel loss cost cellulosic
-  ethanol accuracy (REPORT.md "Changes v1 -> v2 -> v3").
-* **v3 trade-offs and open issues** (REPORT.md sections 5, 8 and "Changes
-  v1 -> v2 -> v3"; DESIGN.md §6, round 5):
+  ethanol accuracy (REPORT.md "Changes v1 -> v2 -> v3 -> v4").
+* **Round-5 trade-offs and open issues** (the settings of v3 and v4;
+  REPORT.md sections 5, 8 and "Changes v1 -> v2 -> v3 -> v4"; DESIGN.md §6,
+  round 5):
   - Ethanol is less accurate than in v2: leave-one-configuration-out
     ethanol_cornstover 38.9 % (kNN 18.4 %), ethanol_corn 19.5 %. A missed
     DDGS / corn-oil credit of corn ethanol is no longer offset by a
@@ -887,8 +898,9 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     acid are rough (section 4.6).
   - TAL's feedstock sensitivity is product-blind (its defective feedstock
     targets are masked, D8): +22.4 % for TAL_corn on the test set; the
-    +19.5 % for TAL_SA_sugarcane in-sample is mostly that configuration's
-    data defect D16 (section 4.6).
+    +19.5 % for TAL_SA_sugarcane in-sample of the v3 checkpoint was mostly
+    that configuration's data defect D16, corrected in the v4 training data
+    (section 4.6).
   - The saccharification mode (SHF vs. SSCF) of the lactic configurations
     is not an input: both modes get the same coefficients, and the model
     averages them. In-sample signed MPSP error of `models/release`
@@ -945,9 +957,9 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   floor (the PI-NN predicts random samples at 3.3 % in random CV, and adding
   the `bp_*` inputs makes the linear baseline worse).
 * **Sample coverage.** Some configurations keep fewer samples than planned
-  (REPORT.md section 1, `tables/data_coverage.csv`). The shipped (v3)
-  models train on the regenerated data of D15 and H1 (DESIGN.md §1, "Known
-  data defects"): `TAL_SA_glucose` and `TAL_SA_sugarcane` 29 / 29 samples
+  (REPORT.md section 1, `tables/data_coverage.csv`). The shipped (v4)
+  models train on the regenerated data of D15, H1, D16 and D17 (DESIGN.md
+  §1, "Known data defects"): `TAL_SA_glucose` and `TAL_SA_sugarcane` 29 / 29 samples
   (the v2 models had 1 and 10, after a failed simulator reset), the four
   `succinic_neutral` configurations 18 / 18 with the acidulation simulated.
   The lactic SSCF configurations lose a third of
@@ -972,8 +984,9 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     configurations, effect on the coefficients and status: DESIGN.md §1,
     "Known data defects"; D15 and H1 were fixed by regeneration after the v2
     models; D16 and D17, found in the final data review, are in the training
-    data of the shipped v3 checkpoints and were fixed by regeneration on
-    2026-10-18, so the processed tables in git no longer carry them):
+    data of the v3 checkpoints (`results/v3/`) and were fixed by
+    regeneration on 2026-10-18, so the processed tables in git and the
+    shipped v4 checkpoints no longer carry them):
 
     | id | configurations | defect | effect |
     |---|---|---|---|
@@ -983,7 +996,7 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     | D10 | isobutanol | starch-content setter depends on history | sampled and actual starch differ (corr. 0.87); moisture drifts 13-17 % |
     | D13 | oxalic | reagent costs in facilities | channel labels only |
     | D14 | oxalic | fermentation reaction creates mass; no aeration | physically invalid fermentation balance; `aerobic=True` misleading |
-    | D15 | succinic_neutral | v2 data: no salt formation simulated (module default `base_neutralizes_product=False`) | in the v2 models the downstream table claims acidulation and gypsum that the data lack; fixed by regeneration (adapter v3: MPSP +0.22 USD/kg vs. low pH); the v3 models train on the corrected data |
+    | D15 | succinic_neutral | v2 data: no salt formation simulated (module default `base_neutralizes_product=False`) | in the v2 models the downstream table claims acidulation and gypsum that the data lack; fixed by regeneration (adapter v3: MPSP +0.22 USD/kg vs. low pH); the v3 and v4 models train on the corrected data |
     | H1 | TAL_SA_glucose, TAL_SA_sugarcane | v2 data: samples after a failed reset recorded without points | fixed by regeneration (harness reload/`retry`, robust evaporator root search in the TAL adapter) |
     | D16 | TAL_SA_sugarcane | the Bioindustrial-Park system appends the juice recycle to the cane mill a second time, so its fermentation gets 15 % more sugar per kg cane than the other sugarcane configurations (more than the cane holds) | in the v3 training data: feedstock demand understated, MPSP about 1-6 % low (median ~3 %), b′ 9-12 % low; most of the +19.5 % in-sample feedstock-sensitivity error of the v3 checkpoints (section 4.6). Fixed by regeneration (2026-10-18; fi-TAL fix, TAL adapter v3): sugar fed / cane sugar 0.946 as in the other sugarcane configurations; with D17, MPSP +4 % and b′ +12 % vs. the v3 rows |
     | D17 | all HP and TAL, ethanol_sugarcane, IBO_EtOH_corn (the systems with BioSTEAM's `InternalCirculationRx`; oxalic_neutral_sugarcane has one too, with no effect) | the anaerobic IC reactor of the wastewater treatment counts its biogas twice (BioSTEAM, `method='lumped'`), and the boiler burns the phantom methane | in the v3 training data: MPSP too low at the baseline by 1-5 % (HP; corn stover 4-5 %), 1-13 % (TAL; corn stover 7-13 %), 0.9 % (ethanol_sugarcane; up to 10 % at low yield) and 0.6 % (IBO); the bias depends on the yield, so b′ (up to 20 % low for corn and corn stover) and the electricity / natural-gas intensities are biased. Fixed by regeneration (2026-10-18): harness v4 applies the runtime correction `data_generation/biosteam_fixes.py`; the regenerated rows are 0.6-12 % higher than the v3 rows at the same TY points (median per configuration; oxalic unchanged; up to 21 % at low yields on corn stover), b′ 9-22 % higher on corn and corn stover |
@@ -1001,7 +1014,7 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
 | data | in git | size | needed for |
 |---|---|---|---|
 | checkpoints `models/release`, `models/final_dev` | yes | 5 MB | predictions (the API needs nothing else) |
-| processed tables `data/processed/{samples,points,configs}.csv.gz` (+ `report.json`, `experiments_fingerprint.json`: build statistics and the raw files they were built from) | yes | 11 MB | retraining, re-running `experiments.py` (data hash `ae69af98b3ba4561`: the data regenerated on 2026-10-18 with D16 / D17 corrected, logged by `experiments.py` and checked by `tests/test_shipped_data.py`; the v3 run in `results/v3` and the current checkpoints were trained on the tables before it, data hash `c345efda41c4fdca`, in git history up to commit 85ec2b4), the checkpoint-verification tests (`tests/test_serving_consistency.py`, `tests/test_user_api_robustness.py`) |
+| processed tables `data/processed/{samples,points,configs}.csv.gz` (+ `report.json`, `experiments_fingerprint.json`: build statistics and the raw files they were built from) | yes | 11 MB | retraining, re-running `experiments.py` (data hash `ae69af98b3ba4561`: the data regenerated on 2026-10-18 with D16 / D17 corrected, logged by `experiments.py` and checked by `tests/test_shipped_data.py`; the v4 run and the shipped checkpoints train on them; the v3 run in `results/v3` was trained on the tables before it, data hash `c345efda41c4fdca`, in git history up to commit 85ec2b4), the checkpoint-verification tests (`tests/test_serving_consistency.py`, `tests/test_user_api_robustness.py`) |
 | frozen split, plan, report tables `results/{split,split_applied,plan}.json`, `results/tables/` | yes | – | the test split and the reported numbers |
 | raw simulation records (`<raw>/<biorefinery>/*.jsonl`, one JSON-lines file per configuration) | **no** | 231 MB (27 MB as `.tar.xz`) | rebuilding the processed tables (step 4) and the raw sample-coverage table (`tables/data_coverage.csv`, shipped) |
 | fit cache `results/cache/` | no | – | nothing (an empty cache re-fits every job: about 1.5 h on 4 CPUs) |

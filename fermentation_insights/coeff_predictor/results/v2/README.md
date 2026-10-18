@@ -4,6 +4,7 @@ Copy of the report and headline tables of the second complete run (results commi
 regenerated without refitting in b7b0f53; full artifacts in those commits). This run was the second use of
 the frozen test split. Afterwards the training data were corrected (succinic_neutral salt formation, TAL_SA
 samples lost to a failed reset; DESIGN.md "Known data defects" D15, H1) and the model was changed on
-development evidence (DESIGN.md section 6, round 5). The v3 run of the pipeline uses the test split a third
-time; its `results/REPORT.md` shows v1, v2 and v3 side by side (the v1 and v2 headline tables are read from
-`results/v1/tables` and `results/v2/tables`).
+development evidence (DESIGN.md section 6, round 5). The v3 run of the pipeline used the test split a third
+time (`results/v3/`) and the v4 run, after the D16 / D17 simulation corrections, a fourth; the current
+`results/REPORT.md` shows v1, v2, v3 and v4 side by side (the earlier headline tables are read from
+`results/v1/tables`, `results/v2/tables` and `results/v3/tables`).

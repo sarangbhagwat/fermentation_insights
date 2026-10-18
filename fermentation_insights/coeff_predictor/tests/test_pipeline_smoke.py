@@ -24,6 +24,8 @@ FEEDSTOCKS = ['glucose', 'corn', 'cornstover']
 def tables_dir(tmp_path_factory):
     root = tmp_path_factory.mktemp('pipeline')
     s, p, c = make_fake_tables(n_samples_per_config=6, products=PRODUCTS, feedstocks=FEEDSTOCKS, seed=3)
+    # the HP and TAL rows stand for the configurations regenerated with the D16 / D17 corrections (harness v4)
+    s['harness_version'] = np.where(s['config_id'].astype(str).str.match(r'^(HP|TAL)'), 4, 3)
     proc = root / 'processed'
     dataset.ProcessedData(samples=s, points=p, configs=c, report={}).save(str(proc))
     planned = E._planned(*[tuple(r) for r in c[['config_id', 'biorefinery', 'feedstock']].itertuples(index=False)])
@@ -56,6 +58,22 @@ def _run(root, name, *flags, quick=True):
     pd.DataFrame([dict(scheme='config', method='pinn', mpsp_mape=0.093)]).to_csv(v2 / 'cv_headline.csv', index=False)
     pd.DataFrame([dict(stage='cv', method='pinn', fits=60, mean_seconds=40.2, mean_member_epochs=600.)]
                  ).to_csv(v2 / 'timings_fits.csv', index=False)
+    # ... and of the v3 run (the report compares v1 / v2 / v3 / v4), with its selection and plan
+    v3 = out / 'v3' / 'tables'
+    v3.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([dict(set='test_ood', method='pinn', mpsp_mape=0.066, mpsp_mape_median=0.034, R2_g=0.91,
+                       n_test=103),
+                  dict(set='test_id', method='pinn', mpsp_mape=0.032, mpsp_mape_median=0.021, R2_g=0.98,
+                       n_test=144)]).to_csv(v3 / 'final_test_headline.csv', index=False)
+    pd.DataFrame([dict(scheme='config', method='pinn', mpsp_mape=0.085)]).to_csv(v3 / 'cv_headline.csv', index=False)
+    pd.DataFrame([dict(stage='cv', method='pinn', fits=60, mean_seconds=41.0, mean_member_epochs=610.)]
+                 ).to_csv(v3 / 'timings_fits.csv', index=False)
+    (v3 / 'selected_hyperparameters.json').write_text(json.dumps(dict(
+        selected=dict(width=128, depth=2, dropout=0.05, weight_decay=6e-05, lr=0.0047, w_mpsp=0.3, w_ch=3.0,
+                      w_phys=0.03, colloc_ratio=2.0, early_stop='mpsp', clip_inputs=0.0),
+        plan=dict(mode='full', hpo_k=5, hpo_candidates=16, hpo_members=2, cv_members=5, hpo_lopo_weight=0.0,
+                  final_members=5, release_members=5, random_k=5, loco_folds=None, ablation_loco_folds=12,
+                  epochs=300, patience=40, min_epochs=20, batch_size=128))))
     E._W.clear()
     try:
         rc = E.main((['--quick', '--threads', '1'] if quick else [])
@@ -81,12 +99,24 @@ def test_pipeline_runs_to_the_report(run_v2):
     assert run_v2['rc'] == 0
     out = run_v2['out']
     rep = (out / 'REPORT.md').read_text()
-    for txt in ('Third use of the frozen test split', f'Changes v1 -> v2 -> {E.THIS_RUN}',
-                f'v1 / v2 / {E.THIS_RUN} headline numbers', '### v1 -> v2', f'### v2 -> {E.THIS_RUN}',
-                'v1_mape', 'v2_mape', f'{E.THIS_RUN}_mape', f'Cost per network fit, {E.THIS_RUN} vs v2',
+    assert E.THIS_RUN == 'v4' and E.TEST_USE == 'fourth' and E.CHANGES_TITLE == 'Changes v1 -> v2 -> v3 -> v4'
+    for txt in ('Fourth use of the frozen test split', 'Changes v1 -> v2 -> v3 -> v4',
+                'v1 / v2 / v3 / v4 headline numbers', '### v1 -> v2', '### v2 -> v3', '### v3 -> v4',
+                'v1_mape', 'v2_mape', 'v3_mape', 'v4_mape', 'Cost per network fit, v4 vs v3',
+                # default settings: v3 -> v4 changed only the data, and the report says so
+                'v3 -> v4 ONLY the training data', 'search: NOT identical to v3', 'measures no model change',
+                'the test results of v1, v2 and v3 had been seen', 'final review that found D16 and D17',
+                'released model whatever the comparison with v1 / v2 / v3 shows',
                 '## 3. Training protocol', 'Cross-fitted interval coverage', 'LOCO restricted to',
                 'No test sample was used for selection or calibration', '## 7. Release model'):
         assert txt in rep, txt
+    # the corrected (harness v4) training and test rows are counted in the notice and the changelog
+    from fermentation_insights.coeff_predictor import report_checks as RC
+    _, dev = E.apply_split(run_v2['samples'], run_v2['split'])
+    rg = RC.regenerated_rows(run_v2['samples'], dev['sample_id'],
+                             [c['config_id'] for c in run_v2['split']['test_configs']])
+    assert rg and rg['test_ood'] + rg['test_id'] > 0
+    assert E._regen_test_clause(rg) in rep and f'{rg["dev"]} of the {rg["n_dev"]} development samples' in rep
     t = out / 'tables'
     for f in ('cv_results.csv', 'cv_headline.csv', 'cv_oof_scores.csv.gz', 'cv_coverage_crossfit.csv',
               'cv_loco_ood_families.csv', 'protocol_epochs.csv', 'final_test_headline.csv', 'final_intervals.csv',
@@ -140,6 +170,10 @@ def test_v2_model_flag_restores_v2(tables_dir):
     assert 'power gate (`ModelConfig.power_gate`' not in rep and 'never clipped:' not in rep
     for flag in ('--no-power-gate', '--v2-channel-loss', '--no-target-mask', '--no-clip-exempt'):
         assert f'Not used in this run (`{flag}`)' in rep, flag
+    # ... and the v4 notice and changelog do not claim that v3 -> v4 changed only the data
+    assert E.settings_vs_v3(dict(mk_extra={})) and 'ONLY the training data' not in rep
+    assert 'measures no model change' not in rep and 'search: NOT identical to v3' in rep
+    assert 'v3 -> v4 the training data, and the settings (`--no-power-gate`' in rep
 
 
 def test_oof_scores_cover_dev_once_and_never_test(run_v2):

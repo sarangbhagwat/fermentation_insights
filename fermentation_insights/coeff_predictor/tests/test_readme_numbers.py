@@ -51,7 +51,8 @@ def test_prose_quotes_the_committed_run(readme):
         assert v in top, f'top-level README does not quote the {sch} CV MAPE {v}'
     for txt in (readme, top):
         low = txt.lower()
-        for stale in ('shipped v2', 'shipped (v2)', 'must be re-run to produce', 'is to be re-run'):
+        for stale in ('shipped v2', 'shipped (v2)', 'shipped v3', 'shipped (v3)', 'are the v3 models',
+                      'must be re-run to produce', 'is to be re-run'):
             assert stale not in low, stale
 
 

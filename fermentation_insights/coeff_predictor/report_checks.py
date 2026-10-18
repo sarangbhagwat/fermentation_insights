@@ -29,7 +29,10 @@ or calibrate anything:
 * :func:`input_twins`, :func:`final_test_without_configs` -- configurations
   with identical model inputs, and the final test without them;
 * :func:`data_violation_rates` -- the constraint-violation rates of the
-  data themselves (fitted coefficients), next to those of the predictions.
+  data themselves (fitted coefficients), next to those of the predictions;
+* :func:`corrected_configs`, :func:`regenerated_rows` -- the configurations
+  and the training / test rows regenerated with the D16 / D17 corrections
+  (the v3 -> v4 data change).
 """
 import json
 import os
@@ -42,7 +45,7 @@ __all__ = ('ablation_stats', 'paired_test_comparison', 'shipped_quantile_coverag
            'raw_sample_coverage', 'sample_ape', 'baseline_fold_stats', 'baseline_family_stats',
            'single_config_products', 'loco_subset', 'loco_per_family', 'input_twins', 'drop_configs',
            'final_test_without_configs', 'baseline_bias', 'yt_definition_check', 'data_violation_rates', 'data_violation_per_sample',
-           'data_violations_by_config')
+           'data_violations_by_config', 'corrected_configs', 'regenerated_rows')
 
 
 def _paired(d):
@@ -751,6 +754,45 @@ _README_SCHEMES = (('random', 'random (by sample)', 'interpolation: a known conf
                    ('product', 'leave-one-product-out', 'a new product family (7 folds)'),
                    ('productivity', 'productivity extrapolation', 'both tails of the productivity range'))
 _README_METHODS = dict(pinn='PI-NN', plain='plain MLP', ridge='ridge', hgb='gradient boosting', knn='kNN')
+
+
+def corrected_configs(samples, min_harness=None):
+    """Configurations whose rows were regenerated with the D16 / D17
+    corrections: harness >= ``min_harness`` (default
+    ``data_patches.D17_FIXED_HARNESS_VERSION``, which applies the BioSTEAM
+    correction ``ic_biogas``; TAL_SA_sugarcane's regenerated rows also carry
+    the D16 fix). Empty set without ``harness_version`` or such rows."""
+    from fermentation_insights.coeff_predictor import data_patches as DP
+    if samples is None or 'harness_version' not in samples:
+        return set()
+    hv = pd.to_numeric(samples['harness_version'], errors='coerce')
+    return set(samples.loc[hv >= (DP.D17_FIXED_HARNESS_VERSION if min_harness is None else min_harness),
+                           'config_id'].astype(str))
+
+
+def regenerated_rows(samples, dev_ids, ood_configs, min_harness=None):
+    """How many development and test samples were regenerated with the
+    D16 / D17 corrections (harness >= ``min_harness``, see
+    :func:`corrected_configs`): dict(n, n_configs, configs, dev, n_dev,
+    test_ood, n_test_ood, ood_configs, test_id, n_test_id), counts of samples
+    (``dev_ids``: the development sample ids; ``ood_configs``: the held-out
+    test configurations; every other sample is an in-distribution test
+    sample); None without such rows. Report text only."""
+    from fermentation_insights.coeff_predictor import data_patches as DP
+    if samples is None or 'harness_version' not in samples or not len(samples):
+        return None
+    hv = pd.to_numeric(samples['harness_version'], errors='coerce').to_numpy()
+    m = hv >= (DP.D17_FIXED_HARNESS_VERSION if min_harness is None else min_harness)
+    if not m.any():
+        return None
+    ids, cfg = samples['sample_id'].astype(str), samples['config_id'].astype(str)
+    is_dev = ids.isin(set(pd.Series(dev_ids).astype(str))).to_numpy()
+    in_ood = cfg.isin(set(map(str, ood_configs))).to_numpy()
+    ood, idt = ~is_dev & in_ood, ~is_dev & ~in_ood
+    return dict(n=int(m.sum()), n_configs=int(cfg[m].nunique()), configs=sorted(set(cfg[m])),
+                dev=int((m & is_dev).sum()), n_dev=int(is_dev.sum()),
+                test_ood=int((m & ood).sum()), n_test_ood=int(ood.sum()), ood_configs=sorted(set(cfg[m & ood])),
+                test_id=int((m & idt).sum()), n_test_id=int(idt.sum()))
 
 
 def readme_summary(tables_dir):

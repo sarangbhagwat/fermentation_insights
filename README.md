@@ -36,7 +36,7 @@ physical constraints, uncertainty intervals and an applicability domain) trained
 Bioindustrial-Park biorefineries (41 configurations). Its intervals are split-conformal, calibrated on the
 leave-one-configuration-out cross-validation of the development data (so they target new configurations; coverage is
 marginal over the samples of new configurations, not guaranteed for each configuration; the recovery intervals
-under-cover every TAL configuration, known or new, and new lactic ones). In the cross-validation of the shipped (v3)
+under-cover every TAL configuration, known or new, and new lactic ones). In the cross-validation of the shipped (v4)
 model, the leave-one-configuration-out MPSP error is 8.5 % (mean over the folds, each configuration counting once;
 18.4 % pooled over the held-out samples; 6.8 % over the 35 folds whose product has another configuration; by family,
 ranges of the folds, 1-4 % for HP and succinic acid, 8-16 % for TAL, 8-18 % for lactic acid, 18 % for the lactic
@@ -45,10 +45,10 @@ or a new product family (44.8 %) the model is not better than a nearest-configur
 an unseen feedstock or product the intervals are not calibrated (0.71 MPSP coverage of a nominal 0.90 for both), and
 such predictions are flagged. It reproduces only about half of the simulated economy of scale, so scale-up effects
 should not be read from it. The numbers are those of its
-[validation report](fermentation_insights/coeff_predictor/results/REPORT.md) (v3 run; the v1 and v2 reports are kept
-as history). It is independent of the publication-reproduction steps above; see
-its [README](fermentation_insights/coeff_predictor/README.md) for installation, a quickstart, validation and the
-reproduction of its training data, and [DESIGN.md](fermentation_insights/coeff_predictor/DESIGN.md) for the design.
+[validation report](fermentation_insights/coeff_predictor/results/REPORT.md) (v4 run, trained on the data with the
+D16 / D17 simulation corrections; the v1, v2 and v3 reports are kept as history). It is independent of the
+publication-reproduction steps above; see its [README](fermentation_insights/coeff_predictor/README.md) for
+installation, a quickstart, validation and the reproduction of its training data, and [DESIGN.md](fermentation_insights/coeff_predictor/DESIGN.md) for the design.
 
 Documentation & Tutorials
 -------------------------
