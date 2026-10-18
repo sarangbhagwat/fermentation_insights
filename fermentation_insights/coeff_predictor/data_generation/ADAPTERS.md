@@ -211,21 +211,50 @@ facilities`); map a group to `None` only if it would double count.
 3. Sum over areas of `installed_cost` ≈ TEA `installed_cost`.
 4. Typical seconds per TY point and failure rate.
 5. A smoke campaign (`--sample-limit 2`) completes and the JSONL looks right.
-6. Mass balances: every unit's outlets equal its inlets (no unit creates
-   mass), and no unit lists the same inlet stream twice; the sugar fed to
+6. Mass balances: compare every unit's outlets with its inlets and explain
+   each unit that creates or destroys mass (a module quirk that is
+   cost-neutral, or a defect); no unit lists the same inlet stream twice
+   (`sim_checks.py` check `duplicate_inlets`); the sugar fed to
    fermentation does not exceed the sugar the feedstock can supply
    (`F_sugar_fed <= F_feedstock x fs_w_fermentable_sugar_eq x sugar
    availability`, `report_checks.sugar_balance_check`, REPORT.md section 1).
-   Both checks found defects in the shipped data (D16, D17 below).
+   These checks found defects in the shipped data (D16, D17 below). Not
+   every unit closes in the current data: the remaining non-closures are
+   listed in DESIGN.md section 1 ("Remaining unit-level mass
+   non-closures"), judged cost-neutral.
 7. Wastewater treatment with BioSTEAM's `InternalCirculationRx`: its biogas
    is counted twice (D17); check the IC unit's mass balance, and simulate
    with `biosteam_fixes.apply('ic_biogas')` to see the effect.
+8. Unit design results against the unit classes' own bounds (`_bounds`;
+   BioSTEAM does not warn), e.g. distillation columns at 3-24 ft diameter:
+   `sim_checks.py` check `unit_bounds` (D18: the HP purification columns are
+   27-40 ft wide).
 
-Status of item 1: the baseline coefficients of the 32 configurations of the
-publication are compared with the publication's in REPORT.md section 8 (i)
-(known causes of the differences: DESIGN.md section 1, "Comparison with the
-publication"); a table of every configuration's baseline MPSP against the
-module-documented values (README / TRY scripts) has not been recorded yet.
+Status of item 1: the comparison of the baseline coefficients of the 32
+configurations of the publication with the publication's (REPORT.md section
+8 (i); known causes of the differences: DESIGN.md section 1, "Comparison
+with the publication") REPLACES the per-configuration comparison with the
+module READMEs, which has not been done: the README values are single
+points at module-specific TRY and price settings and older BioSTEAM
+versions, and the module defaults under the current BioSTEAM (2.54,
+Bioindustrial-Park b3988834) are recorded by two adapters only. What is
+recorded (module default under current BioSTEAM, USD/kg of the product
+stream, vs. the module README):
+
+| configuration | module default now | README | ratio | known cause |
+|---|---|---|---|---|
+| lactic_neutral_SSCF_cornstover | 1.5220 (`x_baseline_MPSP_module_default`) | 1.414 (`lactic/README.rst:24`, SSCF) | 1.076 | not reconciled (BioSTEAM / module version) |
+| lactic_neutral_SHF_cornstover | 1.5669 | 1.454 (`lactic/README.rst:35`, SHF) | 1.078 | not reconciled |
+| lactic_lowpH_SSCF_cornstover | 1.1737 | – | – | – |
+| lactic_lowpH_SHF_cornstover | 1.2210 | – | – | – |
+| ethanol_corn / ethanol_cornstover / ethanol_sugarcane | 0.5650 / 0.7079 / 0.7786 (`x_module_baseline_MPSP`) | – | – | – |
+
+The recorded lactic baseline points equal these values divided by the
+product purity (e.g. 1.7287 USD/kg pure lactic acid for neutral SSCF). The
+other module READMEs (`HP/README.md:46` 1.500 USD/kg acrylic acid,
+`TAL/README.md:59` 4.869, `succinic/README.rst:38` 1.367,
+`oxalic/README.rst:35` 1.77) are at TRY points and versions that are not
+reconciled with the adapters' baselines.
 For items 2-4, every point records the measured flows (`F_ferm_product`,
 `F_sugar_fed`, `V_broth`, `F_final_product`) and the recovery, `dataset.py`
 rejects samples whose cost-channel decomposition does not close

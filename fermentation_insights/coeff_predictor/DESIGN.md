@@ -109,10 +109,39 @@ and every number quoted here was recomputed on development rows only.
 | D10 | isobutanol | the starch-content setter rescales the current composition, so the result depends on history | sampled and actual dry starch differ (sampled 0.59-0.85, actual 0.67-0.76, corr. 0.87), moisture drifts 13.4-17.1 % (baseline 15 %); the model sees the actual `fs_w_*`, so the inputs are right, but the starch range covered is narrow | open |
 | D13 | oxalic | the module's unit groups put lime, H2SO4 and CSL/MgCl2/DAP storage in facilities (99.6 % of the non-feedstock material cost) | channel labels only (facilities instead of fermentation / separation materials); totals unaffected | open |
 | D14 | oxalic | the reaction `Glucose -> 2 OxalicAcid + 2 AceticAcid + O2` creates mass and carbon: (OA + AcOH + cells + CO2)/sugar = 1.61-1.70, air feed 5-8 kg/h for 133 t/h sugar, acetic acid 0.667 g/g OA | physically invalid fermentation balance; `aerobic=True` is misleading (no aeration cost), and the oxalic yields are not comparable with the other products' | open (kept for fidelity to the module; patch the reaction and regenerate for physical consistency) |
-| D15 | succinic_neutral (4 configurations, 72 samples) | succinic adapter v2 set only `spec.neutralization` (as the publication's TRY script); the reactor kept `base_neutralizes_product=False`, which removes the purchased lime from the broth and bypasses R401 / R401_P / S405 (acidulation, gypsum filtration) | the v2 data equal succinic (low pH) except the base cost (acid, gypsum and acidulation costs 0), but `downstream.TABLE` describes acidulation + gypsum filtration (neutralization degree 1, H2SO4): the acid / gypsum features claimed costs the targets lacked (v2 models). Regenerated data: MPSP +0.22 USD/kg vs. succinic (low pH) at identical TY points and baseline parameters (+0.10 vs. the v2 rows): lime 1 mol/mol SA (+0.5 mol/mol acetic acid) instead of 0.21 (+0.13 USD/kg), 0.89-0.90 kg H2SO4 (93 wt%) per kg SA (+0.09 USD/kg), 1.44-1.45 kg wet gypsum (20 % moisture) per kg SA (0 USD/kg at baseline, sampled −0.029 to +0.008), R401 + S405 +1.0-1.6 M USD installed, while the fermenters are 304 instead of 316 stainless steel (−5 to −9 M USD, in v2 already); recovery unchanged (the module loses no acid in R401 / S405) | fixed by regeneration: adapter v3 (`base_neutralizes_product=True` for the neutral configurations), old files in `raw_archive/succinic_neutral_v2`, v2 rows rejected (`unpatchable_D15`); the v3 models (shipped) were retrained on the corrected data |
+| D15 | succinic_neutral (4 configurations, 72 samples) | succinic adapter v2 set only `spec.neutralization` (as the publication's TRY script); the reactor kept `base_neutralizes_product=False`, which removes the purchased lime from the broth and bypasses R401 / R401_P / S405 (acidulation, gypsum filtration) | the v2 data equal succinic (low pH) except the base cost (acid, gypsum and acidulation costs 0), but `downstream.TABLE` describes acidulation + gypsum filtration (neutralization degree 1, H2SO4): the acid / gypsum features claimed costs the targets lacked (v2 models). Regenerated data: MPSP +0.22 USD/kg vs. succinic (low pH) at identical TY points and baseline parameters (+0.10 vs. the v2 rows): lime 1 mol/mol SA (+0.5 mol/mol acetic acid) instead of 0.21 (+0.13 USD/kg), 0.89-0.90 kg H2SO4 (93 wt%) per kg SA (+0.09 USD/kg), 1.44-1.45 kg wet gypsum (20 % moisture) per kg SA (0 USD/kg at baseline, sampled −0.029 to +0.008), R401 + S405 +1.0-1.6 M USD installed, while the fermenters are 304 instead of 316 stainless steel (−5 to −9 M USD, in v2 already); recovery unchanged (the module loses no acid in R401 / S405) | fixed by regeneration: adapter v3 (`base_neutralizes_product=True` for the neutral configurations), old files in `raw_archive/succinic_neutral_v2`, v2 rows rejected (`unpatchable_D15`); the v3 and v4 models train on the corrected data |
 | H1 | TAL_SA_glucose, TAL_SA_sugarcane | after a convergence failure whose `reset()` also failed, the old harness wrote the later samples as complete with no simulated point (27 and 19 samples; TAL_SA_glucose's sample 1 was cut after 3 points). Cause: the IPA evaporator F407 of the KSA systems ("Failed to extrapolate enthalpy of vaporization ... at T=1207 K"): BioSTEAM's root search for the first-effect evaporation tried fractions at which an effect evaporates all the IPA left and superheats its vapor; once the search started from the bounds (reset() clears its guess), it failed every time | TAL_SA_glucose kept only its baseline sample, TAL_SA_sugarcane 10 of 29 (v2 models) | fixed: harness reloads after a failed reset and writes `retry` records (resume re-runs them); TAL adapter returns the exact overall fraction 1 in that region (`_robust_V_overall`; re-simulated recorded points change by < 1e-4); the empty and the cut attempts were removed (originals in `raw_archive/TAL_SA_v2`) and re-run: 29 / 29 samples each; F407 failed once more without the mitigation (after 13 re-run samples), never with it; remaining failures 9 of 700 re-run points of TAL_SA_glucose (1.3 %; wastewater recycle M503 not converged at the maximum-titer edge; TAL_glucose 1.0 % in the original campaign), 0 of the 150 points of TAL_SA_sugarcane re-run with the mitigation |
 | D16 | TAL_SA_sugarcane (29 samples; 2 of them in the in-distribution test set) | Bioindustrial-Park `TAL/systems/system_SA_solubility_exploit_ethanol_sugarcane.py:116` (upstream master b3988834, not a change of the fi-TAL port) runs `u.U201.ins.append(u.M201-0)`, but in BioSTEAM 2.54's juicing system the juice recycle `M201-0` already feeds the crushing mill: `U201.ins` = [s19, s1, s1], so the recycle enters the mill twice. The six other TAL systems comment this line out (e.g. `system_TAL_solubility_exploit_ethanol_sugarcane.py:124`); a scan of the systems of all 41 configurations (`sim_checks.py` check `duplicate_inlets`) finds no other unit with a repeated inlet | the mill creates mass (+121 t/h at the baseline point, 99 % of the system's +1.38 % imbalance; data review, round 4) and sugar: every simulated point feeds fermentation 1.088 x the sugar the cane can supply (`report_checks.sugar_balance_check`, REPORT.md section 1; every other configuration 0.85-1.00, the other sugarcane ones 0.946), i.e. 15 % more sugar per kg cane than the other sugarcane configurations, so the feedstock demand per kg product is understated. Re-simulated with the duplicate reference removed (in memory; `data_generation/sim_checks.py` check `duplicate_inlets`, `data_generation/checks/v3/duplicate_inlets_bias.csv`), the sugar fed falls by 13 % (81.4 → 70.8 t/h at the baseline point; sugar fed / cane sugar 0.946, as the other sugarcane configurations) and the MPSP rises: +2.1 % at the baseline point, +2.3 to +5.2 % on a 3 x 3 TY grid (+4.8 % at its lowest yield), and +1.3 to +6.3 % (median +3.3 %) on the baseline sample's recorded points (data review). The refitted b′ is 9-12 % low in the data (grid fit 0.299 → 0.326; baseline-sample fit a′ b′ c′ d′ g 2.978 0.286 32.30 0.561 0.704 → 2.894 0.327 33.26 0.404 0.704); the d′ change depends on the fit (+3 % on the grid, −28 % on the baseline sample: an ill-conditioned split). A feedstock-channel proxy puts the MPSP understatement over the 29 samples at about 0.8-8 % (median ~3 %; data review). The corrected b′ gives TAL_SA / TAL = 0.327 / 0.315 = 1.04 on sugarcane, as on corn (1.05), corn stover (1.05) and glucose (1.04); recorded 0.91. This is the TAL_SA_sugarcane b′ deviation (−10 %) of the D8 analysis below, and most of the release model's largest in-sample feedstock-sensitivity error (+19.5 %, REPORT.md section 8 (ii-b)): the product-blind feedstock head predicts about the physical cane demand. The adapter's titer frontier for this configuration (`adapters/TAL.py:152`, 614 y − 0.6 vs. 678 y − 1.4 for TAL_sugarcane) was calibrated on the defective system. The publication's own TAL_SA_sugarcane b′ (0.293 vs. 0.305 for TAL_sugarcane, REPORT.md section 8 (i)) shows the same anomaly, so it very likely carries the same defect | fixed by regeneration (2026-10-18): fi-TAL commit bba8da30 comments line 116 out (`bip_patches/fi-TAL.patch`, re-exported, applies to the base commit); TAL adapter v3 for this configuration, max-titer line recalibrated on the corrected system (679 y − 1.3 g/L; TAL_sugarcane 678 y − 1.4); older rows rejected (`unpatchable_D16`); the 29 samples regenerated (old files in `raw_archive/D16_D17_v3`). Verified: `U201.ins` = [s19, s1]; sugar fed / cane sugar 0.946 at every point (`report_checks.sugar_balance_check`, development rows; the other sugarcane configurations 0.944-0.946); with the D17 correction off, the source fix raises the MPSP of three recorded points of sample 0 by +2.2 / +3.5 / +6.4 % (y = 0.267 / 0.146 / 0.025 g/g) and of the baseline point by +2.8 % (the in-memory check above: +2.1 %; it also moved the recovery by 0.1 %, the source fix does not); with D17, the regenerated samples' fitted MPSP at the baseline point is +4.0 % (median; 2.7-5.2 %) and b′ +11.9 % above the v3 rows; check-grid b′ TAL_SA / TAL = 0.339 / 0.324 = 1.05 on sugarcane (glucose 1.05, corn 1.06, corn stover 1.04; `checks/ic_biogas_bias.csv`). `duplicate_inlets` now finds no repeated inlet in the 41 configurations (`checks/duplicate_inlets_bias.csv`) |
 | D17 | 27 configurations with BioSTEAM's `InternalCirculationRx` (anaerobic IC reactor of the wastewater treatment, default `method='lumped'`): all 16 HP, all 8 TAL, ethanol_sugarcane, IBO_EtOH_corn (small) and oxalic_neutral_sugarcane (negligible); not succinic, lactic, ethanol_corn, ethanol_cornstover | `biosteam/wastewater/high_rate/internal_circulation_rx.py` (`_run`, lines 170-215 of biosteam 2.54; unchanged since the file was added in 2023) splits the unreacted influent into `waste` / `eff`, runs the growth and biogas reactions on the helper copy `inf` (used for the effluent COD) and degasses it INTO `biogas` (line 188), then runs the same reactions on `waste` and `eff` and degasses them into `biogas` again (lines 205-206): the biogas is counted twice. The boiler then burns methane that was never produced | the IC unit creates mass equal to its biogas outlet's second half (+18.5 t/h at the HP_neutral_cornstover baseline; −45 kg/h after the correction), so the steam / power credit is too high and the MPSP too low. Re-simulated with the corrected `_run` (only `inf`'s gas discarded; `data_generation/biosteam_fixes.py`, `sim_checks.py` check `ic_biogas`, every parameter at baseline, the baseline point and a 3 x 3 TY grid; `data_generation/checks/v3/ic_biogas_bias.csv`, reproduced by the re-run of 2026-10-18 in `checks/ic_biogas_bias.csv` except TAL_SA_sugarcane, now without D16: +1.4 % at baseline), the MPSP rises at the baseline point by +1.1-1.8 % (HP glucose / sugarcane), +2.8-3.8 % (HP corn), +4.1-5.4 % (HP corn stover), +0.9 / +1.5 % (TAL_SA glucose / sugarcane), +2.8 / +3.0 % (TAL glucose / sugarcane), +3.4 / +8.3 % (TAL_SA_corn / TAL_corn), +7.2 / +13.3 % (TAL_SA_cornstover / TAL_cornstover), +0.9 % (ethanol_sugarcane), +0.6 % (IBO_EtOH_corn), 0 % (oxalic); on the grid up to +12.9 % (HP corn stover), +15.3 % (TAL_cornstover) and +10.2 % (ethanol_sugarcane, +9.7 % at the lowest yield vs. +0.9 % at baseline). The bias depends on the yield (the wastewater organic load, and with it the phantom gas, grows as the yield falls for corn, corn stover and ethanol_sugarcane), so it does not scale like a constant: the refitted b′ is 10-20 % too low for HP / TAL on corn and corn stover and 16 % for ethanol_sugarcane (≤ 2.4 % for glucose and sugarcane), d′ and a′ change by up to tens of % (ill-conditioned splits), and the electricity / natural-gas intensities that the price heads learn are too favourable (the electricity channel is −23 % of the TAL_cornstover MPSP). The publication's modules very likely ran the same code, so the comparison of section "Comparison with the publication" cannot reveal it | fixed by regeneration (2026-10-18): harness v4 applies the runtime correction `data_generation/biosteam_fixes.apply('ic_biogas')` (BioSTEAM itself untouched, as the TAL `_robust_V_overall` precedent) in every campaign process before any system is loaded and records it in every `config` / `sample_start` (`biosteam_fixes`); samples of the 27 configurations without it are rejected (`unpatchable_D17`; by configuration: `data_patches.D17_CONFIGS` = `affected` of the check, so the 14 configurations without an IC reactor keep their rows, which are unchanged); all 27 regenerated (1125 samples; old files in `raw_archive/D16_D17_v3`). Verified on development configurations: the IC mass balance closes (−45 kg/h of 829 t/h inlet at the HP_neutral_cornstover baseline, v3 +18.5 t/h; at most +0.8 t/h = 0.14 % of the inlet for HP_hexanol_corn, from the module's lumped sludge / reaction stoichiometry, not the gas), the biogas halves, the corrected baseline points match the check (HP_neutral_cornstover +4.13 %, TAL_cornstover +13.25 %, HP_glucose +1.33 %, IBO_EtOH_corn +0.56 %, ethanol_sugarcane +0.91 %, oxalic −0.01 %), and BioSTEAM's original method reproduces the recorded v3 points to within 0.03 % (3 TY points of the baseline sample per configuration; ethanol_sugarcane: its D4-patched values); with the correction, those points rise by +8.2 / +8.5 / +10.1 % (HP_neutral_cornstover, y = 0.05 / 0.40 / 0.76), +0.2 / +1.0 / +2.1 % (HP_glucose), +13.8 / +15.2 / +14.9 % (TAL_cornstover), +12.9 / +4.9 / +0.1 % (ethanol_sugarcane, y = 0.04 / 0.27 / 0.51), +1.2 / +0.7 / +0.4 % (IBO_EtOH_corn). Regenerated vs. v3 rows at identical TY points (development samples; median, 5-95 %): HP glucose +0.7-0.9 % (0.2-1.9), HP sugarcane +1.0-1.2 % (0.3-3.0), HP corn +5.4-6.4 % (1.3-9.8), HP corn stover +7.5-10.0 % (2.1-15.7), TAL_glucose +2.1, TAL_SA_glucose +0.9, TAL_corn +7.9, TAL_SA_corn +3.6, TAL_cornstover +12.2, TAL_SA_cornstover +6.7 %, ethanol_sugarcane +3.4 % (0.05-11.1, up to 18 % at the lowest yields), IBO_EtOH_corn +0.57 % (the 87 samples of unchanged feedstock composition, see "Data set"), oxalic < 0.004 %; b′ (median over samples) +11-12 % for HP corn, +18-22 % HP corn stover, +9.5 / +9.9 % TAL / TAL_SA corn, +17 / +19 % TAL / TAL_SA corn stover, +11 % ethanol_sugarcane, within ±2 % for glucose and sugarcane (except TAL_SA_sugarcane, D16). The check now also simulates the current harness's state (`harness`): equal to the corrected method within 0.01 % at every point (`checks/ic_biogas_bias.csv`, column `dMPSP_harness_vs_fixed_max_abs_pct`). The v3 models (`results/v3`) were trained before the fix; the defect should still be reported to BioSTEAM |
+| D18 | the 16 HP configurations; strongly HP_hexanol_sugarcane and HP_neutral_hexanol_sugarcane (58 samples) | BioSTEAM bounds its distillation columns at 3-24 ft diameter and 27-170 ft height (`biosteam/units/distillation.py:295`, `_bounds`) but neither warns nor splits a wider column, and prices each tray with Seider's correlation C_BT = 412.7 exp(0.1482 D) (`biosteam/units/design_tools/column_design.py:227-240`, fitted to about 2-16 ft), whose cost elasticity in the flow is about 0.074 D (D ∝ flow^0.5): 2-3 at 27-40 ft. At the baseline point (harness v4; `sim_checks.py` check `unit_bounds`, `data_generation/checks/unit_bounds.csv`, all 41 configurations) every HP configuration has a purification column above the bound: D408 27.5-40.2 ft (corn / corn stover 27.5-29.8, glucose 30.1-32.5, sugarcane 37.2-38.0, hexanol sugarcane 39.4 / 40.2) and, in the 8 hexanol designs, D401 29.3-40.3 ft; these columns are 4-16 % of the installed equipment cost. (D409's rectifier is 350 ft tall in every HP configuration, above the 170 ft bound.) No column of the other 25 configurations exceeds an upper bound (some small columns are below the lower height / weight bounds) | the HP capital grows faster than the capacity INSIDE the sampled range (0.81-1.19x): FCI x1.17 at 1.15x for the two hexanol-sugarcane configurations (exponent about 1.1; x1.12-1.14 for the other HP), whose MPSP rises with the capacity (+0.7 / +0.8 % at 1.15x, +20 / +21 % at 2x; `checks/column_trays_capacity.csv`; `checks/capacity_response.csv` has the same). Sensitivity (in memory, not BioSTEAM's method): the trays of a column wider than 24 ft priced as N = ceil((D/24)²) parallel stacks of the same total area; the baseline point and a 3 x 3 TY grid (`checks/column_trays_bias.csv`). The MPSP is then lower by 3.9-4.1 % at the baseline (y = 0.73) of the two hexanol-sugarcane configurations, 0.9-1.0 % (HP_sugarcane, HP_neutral_sugarcane), 0.5-0.8 % (the other hexanol designs) and ≤ 0.13 % (the other HP); the effect grows with the yield (0 at the lowest grid yield; the final review's 5 x 3 grid: up to 5.6 % at y = 0.755 for HP_hexanol_sugarcane, 5.2 % for HP_neutral_hexanol_sugarcane). Refitted coefficients (grid): a′ −7.8 / −6.4 % (hexanol sugarcane), −2.4 / −1.8 % (sugarcane), ≤ 2 % elsewhere; d′ up to −3.8 %; b′ +2.5-2.9 %. The capacity response becomes a normal economy of scale for every HP configuration (MPSP −0.6 to −1.5 % at 1.15x, −2 to −6 % at 2x), so the MPSP rise of the HP configurations at 2x in REPORT.md section 8 (ii-c) is this artefact (the sensitivity was not run at 3x). The model learns BioSTEAM's behaviour as given: a′ (and d′) of the HP sugarcane and hexanol configurations, and the scale response that the capacity input learns for HP, carry it. The publication's modules very likely carry the same artefact | open (documented; report-only check). Proposed for the lead (needs regeneration of the 16 HP configurations, a pipeline re-run and another use of the test split): a runtime cost correction in `biosteam_fixes` (`column_trays`: parallel tray stacks, or N parallel columns, above 24 ft), recorded per sample like `ic_biogas`; the defect should also be reported to BioSTEAM |
+
+#### Remaining unit-level mass non-closures (module quirks, judged cost-neutral)
+
+A scan of every unit's outlets against its inlets at the baseline points
+(harness v4; final review, round 5) finds, besides D14 (oxalic) and the TAL
+acetate reaction (D8 analysis below), these units that create or destroy
+mass. They are module quirks; they are judged cost-neutral (the titer is
+set by the adapter, the created species carry no price, the dryer fuel is
+priced as natural gas), but this has not been quantified:
+
+* succinic fermentation `R302` (CoFermentation): +13.6 t/h (+4.1 % of its
+  inlet) at the succinic_corn baseline, mainly H2O (+10.1 t/h) and O2
+  (+2.4 t/h) in an anaerobic fermentation; carbon closes (round-4 carbon
+  balance), so the error is in H and O; +22.6 t/h at the
+  succinic_neutral_sugarcane baseline. The seed train `R303` +0.5 t/h.
+* HP `M501` (Mixer): −11.8 t/h at the HP_sugarcane baseline; its
+  specification zeroes H2SO4 and NaOH (−9.6 / −4.0 t/h) and adds water
+  (+1.8 t/h) without forming a salt (e.g. `HP/systems/cornstover/
+  system_cs_hexanol.py:363-371` of the fi-HP worktree). The seed train
+  `R303` +0.3 t/h.
+* Drum dryers burn the natural gas without consuming O2: TAL `F402` +3.1
+  t/h (TAL_cornstover), succinic `F404` +3.8 t/h (succinic_corn).
+* TAL fermentation `R302` (BatchCoFermentation): −4.0 t/h (TAL_cornstover);
+  BioSTEAM's fire-water tank `FWT903` (−6.9 t/h, its feed leaves the
+  system) and process-water centre `PWC904` (−1.6 t/h).
+
+ADAPTERS.md (checklist item 6) asks for these to be explained, not for
+every unit to close.
 
 #### D8 analysis (2026-10-17; development rows only)
 
@@ -1978,12 +2007,20 @@ Open issues:
    sweeps. Follow-up: 'reagent_prices' for the neutralization (and
    materials_other, which holds the pretreatment acid) channels only, with a
    paired LOCO / LOPO check (≥ 3 seeds) before adoption.
-11. Scale response (final review, round 4; REPORT.md section 8 (ii-c)): each
+11. Scale response (final reviews, rounds 4 and 5; REPORT.md section 8 (ii-c)): each
    configuration's capacity is sampled only 0.81-1.19 x its baseline, and
    the release model reproduces a median 0.60 / 0.55 (v3; v4: 0.65 / 0.71)
    of the simulated MPSP decrease of a 2x / 3x plant (BioSTEAM at baseline
    parameters,
-   `data_generation/checks/capacity_response.csv`). The user API flags a
+   `data_generation/checks/capacity_response.csv`). The simulated HP
+   plants' capital grows faster than the capacity because their
+   purification columns (D408, D401) are 27-40 ft wide, beyond BioSTEAM's
+   24 ft bound, and their trays are priced by an exponential correlation
+   far beyond its range (D18, section 1); the superlinearity starts inside
+   the HP_hexanol_sugarcane training range (FCI x1.17 at 1.15x), and with
+   the wide trays priced as parallel stacks every HP configuration has a
+   normal economy of scale. A data correction (D18) would precede any
+   capital-scaling structure for HP. The user API flags a
    capacity outside the configuration's training range
    (`contextual_outside_range`), but the model is unchanged. Proposed for
    the next data and model round (needs a re-run): log-uniform capacity
@@ -1991,15 +2028,41 @@ Open issues:
    capital-scaling structure (the capital and capital-proportional fixed
    channels proportional to (F/F_ref)^(β−1), β learned in [0.5, 1]),
    validated against the simulated capacity response.
-12. Interval calibration per family (final review, round 4; REPORT.md
-   section 6, "Coverage for a KNOWN configuration"): the pooled LOCO
-   quantiles over-cover HP, ethanol, isobutanol, oxalic and succinic acid
-   and under-cover TAL's g (also for known configurations: 0.45 on the
-   random-CV scores, v4 0.44; the decarboxylation-conversion noise of item
-   6) and lactic's d′ (0.56, v4 0.56). Candidates (need a re-run and a fresh calibration):
-   Mondrian (per-family) conformal quantiles with a fallback for small
-   families, or a score with an aleatoric term (a per-family floor ε, or a
-   variance head for g).
+12. Interval calibration per family (final reviews, rounds 4 and 5; REPORT.md
+   section 6): the quantiles are pooled over the families, and the coverage
+   of the shipped quantiles on the development out-of-fold scores is
+   miscalibrated per family in both directions. For a KNOWN configuration
+   (random CV / productivity tails) HP, ethanol, isobutanol, oxalic and
+   succinic acid are covered at 1.00 on every key (MPSP half-width at the
+   baseline of each configuration ±15-32 %, median per family ±17-25 %,
+   against a random-CV MPSP error of 3.5 %), while TAL's g (0.44 / 0.40;
+   the decarboxylation-conversion noise of item 6) and c′ (0.76) and
+   lactic's d′ (0.56 / 0.55) and b′ (0.87 / 0.74) are under-covered. For a
+   NEW configuration (LOCO scores, pooled per family): MPSP HP, isobutanol,
+   succinic 1.00, TAL 0.91, oxalic 0.88, ethanol 0.77, lactic 0.69 (worst
+   configurations ethanol_sugarcane 0.31, lactic_neutral_SHF_cornstover
+   0.28); g TAL 0.43, lactic 0.65, the others 1.00; b′ ethanol 0.67,
+   lactic 0.59; c′ ethanol 0.70, lactic 0.78; d′ lactic 0.54, oxalic 0.48;
+   a′ isobutanol 0.00 (one configuration each for oxalic and isobutanol).
+   Since round 5 the user API reports this per row and key
+   (`intervals_undercovered`, from `meta['coverage_by_family']`, with an
+   ApplicabilityWarning; the quantiles are unchanged). Proposed for the
+   lead (changes the shipped intervals and so the reported test coverage;
+   no network re-training): Mondrian split-conformal quantiles per
+   fermentation product from the existing LOCO out-of-fold scores
+   (`tables/cv_oof_scores.csv.gz`, release eps), for families with >= 5
+   configurations, with the pooled quantile (or max(pooled, family)) as
+   the fallback for the 3-configuration families (ethanol, lactic: their
+   own quantile cross-fits to only 0.59-0.67) and the single-configuration
+   ones; chosen and cross-fitted on development scores only. The final
+   review's dev-only estimate (leave-one-configuration-out within the
+   family): TAL g q 6.07 vs. pooled 1.86 (coverage 0.90 within TAL, random
+   CV 0.93 instead of 0.44), HP g q 0.60 and MPSP q 3.89 vs. 11.2 (about 3x
+   narrower; cross-fitted 0.89 / 0.90, random CV 0.97 / 0.96), succinic
+   cross-fitted g 0.91, MPSP 0.89. Reporting the test coverage of such
+   quantiles would be a further reading of the test split (final_dev
+   re-predicted on the test rows; report-only). Alternatives: a score with
+   an aleatoric term (a per-family floor ε, or a variance head for g).
 
 Review of round 4 (fixes that change no trained model; the evidence above
 is unchanged):
@@ -2553,6 +2616,45 @@ the corrected targets enter every comparison (`experiments.changes_v3_v4`,
 configurations changed in training and in every held-out set, so the v3 →
 v4 changes of the CV and test errors measure the corrected data, not a
 model change.
+
+#### Final review of v4 (round 5): fixes that change no trained model
+
+The networks, quantiles, training data and fit cache are unchanged; the
+report was regenerated from the cached fits.
+
+* Intervals: the experiment pipeline records, per fermentation product and
+  key, the coverage of each checkpoint's own quantiles on the development
+  out-of-fold scores in `meta['coverage_by_family']`
+  (`experiments.annotate_family_coverage`; known configuration = the lower
+  of random CV and productivity tails, new configuration = LOCO), and
+  `predict()` / `mpsp()` report the keys more than 0.1 below nominal per
+  row in `intervals_undercovered`, with an ApplicabilityWarning (4f, open item 12;
+  before, a known TAL configuration got `intervals_calibrated = True` and no
+  warning for a g interval that covers about 0.44). The LOCO per-family
+  coverage table and the report now carry every key (a′-d′ too), and the
+  docs quote the MPSP under-coverage of new ethanol (0.77) and lactic (0.69)
+  configurations and the width of the over-covered families' intervals.
+* User API: a given numeric field that is not a number (e.g.
+  `p_IRR='10%'`) raises ValueError instead of being read as missing (and
+  then encoded as not applicable or imputed); an `fs_w_*` key that is not a
+  composition column of the checkpoint is ignored (it used to turn a
+  by-name configuration into a custom feedstock); the output of
+  `predict()` keeps a DataFrame spec's index; `mpsp()` warns for yields
+  below the product pair's lowest training yield (the registry's new
+  `y_domain`, added to the shipped checkpoints by `refresh_spec_registry`;
+  the encoding is unchanged).
+* Data (D18, section 1): the HP purification columns beyond BioSTEAM's
+  diameter bound and the extrapolated tray-cost correlation; new
+  simulation check `unit_bounds`; the capacity text of REPORT.md section 8
+  (ii-c) names the mechanism. The remaining unit-level mass non-closures
+  are listed (section 1), and ADAPTERS.md records the module-default MPSPs
+  available against the module READMEs (checklist item 1).
+* Report: printed bounds of the ablation statistics round outward (|t| <=
+  1.41, Wilcoxon p >= 0.077); the `channel_sum` entry of the checkpoints'
+  constraint report notes that its `frac_satisfied` (0.855) counts the
+  masked TAL feedstock-channel targets as failures, with the identity on the
+  unmasked targets (1600 / 1600 samples, max error 5.6e-14 of the
+  coefficient spread; `experiments.annotate_channel_sum`).
 
 ### Validation-design checks (final review, round 3; report only)
 

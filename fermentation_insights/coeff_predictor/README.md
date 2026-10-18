@@ -49,10 +49,17 @@ test samples. Generated from `results/tables` at the end of a full run of
 In short: for a new configuration of a known feedstock and product (the
 typical use) the error depends on the family: 1.5-3.7 % for HP and succinic
 acid, 7-17 % for TAL and lactic acid and 16-47 % for ethanol (ranges of the
-leave-one-configuration-out folds, the line above); the recovery (g)
-intervals under-cover every TAL configuration, known or new, and new lactic
-configurations, the d′ intervals the lactic ones, and the others are
-over-covered (section 4.5). The model does not fully reproduce the economy of
+leave-one-configuration-out folds, the line above). The 90 % intervals are
+calibrated pooled over all families and are miscalibrated per family in both
+directions (section 4.5): for a new configuration the MPSP intervals cover
+only 0.77 of the ethanol and 0.69 of the lactic samples (worst
+configurations ethanol_sugarcane 0.31, lactic_neutral_SHF_cornstover 0.28),
+the recovery (g) intervals 0.43 of TAL (also for a known TAL configuration:
+0.44) and 0.65 of lactic, and b′, c′, d′ under-cover ethanol and lactic
+acid; HP, succinic acid and, for a known configuration, every family but
+TAL and lactic acid are covered at 1.0, i.e. their intervals are too wide
+(MPSP typically ±15-30 %). `predict()` / `mpsp()` name the under-covering
+keys of each row in `intervals_undercovered`. The model does not fully reproduce the economy of
 scale: it gives about two thirds of the simulated MPSP change for a 2-3x
 larger plant (section 7). The shipped (v4) checkpoints train on the data
 regenerated with the D16 / D17 corrections (2026-10-18; the processed
@@ -439,8 +446,10 @@ m = P.mpsp(known, y=Y.ravel(), t=T.ravel())     # ensemble: MPSP, MPSP_std, MPSP
 (RI ≈ −0.5 at its baseline), whose yield deficit is sold as ethanol (b′,
 d′ < 0; DESIGN.md §1). `P.mpsp` averages the members' MPSPs (not the
 equation at the mean coefficients) and adds the calibrated intervals. It raises ValueError for
-y ≤ 0 or t ≤ 0, returns NaN above the theoretical yield, and warns above the
-inflection yield or outside the training titer range.
+y ≤ 0 or t ≤ 0, returns NaN above the theoretical yield, and warns
+(`ApplicabilityWarning`) above the inflection yield, below the lowest
+training yield of the product pair (the 1/y terms are extrapolated) and
+outside its training titer range.
 
 ### 4.5 Uncertainty and applicability domain
 
@@ -464,6 +473,21 @@ inflection yield or outside the training titer range.
   the realized test coverage; no test sample was used to calibrate.
   `P.ensemble.meta['conformal_random_cv']` holds, for information only, the
   quantiles calibrated on the random-CV scores (in-distribution queries).
+* **The quantiles are pooled over all families**, and the coverage differs
+  strongly between families, in both directions (next two bullets).
+  `predict()` and `mpsp()` therefore report, per row, the interval keys
+  whose coverage for the row's fermentation product is more than 0.1 below
+  nominal in development CV in the column `intervals_undercovered` (e.g.
+  `'c 0.76, g 0.40'` for a known TAL configuration, `'mpsp 0.77'` in
+  `mpsp()` for a new ethanol configuration), with an `ApplicabilityWarning`
+  that quotes the numbers. The numbers are the coverage of the checkpoint's
+  own quantiles on the development out-of-fold scores
+  (`P.ensemble.meta['coverage_by_family']`): for a row named by a training
+  `config_id` (without its own feedstock composition or conflicting names)
+  the lower of the random-CV and productivity-tail coverage, for any other
+  row of a known product the leave-one-configuration-out coverage. Those
+  intervals are too narrow for the family; a per-family (Mondrian)
+  calibration is an open item (DESIGN.md section 6, 4f, open item 12).
 * **A known configuration** (a training configuration with new parameter
   values; coverage of the shipped quantiles on the random-CV out-of-fold
   scores, REPORT.md section 6, "Coverage for a KNOWN configuration"): the
@@ -471,11 +495,16 @@ inflection yield or outside the training titer range.
   a′ b′ c′ d′ 0.96-0.99) but NOT for every family. g covers only 0.44 of
   the TAL samples (0.21-0.65 per TAL configuration), c′ 0.76 and MPSP 0.91
   of TAL; d′ covers 0.56 and b′ 0.87 of the lactic samples. Every other
-  family is covered at 1.00 for every key, i.e. its intervals are too
-  wide. The productivity tails give the same picture (TAL g 0.40, lactic d′
-  0.55). The TAL recovery varies within a configuration with a module
-  parameter that is not a model input (section 7, "TAL recovery noise"), so
-  the TAL g intervals are too narrow for any TAL query, known or new.
+  family (HP, ethanol, isobutanol, oxalic and succinic acid) is covered at
+  1.00 for every key, i.e. its intervals are too wide: at the baseline
+  yield and titer of each training configuration (queried by name) the
+  MPSP interval half-width is ±15-32 % of the MPSP (median per family
+  ±17 % oxalic to ±25 % TAL; HP ±22 %), while the random-CV MPSP error is
+  3.5 %. The productivity tails give the same picture (TAL g 0.40, lactic
+  d′ 0.55, lactic b′ 0.74). The TAL recovery varies within a configuration
+  with a module parameter that is not a model input (section 7, "TAL
+  recovery noise"), so the TAL g intervals are too narrow for any TAL
+  query, known or new.
 * **Measured coverage (nominal 0.90).** Cross-fitted LOCO estimate for a new
   configuration, pooled over samples (the targeted quantity) / mean over
   configurations: a′ 0.90 / 0.95, b′ 0.90 / 0.93, c′ 0.86 / 0.92, d′
@@ -487,7 +516,16 @@ inflection yield or outside the training titer range.
   configuration of an HP-like family therefore gets g intervals that are too
   wide, and a TAL- or lactic-like one intervals that are too narrow. On the
   OOD test the g coverage is 0.71 (TAL_sugarcane 0.38,
-  lactic_neutral_SSCF_cornstover 0.56). For a **new feedstock or a new
+  lactic_neutral_SSCF_cornstover 0.56). The same holds for the MPSP and the
+  coefficients (shipped quantiles on the LOCO out-of-fold scores, pooled
+  over each family's held-out samples; `tables/interval_coverage_by_family.csv`):
+  MPSP HP, isobutanol, succinic 1.00, TAL 0.91, oxalic 0.88, **ethanol 0.77,
+  lactic 0.69** (worst configurations ethanol_sugarcane 0.31,
+  lactic_neutral_SHF_cornstover 0.28); b′ ethanol 0.67, lactic 0.59; c′
+  ethanol 0.70, lactic 0.78; d′ lactic 0.54, oxalic 0.48 (one
+  configuration); a′ isobutanol 0.00 (one configuration). A new ethanol or
+  lactic configuration therefore gets MPSP intervals that are too narrow,
+  a new HP or succinic one intervals that are too wide. For a **new feedstock or a new
   product the intervals are not calibrated**: the shipped quantiles cover
   0.76 / 0.70 of the held-out MPSP samples and 0.71 / 0.46 of the recoveries
   in leave-one-feedstock-out / leave-one-product-out CV (REPORT.md section
@@ -587,11 +625,15 @@ error of the predicted g).
 `a, b, c, d, g` (ensemble means; `g` is the user recovery where one was
 given), `g_predicted`, `g_source`, `<k>_std`, `<k>_lo`, `<k>_hi`,
 `ch__<channel>__<k>`, `int__<fs|el|ng>__<k>`, `ad_ratio`, `in_domain`,
-`outside_range`, `price_outside_range`, `intervals_calibrated`, `imputed`,
-`contextual_defaults`, `contextual_source`, `not_applicable`,
-`contextual_outside_range` and `filled_from_registry`. `mpsp()` returns
-`row, y, t, MPSP, MPSP_std, MPSP_lo, MPSP_hi, g_source,
-intervals_calibrated, contextual_outside_range`.
+`outside_range`, `price_outside_range`, `intervals_calibrated`,
+`intervals_undercovered` (section 4.5), `imputed`, `contextual_defaults`,
+`contextual_source`, `not_applicable`, `contextual_outside_range` and
+`filled_from_registry`, one row per spec row in the same order; for a
+DataFrame spec the output keeps the spec's index, so it can be joined back
+by index. `mpsp()` returns `row, y, t, MPSP, MPSP_std, MPSP_lo, MPSP_hi,
+g_source, intervals_calibrated, intervals_undercovered,
+contextual_outside_range`; its `row` numbers the spec rows positionally
+(0, 1, ...), also for a DataFrame spec.
 
 `contextual_outside_range` lists the contextual parameters (the `p_*`
 inputs other than prices, and `feedstock_capacity`) that lie outside the
@@ -617,8 +659,17 @@ ignoring case. Categorical values that were not seen in training (e.g.
 level, with a warning naming them. A field that is not in this table (e.g.
 a misspelled `electricty_price`) is ignored by the model, with a warning and
 close matches; when a price and its alias are both given with different
-values, the canonical name wins, with a warning. Every omitted, defaulted
-or imputed field is reported per row.
+values, the canonical name wins, with a warning. An `fs_w_*` key that is
+not a composition column of the checkpoint (e.g. `fs_w_watre`) is ignored
+in the same way: it does not turn a by-name configuration into a custom
+feedstock. A given numeric field (`r`, the prices and their aliases, the
+contextual `p_*` parameters, `fs_w_*`, `theoretical_yield`,
+`T_fermentation`, ...) must be a number (a numeric string such as `'0.1'`
+is accepted), None / NaN / `''` (omitted) or, for a contextual parameter,
+`'n/a'` (not applicable); anything else (e.g. `p_IRR='10%'`,
+`p_operating_days='300 days'`) raises a ValueError naming the field and its
+unit, so that it is never silently read as missing. Every omitted,
+defaulted or imputed field is reported per row.
 
 | field | unit / allowed values | if omitted |
 |---|---|---|
@@ -766,7 +817,7 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   boosting and kNN use fixed settings and ridge its internal CV of the
   penalty, so the comparisons are tilted toward the PI-NN by an unknown
   amount. No ablation effect is established at the fold level (REPORT.md
-  summary and section 5: every |t| ≤ 1.4, Wilcoxon p ≥ 0.08, each mean
+  summary and section 5: every |t| ≤ 1.41, Wilcoxon p ≥ 0.077, each mean
   driven by one fold). The fold-level evidence for the physics-informed
   model as a whole is PI-NN vs. plain MLP and vs. kNN on
   leave-one-configuration-out (PI-NN better on 31 and 34 of 37 folds; plain
@@ -849,8 +900,13 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   −9.9 / −13.9 %, succinic_cornstover −8.4 / −13.2 % vs. −14.0 / −19.5 %,
   TAL_cornstover −4.3 / −6.3 % vs. −6.4 / −8.9 %; at 0.5x (median over
   the configurations) +3.3 % vs. +7.6 %. The simulated HP plants have little
-  economy of scale (capital about proportional to the capacity, and growing
-  faster beyond 2x for the hexanol and sugarcane designs). The MPSP
+  or no economy of scale, and that is a simulation artefact (known data
+  defect D18, below): their purification columns are already 27-40 ft wide
+  at the baseline, beyond BioSTEAM's own 24 ft bound, and their trays are
+  priced with an exponential correlation far beyond its range, so the HP
+  capital grows faster than the capacity, starting inside the sampled
+  range (HP_hexanol_sugarcane FCI x1.17 and MPSP +0.7 % at 1.15x, +20 % at
+  2x; with the wide trays priced as parallel stacks −1.2 % and −4.6 %). The MPSP
   intervals (half-width a median 27 % of MPSP) cover 69 of the 72 simulated
   2-3x points, but a scale-up comparison is a paired difference, and there
   the predicted change is about two thirds of the simulated one. The global
@@ -992,7 +1048,8 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     models; D16 and D17, found in the final data review, are in the training
     data of the v3 checkpoints (`results/v3/`) and were fixed by
     regeneration on 2026-10-18, so the processed tables in git and the
-    shipped v4 checkpoints no longer carry them):
+    shipped v4 checkpoints no longer carry them; D18, found in the final
+    review of v4, is in the shipped data):
 
     | id | configurations | defect | effect |
     |---|---|---|---|
@@ -1006,6 +1063,7 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     | H1 | TAL_SA_glucose, TAL_SA_sugarcane | v2 data: samples after a failed reset recorded without points | fixed by regeneration (harness reload/`retry`, robust evaporator root search in the TAL adapter) |
     | D16 | TAL_SA_sugarcane | the Bioindustrial-Park system appends the juice recycle to the cane mill a second time, so its fermentation gets 15 % more sugar per kg cane than the other sugarcane configurations (more than the cane holds) | in the v3 training data: feedstock demand understated, MPSP about 1-6 % low (median ~3 %), b′ 9-12 % low; most of the +19.5 % in-sample feedstock-sensitivity error of the v3 checkpoints (section 4.6). Fixed by regeneration (2026-10-18; fi-TAL fix, TAL adapter v3): sugar fed / cane sugar 0.946 as in the other sugarcane configurations; with D17, MPSP +4 % and b′ +12 % vs. the v3 rows |
     | D17 | all HP and TAL, ethanol_sugarcane, IBO_EtOH_corn (the systems with BioSTEAM's `InternalCirculationRx`; oxalic_neutral_sugarcane has one too, with no effect) | the anaerobic IC reactor of the wastewater treatment counts its biogas twice (BioSTEAM, `method='lumped'`), and the boiler burns the phantom methane | in the v3 training data: MPSP too low at the baseline by 1-5 % (HP; corn stover 4-5 %), 1-13 % (TAL; corn stover 7-13 %), 0.9 % (ethanol_sugarcane; up to 10 % at low yield) and 0.6 % (IBO); the bias depends on the yield, so b′ (up to 20 % low for corn and corn stover) and the electricity / natural-gas intensities are biased. Fixed by regeneration (2026-10-18): harness v4 applies the runtime correction `data_generation/biosteam_fixes.py`; the regenerated rows are 0.6-12 % higher than the v3 rows at the same TY points (median per configuration; oxalic unchanged; up to 21 % at low yields on corn stover), b′ 9-22 % higher on corn and corn stover |
+    | D18 | all 16 HP (strongly: HP_hexanol_sugarcane, HP_neutral_hexanol_sugarcane) | the purification columns (D408; D401 in the hexanol designs) are 27-40 ft wide at the baseline, beyond BioSTEAM's own column bound of 24 ft (no warning), and each tray is priced by Seider's correlation 412.7 exp(0.1482 D), fitted to about 16 ft, so the column capital grows with about flow^(0.07 D) | in the shipped data: the MPSP is higher than with the wide columns' trays priced as parallel stacks of the same area (a sensitivity, `data_generation/checks/column_trays_bias.csv`) by 3.9-4.1 % at the HP_hexanol_sugarcane / HP_neutral_hexanol_sugarcane baseline (y = 0.73; more at higher yields, 0 at the lowest), 0.9-1.0 % for HP_sugarcane / HP_neutral_sugarcane, 0.5-0.8 % for the other hexanol designs and ≤ 0.13 % for the rest; a′ 6-8 % higher for the two hexanol-sugarcane configurations; and the HP capacity response is reversed inside the sampled range for those two (MPSP rises with the capacity). Open: report-only check `sim_checks.py` `unit_bounds`; a correction would need regeneration of the HP configurations (DESIGN.md §1) |
 
   - TAL's final-product purity varies with titer.
   - Some cost-allocation conventions differ between modules and cannot be

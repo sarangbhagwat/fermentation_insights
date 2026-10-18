@@ -66,3 +66,25 @@ def test_checkpoint_warning_numbers_match_tables():
     shc = pd.read_csv(f)
     for r in shc[shc.scheme.isin(['feedstock', 'product'])].itertuples():
         assert abs(cov[r.scheme][r.key] - r.pooled) < 1e-3
+
+
+def test_readme_quotes_the_family_interval_coverage(readme):
+    """The user guide quotes the LOCO per-family MPSP coverage of the shipped
+    quantiles where it under-covers (REPORT.md section 6), and the
+    checkpoint's coverage_by_family metadata matches the table."""
+    f = os.path.join(TABLES, 'interval_coverage_by_family.csv')
+    if not os.path.exists(f):
+        pytest.skip('tables not available')
+    fc = pd.read_csv(f)
+    low = fc[(fc['key'] == 'mpsp') & (fc['coverage'] < 0.8)]
+    for x in low.itertuples():
+        assert f'{x.family} {x.coverage:.2f}' in readme, f'README does not quote the {x.family} MPSP coverage'
+    path = os.path.join(HERE, 'models', 'release', 'meta.json')
+    cbf = json.load(open(path))['meta'].get('coverage_by_family') if os.path.exists(path) else None
+    if not cbf:
+        pytest.skip('release checkpoint without coverage_by_family')
+    s = pd.read_csv(os.path.join(HERE, 'data', 'processed', 'samples.csv.gz'), usecols=['biorefinery',
+                                                                                       'fermentation_product'])
+    fp = dict(zip(s['biorefinery'], s['fermentation_product']))
+    for x in fc.itertuples():
+        assert abs(cbf['new_configuration'][fp[x.family]][x.key] - x.coverage) < 1e-3

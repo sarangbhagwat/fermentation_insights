@@ -35,8 +35,11 @@ model. It is a physics-informed deep ensemble (cost-channel decomposition, price
 physical constraints, uncertainty intervals and an applicability domain) trained on BioSTEAM simulations of 7
 Bioindustrial-Park biorefineries (41 configurations). Its intervals are split-conformal, calibrated on the
 leave-one-configuration-out cross-validation of the development data (so they target new configurations; coverage is
-marginal over the samples of new configurations, not guaranteed for each configuration; the recovery intervals
-under-cover every TAL configuration, known or new, and new lactic ones). In the cross-validation of the shipped (v4)
+marginal over the samples of new configurations, not guaranteed for each configuration, and the quantiles are pooled
+over the families: for a new configuration the MPSP intervals cover only 0.77 of the ethanol and 0.69 of the lactic
+samples, the recovery intervals under-cover every TAL configuration, known or new, and new lactic ones, while the
+intervals of HP and succinic acid are too wide (MPSP typically ±15-30 %); `predict()` names the under-covering keys
+of each row in `intervals_undercovered`). In the cross-validation of the shipped (v4)
 model, the leave-one-configuration-out MPSP error is 8.8 % (mean over the folds, each configuration counting once;
 19.5 % pooled over the held-out samples; 6.9 % over the 35 folds whose product has another configuration; by family,
 ranges of the folds, 1.5-3.7 % for HP and succinic acid, 8-13 % for TAL, 7-17 % for lactic acid, 17 % for the lactic
