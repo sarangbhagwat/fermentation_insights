@@ -239,7 +239,10 @@ def test_oof_calibration_scores_checks(dev_like):
 def test_plan_request_and_ablation_folds_per_mode():
     full = E.base_plan(E.parse_args([]))
     assert full['ablation_loco_folds'] == E.ABLATION_LOCO_FOLDS == 12
-    assert full['request'] == dict(budget_hours=2.5, hpo_candidates=0, hpo_members=2, ablation_loco_folds=12)
+    assert full['request'] == dict(budget_hours=2.5, hpo_candidates=0, hpo_members=2, ablation_loco_folds=12,
+                                   hpo_lopo_weight=E.HPO_LOPO_WEIGHT)
+    assert full['hpo_lopo_weight'] == E.HPO_LOPO_WEIGHT
+    assert E.base_plan(E.parse_args(['--hpo-lopo-weight', '0']))['request']['hpo_lopo_weight'] == 0.
     p6 = E.base_plan(E.parse_args(['--ablation-loco-folds', '6', '--budget-hours', '3']))
     assert p6['ablation_loco_folds'] == 6 and p6['request'] != full['request']
     assert E.base_plan(E.parse_args(['--ablation-loco-folds', '0']))['ablation_loco_folds'] is None

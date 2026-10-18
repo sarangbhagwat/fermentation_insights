@@ -94,7 +94,7 @@ import warnings
 
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 MODULE = 'fermentation_insights.coeff_predictor.experiments'
-CODE_VERSION = '4'
+CODE_VERSION = '5'
 
 DEFAULT_RAW = '/home/user/work/data/raw'
 DEFAULT_PROCESSED = os.path.join(PKG_DIR, 'data', 'processed')
@@ -153,6 +153,69 @@ EXTRAPOLATION_SAFEGUARDS = dict(fs_prior=True, neutralization_gate=True, clip_gr
 #: hard productivity structure of the pipeline PI-NN (DESIGN.md section 3,
 #: round 4; CLI ``--no-r-structure``)
 R_STRUCTURE = 'physics'
+#: round 5 (DESIGN.md section 6, round 5; each has a CLI flag restoring v2):
+#: hard power gate of the pipeline PI-NN (ModelConfig.power_gate: net
+#: electricity intensity >= 0 where electricity is not a coproduct; needs the
+#: downstream FeatureSpec; CLI ``--no-power-gate``)
+POWER_GATE = True
+#: pure-b' feedstock intensity (ModelConfig.fs_b_only: kg feedstock per kg
+#: fermentation product = 1 / (eta w_sugar y)): NOT adopted (round 5: better
+#: new-feedstock sensitivities, but the recovery-shaped feedstock terms the
+#: data do have move into other channels, LOPO channel error +4 points);
+#: opt-in with CLI ``--fs-b-only``
+FS_B_ONLY = False
+#: encoder columns never clipped (ModelConfig.clip_exempt; every network of
+#: the pipeline): the final-product stoichiometric mass ratio and its
+#: MW-ratio twin are exact structural quantities with a tiny training spread;
+#: with clip_inputs >= 0 a held-out product's ratio is clipped onto the
+#: value of other products (round 5: HP's 0.80 to 1.00, the value of the
+#: products without a mass-changing conversion, while its upgrading features
+#: say dehydration; HP LOPO 13 -> 82 %); CLI ``--no-clip-exempt``
+CLIP_EXEMPT = ('final_product_stoich_mass_ratio', 'phys_pp_fp_MW_ratio')
+#: channel loss of the pipeline PI-NN: the channel / intensity term compared
+#: as surfaces at the sample's points relative to the total numerator
+#: (LossConfig.ch_space = 'surface') with a FIXED weight chosen on the
+#: out-of-fold channel / price-intensity fidelity (not by the MPSP HPO
+#: criterion, which cannot see the decomposition; w_ch is then no HPO
+#: dimension); CLI ``--v2-channel-loss``: coefficient space, w_ch from the HPO
+CHANNEL_LOSS = dict(ch_space='surface', w_ch=3.0)
+#: channel targets masked in the PI-NN loss (train.mask_channel_targets),
+#: by biorefinery: known defective decompositions (DESIGN.md section 1,
+#: Known data defects, and section 6, round 5, 5f): TAL's feedstock channel
+#: (D8: y is the yield on all substrates, but the sugar demand per kg TAL is
+#: 1/y - 1.5 a/t with the spiked acetate a, a titer term no input describes
+#: and the product-blind feedstock head cannot represent; c' < 0 in every
+#: TAL sample). Lactic's feedstock targets (a recovery shape, not a defect)
+#: are NOT masked: on the corrected data the extra mask helped only the corn
+#: leave-one-feedstock-out fold, in 2 of 3 seeds, and cost
+#: leave-one-product-out 2 points (5f); CLI ``--no-target-mask``
+DEFECTIVE_TARGETS = {'feedstock': ('TAL',)}
+#: report text (changelog v2 -> v3): the re-check of the round-5 settings on
+#: the corrected development rows (DESIGN.md section 6, round 5, 5f)
+ROUND5_RECHECK = (
+    '**Re-check on the corrected development rows** (data hash c345efda41c4fdca, 1353 samples / 37 '
+    'configurations; v2 model settings vs. changes 1-4 of this run, v2-selected hyperparameters, one member per '
+    'fit, paired over 3 seeds on the same folds; mean over seeds (difference, seed t); `*` = without TAL and '
+    'lactic; `wrong-sign el.` = share of the held-out samples of configurations without power export predicted '
+    'to export; %; DESIGN.md 5f):\n\n'
+    '| scheme | MPSP fold mean | MPSP geo-mean (configurations) | folds better / worse (median diff) | '
+    'channel error ch_rms | feedstock sensitivity error* | electricity response | wrong-sign el. |\n'
+    '|---|---|---|---|---|---|---|---|\n'
+    '| leave-one-configuration-out (37) | 9.7 -> 9.3 (-0.4, -0.9) | 5.6 -> 5.7 (+0.1, +1.9) | 14 / 23 (+0.12) | '
+    '25.2 -> 15.7 (-9.5, -92) | 15.1 -> 4.2 | 9.8 -> 7.7 | 85 -> 0 |\n'
+    '| leave-one-product-out (7) | 57.2 -> 46.5 (-10.7, -4.4) | 52.0 -> 28.1 | 6 / 1 (-5.2) | '
+    '38.6 -> 31.5 (-7.1, -11.7) | 19.4 -> 18.1 | 14.8 -> 14.0 | 100 -> 0 |\n'
+    '| leave-one-feedstock-out (4) | 30.3 -> 34.1 (+3.8, +2.0) | 17.6 -> 16.6 | 2 / 2 (+0.9) | '
+    '38.9 -> 35.0 (-3.9, -12.6) | 16.6 -> 12.7 | 16.1 -> 14.4 | 100 -> 0 |\n\n'
+    'Per configuration (LOCO): the corn feedstock-sensitivity bias is -32 ... -16 % under v2 for every corn '
+    'configuration and -0.6 ... +1.0 % now (isobutanol +8.7 %); isobutanol 70.5 -> 39.7 %, oxalic 52.1 -> '
+    '47.3 %, HP in LOPO 54.9 -> 13.2 %. Worse: the three ethanol configurations (LOCO corn 18.0 -> 27.9, corn '
+    'stover 27.4 -> 38.0, sugarcane 17.8 -> 20.2 %; LOFO ethanol corn 48 -> 111 %, ethanol corn stover 22 -> '
+    '35 %; LOPO ethanol 60 -> 77 %), which carry the LOFO deterioration. Attribution (the same settings without the power '
+    'gate): the ethanol corn stover loss comes from the surface channel loss (LOCO 27.4 -> 51.9 % without the '
+    'gate, 38.0 % with it), the ethanol corn loss from the gate, which removes its compensating wrong-sign '
+    'electricity credit (LOCO 19.3 -> 27.9 %; LOFO corn fold 48.8 -> 63.3 %, all of the LOFO change); the gate '
+    'improves the LOCO fold mean (10.2 -> 9.3 %) and LOPO (52.0 -> 46.5 %; isobutanol 72 -> 40 %).\n')
 #: channel-wise input masking preset of the pipeline PI-NN ('physics' = v1;
 #: CLI ``--v1-g-inputs``): 'physics_v2' keeps the reagent prices away from the
 #: recovery g
@@ -200,6 +263,18 @@ HP_DEFAULT = dict(width=128, depth=3, dropout=0.05, weight_decay=1e-4, lr=2e-3,
 #: of 911 development samples), so selecting on it selects on one
 #: extrapolation.
 HPO_METRIC = 'mpsp_mape_cfg'
+#: weight of leave-one-product-out in the HPO criterion (round 5, DESIGN.md
+#: section 6, 5e-5f; CLI ``--hpo-lopo-weight``): criterion = (1 - w) * (LOCO
+#: fold mean of HPO_METRIC) + w * (mean over the leave-one-product-out folds
+#: of HPO_METRIC). 0 = the v2 criterion, the pipeline default: proposed in
+#: round 5 because the LOCO-only criterion of v2 selected clip_inputs = 0,
+#: which clipped the held-out HP's final-product stoichiometric ratio 0.80
+#: to 1.00 (HP LOPO 13 -> 82 %); CLIP_EXEMPT removes that mechanism for
+#: every candidate, and with it w = 0.5 still switches the selection to a
+#: candidate whose single-seed LOPO advantage (46.1 vs 49.7 %) reverses over
+#: three seeds (54.5 +- 8.0 vs 49.5 %) at +1.3 points of the LOCO criterion,
+#: +21 % run time and a post-selection LOPO estimate, so it is not adopted
+HPO_LOPO_WEIGHT = 0.0
 
 #: colour-blind-safe categorical palette (fixed order; colour follows entity)
 PALETTE = ('#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948')
@@ -698,6 +773,9 @@ def _run_job(job):
         warnings.simplefilter('always')
         try:
             s_tr, p_tr = _subset(job['train_ids'])
+            if job.get('target_mask'):
+                from fermentation_insights.coeff_predictor.train import mask_channel_targets
+                s_tr = mask_channel_targets(s_tr, job['target_mask'])
             model = fit_method(job['method'], s_tr, p_tr, job['members'], job['mk'], job['lk'], job['tk'],
                                group_col=job['group_col'], calib_frac=job['calib_frac'], seed=job['seed'],
                                spec_kw=job.get('spec_kw') or None)
@@ -794,6 +872,11 @@ def make_job(stage, tag, method, train_ids, evals, members, mk, lk, tk, group_co
         spec_kw = ctx.get('spec_kw')
     if ctx.get('mk_extra'):
         mk = {**mk, **ctx['mk_extra']}
+    pinn = method.split('-')[0] == 'pinn'
+    if ctx.get('lk_extra') and pinn:
+        # pipeline channel loss (CHANNEL_LOSS); ablations override it (evaluate._configs)
+        lk = {**lk, **ctx['lk_extra']}
+    target_mask = {k: list(v) for k, v in (ctx.get('target_mask') or {}).items()} if pinn else {}
     if mk.get('channel_inputs') and method.split('-')[0] == 'pinn':
         mk = dict(mk)
         mk.setdefault('masked_width', max(8, int(mk.get('width', 128)) // 2))
@@ -804,11 +887,14 @@ def make_job(stage, tag, method, train_ids, evals, members, mk, lk, tk, group_co
                 extras=sorted(extras), save=bool(save_model))
     if spec_kw:
         spec['spec_kw'] = dict(spec_kw)
+    if target_mask:
+        spec['target_mask'] = target_mask
     if calib_scores is not None or calib_extra:
         spec['calib'] = _sha([calib_scores, calib_info, calib_extra], 24)
     return dict(key=_sha(spec, 24), stage=stage, tag=tag, method=method, train_ids=list(train_ids),
                 evals={k: list(v) for k, v in evals.items()}, members=members, mk=mk, lk=lk, tk=tk,
-                spec_kw=dict(spec_kw or {}), calib_scores=calib_scores, calib_info=dict(calib_info or {}),
+                spec_kw=dict(spec_kw or {}), target_mask=target_mask, calib_scores=calib_scores,
+                calib_info=dict(calib_info or {}),
                 calib_extra=calib_extra or None, protocol=(ctx.get('protocol') or PROTOCOL)['name'],
                 group_col=group_col, calib_frac=calib_frac, seed=seed, extras=tuple(extras),
                 save_model=save_model, meta=meta or {}, data_hash=ctx['data_hash'],
@@ -941,6 +1027,7 @@ def base_plan(a):
     # in held-out MAPE on the development folds, so one member per candidate
     # and fold mostly ranks seeds, not hyperparameters
     return dict(mode='full', hpo_k=5, hpo_candidates=None, hpo_members=a.hpo_members, cv_members=a.members,
+                hpo_lopo_weight=hpo_lopo_weight(a),
                 final_members=a.members, release_members=a.members, random_k=5, loco_folds=None,
                 ablation_loco_folds=(abl or None), epochs=300, patience=40, min_epochs=20,
                 batch_size=128, request=plan_request(a))
@@ -955,7 +1042,7 @@ def plan_request(a):
     only when they are unchanged (``stage_hpo``)."""
     abl = getattr(a, 'ablation_loco_folds', None)
     return dict(budget_hours=float(a.budget_hours), hpo_candidates=int(a.hpo_candidates or 0),
-                hpo_members=int(a.hpo_members),
+                hpo_members=int(a.hpo_members), hpo_lopo_weight=hpo_lopo_weight(a),
                 ablation_loco_folds=int(ABLATION_LOCO_FOLDS if abl is None else abl))
 
 
@@ -980,11 +1067,16 @@ def protocol_holdouts(protocol, stage, scheme=None):
     return protocol['es_group'], float(protocol['calib_frac'])
 
 
-def hpo_candidates(n, seed):
-    """Fixed seeded sequence (candidate 0 = package defaults); the first n."""
+def hpo_candidates(n, seed, fixed=None):
+    """Fixed seeded sequence (candidate 0 = package defaults); the first n.
+    ``fixed`` = {dimension: value} overrides a dimension the pipeline sets
+    itself (e.g. ``w_ch`` under CHANNEL_LOSS); the random draws are the same,
+    so the other dimensions of the candidates are unchanged, and candidates
+    that become identical are dropped."""
     import numpy as np
     rng = np.random.RandomState(seed + 2027)
-    out = [dict(HP_DEFAULT)]
+    fixed = dict(fixed or {})
+    out = [{**HP_DEFAULT, **fixed}]
     sig = lambda v: float(f'{v:.2g}')
     while len(out) < max(n, 1):
         c = dict(width=int(rng.choice([64, 128, 256])), depth=int(rng.choice([2, 3, 4])),
@@ -993,9 +1085,17 @@ def hpo_candidates(n, seed):
                  w_mpsp=float(rng.choice([0.3, 1., 3.])), w_ch=float(rng.choice([0.1, 0.3, 0.5, 1.])),
                  w_phys=float(rng.choice([0.03, 0.1, 0.3, 1.])), colloc_ratio=float(rng.choice([0.5, 1., 2.])),
                  early_stop=str(rng.choice(['data', 'mpsp'])), clip_inputs=float(rng.choice([-1., 0.])))
+        c.update(fixed)
         if c not in out:
             out.append(c)
     return out[:n]
+
+
+def hpo_fixed(ctx):
+    """HPO dimensions fixed by the pipeline settings of ``ctx``: ``w_ch``
+    under the channel loss CHANNEL_LOSS (``ctx['lk_extra']``)."""
+    lk = (ctx or {}).get('lk_extra') or {}
+    return {'w_ch': float(lk['w_ch'])} if 'w_ch' in lk else {}
 
 
 def hp_kwargs(hp, plan, protocol=None):
@@ -1060,6 +1160,9 @@ def plan_budget(plan, a, pilot, dev, test_n, n_all, seed):
     final = (2 * fit(n_dev, plan['final_members']) + fit(n_all, plan['release_members'])
              + 3 * fit(n_dev, 1, 'hgb'))
     hpo_one = plan['hpo_k'] * fit(n_dev * (plan['hpo_k'] - 1) / plan['hpo_k'], plan.get('hpo_members', 1))
+    if plan.get('hpo_lopo_weight', 0.) > 0:      # the leave-one-product-out part of the criterion
+        hpo_one += sum(fit(len(tr), plan.get('hpo_members', 1)) for _, tr, _, _ in
+                       scheme_splits(dev, 'product', plan, seed))
     budget = a.budget_hours * 3600 * max(1, a.threads)
     n_cand = a.hpo_candidates or 12
     abl = plan.get('ablation_loco_folds')
@@ -1175,11 +1278,23 @@ def headline(res, methods=None):
 
 # %% Stages 3-5
 
+def hpo_lopo_weight(a):
+    """Weight of the leave-one-product-out folds in the HPO criterion
+    (``--hpo-lopo-weight``, default HPO_LOPO_WEIGHT; quick mode: 0)."""
+    w = getattr(a, 'hpo_lopo_weight', None)
+    w = (0. if getattr(a, 'quick', False) else HPO_LOPO_WEIGHT) if w is None else float(w)
+    if not 0. <= w <= 1.:
+        raise SystemExit(f'--hpo-lopo-weight must be in [0, 1], got {w}')
+    return w
+
+
 def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
     folds = stratified_group_kfold(dev, plan['hpo_k'], a.seed)
+    w_lopo = float(plan.get('hpo_lopo_weight', 0.))
+    lopo = [(tr, te, lab) for _, tr, te, lab in scheme_splits(dev, 'product', plan, a.seed)] if w_lopo > 0 else []
     ids = dev['sample_id'].astype(str).to_numpy()
     n_max = 16 if plan['hpo_candidates'] is None else plan['hpo_candidates']
-    cands = hpo_candidates(max(n_max, 1), a.seed)
+    cands = hpo_candidates(max(n_max, 1), a.seed, fixed=hpo_fixed(ctx))
 
     protocol = ctx.get('protocol') or PROTOCOL
     gcol, cfrac = protocol_holdouts(protocol, 'hpo')
@@ -1187,9 +1302,15 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
     def jobs_for(ci):
         # the pipeline protocol (as in CV and the final models): the HPO selects for the procedure used
         mk, lk, tk = hp_kwargs(cands[ci], plan, protocol)
-        return [make_job('hpo', f'cand{ci} {lab}', 'pinn', ids[tr], {'test': ids[te]}, plan.get('hpo_members', 1),
-                         mk, lk, tk, gcol, cfrac, a.seed + 101 * ci + f, ctx, meta=dict(cand=ci, fold=f))
-                for f, (tr, te, lab) in enumerate(folds)]
+        js = [make_job('hpo', f'cand{ci} {lab}', 'pinn', ids[tr], {'test': ids[te]}, plan.get('hpo_members', 1),
+                       mk, lk, tk, gcol, cfrac, a.seed + 101 * ci + f, ctx, meta=dict(cand=ci, fold=f))
+              for f, (tr, te, lab) in enumerate(folds)]
+        # leave-one-product-out part of the criterion (HPO_LOPO_WEIGHT)
+        js += [make_job('hpo', f'cand{ci} lopo {lab}', 'pinn', ids[tr], {'test': ids[te]},
+                        plan.get('hpo_members', 1), mk, lk, tk, gcol, cfrac, a.seed + 101 * ci + 50 + f, ctx,
+                        meta=dict(cand=ci, fold=f, part='lopo', label=lab))
+               for f, (tr, te, lab) in enumerate(lopo)]
+        return js
 
     results = runner.run(jobs_for(0), 'hpo pilot (candidate 0 = defaults)')
     if plan['hpo_candidates'] is None:      # full mode: size the search from the pilot
@@ -1230,8 +1351,21 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
     import pandas as pd
     rows, fold_rows = [], []
     for ci, hp in enumerate(cands):
-        js = [j for j in jobs if j['meta']['cand'] == ci]
+        js = [j for j in jobs if j['meta']['cand'] == ci and j['meta'].get('part', 'loco') == 'loco']
+        jl = [j for j in jobs if j['meta']['cand'] == ci and j['meta'].get('part') == 'lopo']
         rs = [results[j['key']] for j in js]
+        ml = []
+        for j in jl:
+            r = results[j['key']]
+            m = {} if r['error'] else {(x, t): v for x, t, v in r['evals']['test']['rows']}
+            ml.append(m)
+            fold_rows.append(dict(candidate=ci, fold=f"lopo {j['meta']['label']}", error=r['error'],
+                                  mpsp_mape=m.get(('mpsp_mape', 'MPSP'), np.nan),
+                                  mpsp_mape_cfg=m.get(('mpsp_mape_cfg', 'MPSP'), np.nan),
+                                  mpsp_mape_cfg_gmean=m.get(('mpsp_mape_cfg_gmean', 'MPSP'), np.nan),
+                                  fit_mape=m.get(('fit_mape', 'MPSP'), np.nan), seconds=r['seconds'],
+                                  epochs=np.mean(r['epochs']) if r['epochs'] else np.nan))
+        crit_l = np.array([m.get((HPO_METRIC, 'MPSP'), np.nan) for m in ml])
         mm = []
         for j, r in zip(js, rs):
             m = {} if r['error'] else {(x, t): v for x, t, v in r['evals']['test']['rows']}
@@ -1246,8 +1380,11 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
         mape = np.array([m.get(('mpsp_mape', 'MPSP'), np.nan) for m in mm])
         crit = np.array([m.get((HPO_METRIC, 'MPSP'), np.nan) for m in mm])
         n_ok = int(np.isfinite(crit).sum())
+        c_loco = float(np.nanmean(crit)) if n_ok == len(crit) else np.inf
+        c_lopo = (float(np.mean(crit_l)) if np.isfinite(crit_l).all() else np.inf) if jl else np.nan
         rows.append(dict(candidate=ci, **hp, n_folds_ok=n_ok,
-                         criterion=float(np.nanmean(crit)) if n_ok == len(crit) else np.inf,
+                         criterion=((1 - w_lopo) * c_loco + w_lopo * c_lopo) if jl else c_loco,
+                         criterion_loco=c_loco, criterion_lopo=c_lopo,
                          criterion_se=float(np.nanstd(crit, ddof=1) / np.sqrt(n_ok)) if n_ok > 1 else np.nan,
                          mpsp_mape=float(np.nanmean(mape)) if np.isfinite(mape).all() else np.inf,
                          mpsp_mape_se=float(np.nanstd(mape, ddof=1) / np.sqrt(len(mape))) if len(mape) > 1 else np.nan,
@@ -1265,10 +1402,11 @@ def stage_hpo(a, plan, runner, dev, ctx, n_test, n_all):
         log('hpo: WARNING every candidate failed in some fold; falling back to the package defaults')
     fold_info = [dict(fold=lab, n_test_configs=int(len(set(dev['config_id'].iloc[te]))), n_test=int(len(te)))
                  for tr, te, lab in folds]
-    log(f'hpo: selected candidate {best}: {sel} (fold-mean configuration-balanced held-out MPSP MAPE '
-        f'{tab.loc[best, "criterion"]:.4f}; point-weighted {tab.loc[best, "mpsp_mape"]:.4f})')
+    log(f'hpo: selected candidate {best}: {sel} (criterion {tab.loc[best, "criterion"]:.4f} = '
+        f'{1 - w_lopo:g} x LOCO {tab.loc[best, "criterion_loco"]:.4f} + {w_lopo:g} x LOPO '
+        f'{tab.loc[best, "criterion_lopo"]:.4f}; point-weighted LOCO {tab.loc[best, "mpsp_mape"]:.4f})')
     return dict(table=tab, folds=pd.DataFrame(fold_rows), selected=sel, best=best, fold_info=fold_info,
-                jobs=jobs, raw=results)
+                jobs=jobs, raw=results, lopo_weight=w_lopo)
 
 
 def stage_cv(a, plan, runner, dev, ctx, hp, D):
@@ -1291,9 +1429,9 @@ def stage_cv(a, plan, runner, dev, ctx, hp, D):
         gcol, cfrac = protocol_holdouts(protocol, 'cv', sch)
         for f, tr, te, lab in scheme_splits(dev, sch, plan, a.seed):
             for m in cv_methods(sch, lab, abl):
+                ex = ('scores', 'channels') if m == 'pinn' else ('scores',) if m in NN_BASES else ()
                 j = make_job('cv', f'{sch} {lab}', m, ids[tr], {'test': ids[te]}, plan['cv_members'], mk, lk, tk,
-                             gcol, cfrac, a.seed + f, ctx, extras=('scores',) if m in NN_BASES else (),
-                             meta=dict(scheme=sch, fold=f, label=lab))
+                             gcol, cfrac, a.seed + f, ctx, extras=ex, meta=dict(scheme=sch, fold=f, label=lab))
                 jobs.append(j)
     results = runner.run(jobs, 'cv')
     S = D['samples'].assign(sample_id=D['samples']['sample_id'].astype(str)).set_index('sample_id', drop=False)
@@ -1326,7 +1464,64 @@ def stage_cv(a, plan, runner, dev, ctx, hp, D):
         lead = ['scheme', 'method', 'fold', 'fold_index']
         sc = sc[lead + [c for c in sc.columns if c not in lead]]
     return dict(results=res, oof=oof, jobs=jobs, raw=results, oof_scores=sc, crossfit=crossfit_table(sc),
-                ablation_folds=sorted(abl) if abl is not None else None)
+                ablation_folds=sorted(abl) if abl is not None else None,
+                fidelity=oof_fidelity(jobs, results, S, P))
+
+
+def oof_fidelity(jobs, results, samples_by_id, points_by_id, method='pinn'):
+    """Out-of-fold channel / price-intensity fidelity of ``method``
+    (``evaluate.channel_fidelity`` of each held-out sample, from the fold
+    ensemble that did not see it; member-mean channels): one row per scheme
+    x held-out sample, with ``fold`` (index) and ``label``."""
+    import pandas as pd
+    from fermentation_insights.coeff_predictor.evaluate import channel_fidelity
+    out = []
+    for j in jobs:
+        if j['method'] != method:
+            continue
+        r = results.get(j['key']) or {}
+        ev = (r.get('evals') or {}).get('test')
+        if r.get('error') or not ev or ev.get('channels') is None or ev.get('intensities') is None:
+            continue
+        ids = [str(i) for i in ev['ids']]
+        s = samples_by_id.loc[ids].reset_index(drop=True)
+        parts = [points_by_id[i] for i in ids if i in points_by_id]
+        if not parts:
+            continue
+        f = channel_fidelity(s, pd.concat(parts, ignore_index=True), ev['channels'], ev['channel_names'],
+                             ev['intensities'], ev['price_keys'], ev['g'])
+        out.append(f.assign(scheme=j['meta']['scheme'], fold=j['meta']['fold'], label=str(j['meta']['label'])))
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+
+
+#: columns of the report's fidelity summary
+FIDELITY_REPORT_COLS = ('ch_rms', 'ch_feedstock', 'ch_electricity', 'ch_natural_gas', 'ch_materials_other',
+                        'ch_capex_downstream', 'sens_fs', 'bias_fs', 'resp_fs', 'resp_el', 'resp_ng')
+
+
+def fidelity_tables(fid):
+    """(summary per scheme, per scheme x configuration) of the out-of-fold
+    fidelity rows: configuration-balanced means (``bias_*`` absolute in the
+    summary, signed medians per configuration); feedstock metrics also
+    without the configurations whose feedstock targets are masked as
+    defective (``*_valid``, DEFECTIVE_TARGETS)."""
+    import numpy as np
+    import pandas as pd
+    from fermentation_insights.coeff_predictor.evaluate import fidelity_summary
+    if fid is None or not len(fid):
+        return pd.DataFrame(), pd.DataFrame()
+    d = fid.copy()
+    bad = d['biorefinery'].isin(DEFECTIVE_TARGETS.get('feedstock', ())) | \
+        d['config_id'].isin(DEFECTIVE_TARGETS.get('feedstock', ()))
+    for c in ('ch_feedstock', 'sens_fs', 'bias_fs', 'resp_fs'):
+        if c in d:
+            d[c + '_valid'] = np.where(bad, np.nan, d[c])
+    summ = fidelity_summary(d, by='scheme')
+    cols = [c for c in d.columns if c.startswith(('ch_', 'sens_', 'bias_', 'resp_', 'share_'))
+            and not c.endswith('_valid')]
+    per = d.groupby(['scheme', 'config_id'])[cols].median().reset_index()
+    per.insert(2, 'n_samples', d.groupby(['scheme', 'config_id']).size().to_numpy())
+    return summ, per
 
 
 def crossfit_table(scores, alpha=ALPHA):
@@ -1793,15 +1988,24 @@ def protocol_table(cv, fin, hpo, plan):
     return pd.DataFrame(rows)
 
 
-def load_v1_tables(out_dir, fallback=True):
-    """Headline tables of the v1 run (commit fd3f386; ``results/v1/tables``)
-    for the v1 / v2 comparison of the report: {name: DataFrame}. Looks in
-    ``<out_dir>/v1/tables``, then (``fallback``; not in quick mode, whose
-    numbers are not comparable with the v1 full run) in the package's
-    ``results/v1/tables``."""
+#: earlier full runs of the pipeline that evaluated on the frozen test split
+#: (report comparison; their report and headline tables are kept in
+#: ``results/<run>/``): (label, provenance)
+PRIOR_RUNS = (('v1', 'commit fd3f386'),
+              ('v2', 'commit 725ae11 (report regenerated from cached fits in b7b0f53)'))
+#: label of the run this code produces (the third use of the frozen test split)
+THIS_RUN = 'v3'
+
+
+def load_run_tables(out_dir, run, fallback=True):
+    """Headline tables of an earlier run ``run`` (a label of PRIOR_RUNS;
+    ``results/<run>/tables``) for the side-by-side comparison of the report:
+    {name: DataFrame, 'dir': path}. Looks in ``<out_dir>/<run>/tables``, then
+    (``fallback``; not in quick mode, whose numbers are not comparable with
+    the full runs) in the package's ``results/<run>/tables``; {} if absent."""
     import pandas as pd
-    dirs = [os.path.join(out_dir, 'v1', 'tables')] + ([os.path.join(DEFAULT_RESULTS, 'v1', 'tables')] if fallback
-                                                       else [])
+    dirs = [os.path.join(out_dir, run, 'tables')] + ([os.path.join(DEFAULT_RESULTS, run, 'tables')] if fallback
+                                                      else [])
     for d in dirs:
         if os.path.isdir(d):
             res = {}
@@ -1816,6 +2020,12 @@ def load_v1_tables(out_dir, fallback=True):
             res['dir'] = d
             return res
     return {}
+
+
+def load_v1_tables(out_dir, fallback=True):
+    """Headline tables of the v1 run (commit fd3f386; ``results/v1/tables``);
+    see :func:`load_run_tables`."""
+    return load_run_tables(out_dir, 'v1', fallback)
 
 
 # %% Stage 6: checks
@@ -2396,63 +2606,91 @@ def ablation_deltas(res):
     return out
 
 
-def v1_comparison(fh, head, v1):
-    """Markdown: v1 vs v2 final-test and CV headline numbers side by side."""
+def runs_comparison(fh, head, prior):
+    """Markdown: the final-test and CV headline numbers of the earlier runs
+    (``prior`` = {run: tables of :func:`load_run_tables`}, PRIOR_RUNS) and of
+    this run (THIS_RUN) side by side."""
     import pandas as pd
-    L = ['## v1 vs v2 headline numbers\n']
-    f1 = v1.get('final_test_headline')
-    if f1 is None or not len(fh):
-        L.append('v1 tables not found (`results/v1/tables/`); no side-by-side comparison.\n')
+    runs = [r for r, _ in PRIOR_RUNS]
+    allr = runs + [THIS_RUN]
+    L = [f'## {" / ".join(allr)} headline numbers\n']
+    have = [r for r in runs if (prior.get(r) or {}).get('final_test_headline') is not None]
+    if not have or not len(fh):
+        L.append('Tables of the earlier runs not found (`results/<run>/tables/`); no side-by-side comparison.\n')
         return '\n'.join(L)
+    tabs = {r: prior[r]['final_test_headline'] for r in have}
+    tabs[THIS_RUN] = fh
+    g = lambda d, c: float(d[c].iloc[0]) if len(d) and c in d else float('nan')
     rows = []
     for st in ('test_ood', 'test_id', 'test_all'):
         for m in BASE_METHODS:
-            a = f1[(f1['set'] == st) & (f1['method'] == m)]
-            b = fh[(fh['set'] == st) & (fh['method'] == m)]
-            if not len(a) and not len(b):
+            sel = {r: t[(t['set'] == st) & (t['method'] == m)] for r, t in tabs.items()}
+            if not any(len(d) for d in sel.values()):
                 continue
-            g = lambda d, c: float(d[c].iloc[0]) if len(d) and c in d else float('nan')
-            rows.append(dict(set=st, method=m, v1_mpsp_mape=g(a, 'mpsp_mape'), v2_mpsp_mape=g(b, 'mpsp_mape'),
-                             v1_median=g(a, 'mpsp_mape_median'), v2_median=g(b, 'mpsp_mape_median'),
-                             v1_R2_g=g(a, 'R2_g'), v2_R2_g=g(b, 'R2_g'), n_test=g(b, 'n_test')))
-    L.append('**Final test** (same frozen split, used a second time: the v2 numbers are likely optimistic, see '
-             'the notice above; v1 = commit fd3f386; MAPE in %):\n')
-    L.append(md_table(pd.DataFrame(rows), pct_cols=('v1_mpsp_mape', 'v2_mpsp_mape', 'v1_median', 'v2_median')) + '\n')
+            row = dict(set=st, method=m)
+            for c, lab in (('mpsp_mape', 'mape'), ('mpsp_mape_median', 'median'), ('R2_g', 'R2_g'),
+                           ('n_test', 'n_test')):
+                for r in allr:
+                    if r in sel:
+                        row[f'{r}_{lab}'] = g(sel[r], c)
+            rows.append(row)
+    T = pd.DataFrame(rows)
+    for c in [c for c in T if c.endswith('_n_test')]:
+        T[c] = T[c].map(lambda v: '' if v != v else f'{int(v)}')
+    prov = '; '.join(f'{r} = {p}' for r, p in PRIOR_RUNS)
+    L.append(f'**Final test** (the same frozen split of configurations and sample ids, used for the third time: '
+             f'the {THIS_RUN} numbers are likely optimistic, see the notice above; {prov}; MAPE in %):\n')
+    L.append(md_table(T, pct_cols=tuple(c for c in T if c.endswith(('_mape', '_median')))) + '\n')
     L.append('v1 fit every method, the baselines included, without its 6 calibration configurations (15 % of the '
-             'development configurations, configuration-grouped calibration hold-out of the v1 protocol); v2 fits '
-             'every method on all development rows. So the v1 -> v2 change of the baselines (ridge, HGB, kNN, '
-             'plain MLP) comes from the protocol, not from the methods.\n')
-    c1 = v1.get('cv_headline')
-    if c1 is not None and len(head):
+             'development configurations, configuration-grouped calibration hold-out of the v1 protocol); v2 and '
+             f'{THIS_RUN} fit every method on all development rows. So the v1 -> v2 change of the baselines '
+             '(ridge, HGB, kNN, plain MLP) comes from the protocol, not from the methods. Between v2 and '
+             f'{THIS_RUN} the data were corrected (D15, H1; "Changes v1 -> v2 -> {THIS_RUN}"): the training rows '
+             'AND the test rows of the regenerated configurations changed (`n_test`; the corrected rows replace '
+             'the defective ones), so the v2 -> ' + THIS_RUN + ' test differences of every method, the baselines '
+             'included, mix the model changes, the corrected training data and changed test rows.\n')
+    cvs = {r: prior[r].get('cv_headline') for r in have if prior[r].get('cv_headline') is not None}
+    if cvs and len(head):
+        cvs[THIS_RUN] = head
         rows = []
         for sch in SCHEMES:
             for m in BASE_METHODS:
-                a = c1[(c1['scheme'] == sch) & (c1['method'] == m)]
-                b = head[(head['scheme'] == sch) & (head['method'] == m)]
-                if len(a) or len(b):
-                    g = lambda d: float(d['mpsp_mape'].iloc[0]) if len(d) else float('nan')
-                    rows.append(dict(scheme=sch, method=m, v1_mpsp_mape=g(a), v2_mpsp_mape=g(b)))
-        L.append('**Development CV** (fold-mean MPSP MAPE, %; v1 used the v1 protocol and settings, so the CV '
-                 'estimates changed as well; the v2 changes were designed and chosen on these development folds, so '
-                 'the v2 numbers are post-selection estimates and the v1 -> v2 differences, above all LOFO and LOPO '
-                 'with only 4 and 7 held-out groups, are likely optimistic -- see "Changes since v1"):\n')
-        L.append(md_table(pd.DataFrame(rows), pct_cols=('v1_mpsp_mape', 'v2_mpsp_mape')) + '\n')
+                sel = {r: t[(t['scheme'] == sch) & (t['method'] == m)] for r, t in cvs.items()}
+                if any(len(d) for d in sel.values()):
+                    rows.append(dict(scheme=sch, method=m, **{f'{r}_mpsp_mape': g(sel[r], 'mpsp_mape')
+                                                             for r in allr if r in sel}))
+        T = pd.DataFrame(rows)
+        L.append('**Development CV** (fold-mean MPSP MAPE, %; v1 used the v1 protocol and settings, and the '
+                 f'development rows of v2 and {THIS_RUN} differ by the corrected data (section 1), so '
+                 'the CV estimates changed as well; each version\'s changes were designed and chosen on these '
+                 'development folds, so its numbers are post-selection estimates and the differences, above all '
+                 'LOFO and LOPO with only 4 and 7 held-out groups, are likely optimistic -- see '
+                 f'"Changes v1 -> v2 -> {THIS_RUN}"):\n')
+        L.append(md_table(T, pct_cols=tuple(c for c in T if c.endswith('_mpsp_mape'))) + '\n')
     return '\n'.join(L)
 
 
+def changelog(ctx, plan=None):
+    """Markdown section: what changed between the runs that used the frozen
+    test split (v1 -> v2 -> THIS_RUN) and why (development evidence only;
+    details in DESIGN.md section 6, rounds 4 and 5)."""
+    L = [f'## Changes v1 -> v2 -> {THIS_RUN} (development-set evidence only)\n',
+         'Each change was chosen on the development set (paired over seeds or draws, test split never used); '
+         'DESIGN.md section 1 (data corrections, known data defects) and section 6 ("Development-set '
+         'diagnostics", rounds 4 and 5) have the full evidence. Each model change has a CLI flag that restores '
+         'the behaviour of the previous version. "Seed t" below is a t over training seeds on fixed folds: it '
+         'measures seed noise only, not whether a new configuration, feedstock or product benefits; the '
+         'fold-level statistics (seeds averaged per fold, paired over folds) answer that.\n']
+    return '\n'.join(L) + '\n' + changes_since_v1(ctx) + '\n' + changes_v2_v3(ctx, plan)
+
+
 def changes_since_v1(ctx):
-    """Markdown section: what changed between v1 and v2 and why (development
-    evidence only; details in DESIGN.md section 6, round 4)."""
+    """Markdown subsection: what changed between v1 and v2 and why
+    (development evidence only; details in DESIGN.md section 6, round 4)."""
     mk = ctx.get('mk_extra') or {}
     v2p = (ctx.get('protocol') or PROTOCOL)['name'] == 'v2'
     on = lambda b, flag: '' if b else f' **Not used in this run (`{flag}`).**'
-    L = ['## Changes since v1 (development-set evidence only)\n',
-         'Each change was chosen on the development set (paired over seeds or draws, test split never used); '
-         'DESIGN.md section 6 ("Development-set diagnostics, round 4") has the full evidence tables, including '
-         'the combined validation of all changes together. Each has a CLI flag that restores the v1 behaviour. '
-         '"Seed t" below is a t over training seeds on fixed folds: it measures seed noise only, not whether a '
-         'new configuration, feedstock or product benefits; the fold-level statistics (seeds averaged per fold, '
-         'paired over folds) answer that.\n',
+    L = ['### v1 -> v2 (round 4: training protocol, recovery inputs, structures)\n',
          '1. **Training protocol** (`PROTOCOL`): every network fit -- HPO, all CV schemes, `final_dev` and '
          '`release` -- trains on all its samples with sample-level early stopping (each member on its own '
          'random 15 % hold-out), without a calibration hold-out and without refit, so the CV estimates the '
@@ -2522,14 +2760,105 @@ def changes_since_v1(ctx):
          'the frozen test (6 draws that share configurations: 24 picks, 16 distinct): OOD 11.8 -> 7.1 %, ID '
          '14.3 -> 3.8 % (6 of 6 draws better), better than HGB (9.2 / 4.8 %), the plain MLP (10.3 / 6.1 %) and '
          'ridge (11.4 / 7.7 %) on both.\n',
-         '**Post-selection caveat.** These v2 figures, and this report\'s CV (same folds: LOCO, LOFO, LOPO and '
-         'productivity are deterministic, and the random CV with the default `--seed 0` too), come from the folds and proxy draws on which round 4 '
+         '**Post-selection caveat.** These v2 figures, and the CV of the v2 and later reports (same folds: LOCO, '
+         'LOFO, LOPO and productivity are deterministic, and the random CV with the default `--seed 0` too), come '
+         'from the folds and proxy draws on which round 4 '
          'was diagnosed and its variants were selected, so they are optimistic -- most of all leave-one-feedstock-out, '
          'whose safeguards were designed from the corn failure. Confirmation on 6 fresh proxy draws and a fresh '
          'random-CV fold seed that played no role in any decision (same configurations, new combinations, ID '
          'samples and seeds; DESIGN.md 4e): OOD 13.3 -> 6.9 %, ID 13.9 -> 4.0 % (6 of 6 draws better), v2 better '
          'than HGB (8.5 / 4.9 %), the plain MLP (8.9 / 5.7 %) and ridge (9.8 / 8.0 %) on both; random CV 4.12 -> '
          '3.95 % (4 of 5 folds better). No fresh LOFO or LOPO folds exist.\n',
+         '']
+    return '\n'.join(L)
+
+
+def changes_v2_v3(ctx, plan=None):
+    """Markdown subsection: what changed between v2 and THIS_RUN and why --
+    the data corrections of the final review of v2 and the round-5 model
+    changes (development evidence only; DESIGN.md section 1 and section 6,
+    round 5)."""
+    mk = ctx.get('mk_extra') or {}
+    lk = ctx.get('lk_extra') or {}
+    tm = ctx.get('target_mask') or {}
+    w_lopo = float((plan or {}).get('hpo_lopo_weight', 0.) or 0.)
+    on = lambda b, flag: '' if b else f' **Not used in this run (`{flag}`).**'
+    masked = '; '.join(f"{k}: {', '.join(v)}" for k, v in tm.items()) or 'none'
+    L = [f'### v2 -> {THIS_RUN} (data corrections and round 5)\n',
+         '**Data** (defects found by the final review of v2; DESIGN.md section 1, "Data corrections" and "Known '
+         'data defects"). The corrected rows replace the defective ones in training and in the test split: '
+         '1550 -> 1600 samples (TAL 185 -> 232, succinic 141 -> 144), development set 1306 -> 1353.\n',
+         '1. **D15, succinic acid at neutral pH** (4 configurations, 72 samples): succinic adapter v2 set only the '
+         'neutralization flag, and the reactor kept the purchased lime out of the broth, so the salt formation, '
+         'the acidulation (R401) and the gypsum filtration (S405) were never simulated: the v2 rows equalled the '
+         'low-pH process except the base cost, while the downstream specification (the model inputs) described '
+         'acidulation and gypsum filtration. Regenerated with adapter v3 (72 / 72 samples, no failed point): MPSP '
+         '+0.22 USD/kg vs. the low-pH process at identical TY points and parameters (+0.10 vs. the v2 rows): lime '
+         '1 mol/mol succinic acid, 0.89-0.90 kg H2SO4 (93 wt%) and 1.44-1.45 kg wet gypsum per kg; recovery '
+         'unchanged. Rows of adapter < 3 are rejected (`unpatchable_D15`).',
+         '2. **H1, TAL_SA_glucose / TAL_SA_sugarcane**: after a convergence failure whose simulator reset also '
+         'failed, the old harness wrote the later samples as complete without a simulated point (46 samples, and '
+         'one cut after 3 points); the quality filter rejected them, so v2 trained on 1 and 10 of 29 samples. '
+         'Cause: the IPA evaporator F407 (a root search that evaporates all the IPA in one effect); the TAL adapter '
+         'now returns the exact overall evaporation fraction in that region (re-simulated recorded points change '
+         'by < 1e-4 in MPSP), the harness reloads after a failed reset, and the 47 samples were re-run (29 / 29 '
+         'each).',
+         '3. **D8, TAL yield basis**: analysed, y kept (the module\'s yield on all substrates, glucose-eq. by '
+         'theoretical yield). Its consequence, a feedstock-channel decomposition with a negative titer term from '
+         'the spiked acetate\'s sugar substitution (c\' < 0 in every TAL sample; no input describes the acetate), '
+         'is handled by model change 3.',
+         '',
+         '**Model** (round 5; DESIGN.md section 6, round 5: designed on a frozen copy of the v2 tables, '
+         'development rows only, one-member fits paired over 3 seeds; re-checked on the corrected development '
+         'rows, table below). Each has a CLI flag that restores v2 (all together `--v2-model`):\n',
+         "1. **Channel loss in surface space with a fixed weight** (`LossConfig.ch_space='surface'`, `w_ch = 3`, "
+         'no longer an HPO dimension): v2 compared each channel\'s four coefficients in units of their '
+         'cross-configuration spread, at the HPO\'s weight 0.1, which left the decomposition free once MPSP fit '
+         '(in-sample: every corn configuration\'s feedstock sensitivity 19-27 % low, the isobutanol electricity '
+         'response off by 94 % of MPSP). The surface term compares every channel numerator (price channels as '
+         'price x intensity) at the sample\'s simulated TY points relative to the total numerator, which is the '
+         'out-of-fold fidelity metric of section 5. `w_ch` was chosen on out-of-fold fidelity (1 < 3 ~ 10 on LOCO; '
+         '3 best on LOFO and LOPO), not by the MPSP criterion, which cannot see the decomposition.'
+         + on(lk.get('ch_space') == 'surface', '--v2-channel-loss'),
+         '2. **Power gate** (`ModelConfig.power_gate`): where electricity is not among the coproducts (no '
+         'turbogenerator: corn ethanol, the lactic configurations), every coefficient of the net electricity '
+         'intensity is mapped to s softplus(q / s) >= 0, so such a plant cannot be predicted to export power '
+         '(price linearity and dMPSP/dr <= 0 kept). A hard physical constraint, checked on the data (the net '
+         'electricity is never negative at the 3667 points of those configurations; the gate switches itself off '
+         'if the data violate it). It removes a qualitative failure (out of fold, v2 predicted export for 85-100 % '
+         'of the held-out samples of those configurations), at a cost for corn ethanol: its v2 prediction offset a '
+         'missed DDGS / corn-oil credit with a wrong-sign electricity credit, which the gate removes (open issue).'
+         + on(bool(mk.get('power_gate')), '--no-power-gate'),
+         f'3. **Known defective channel targets masked in the loss** (`experiments.DEFECTIVE_TARGETS`; this run: '
+         f'{masked}): the TAL feedstock channel (D8) carries the acetate\'s sugar substitution, which no input '
+         'describes and the product-blind feedstock head cannot represent; its totals, g and other channels keep '
+         'their targets. A correction of defective targets, neutral on the development CV. The study also '
+         'proposed masking lactic acid\'s feedstock targets (a recovery shape, not a defect); on the corrected '
+         'data that helped only the corn leave-one-feedstock-out fold in 2 of 3 seeds and cost leave-one-product-out '
+         'about 2 points, so it is not used.' + on(bool(tm), '--no-target-mask'),
+         '4. **The exact final-product stoichiometric ratio is never clipped** (`ModelConfig.clip_exempt`): the '
+         'v2 HPO chose `clip_inputs = 0`, which clipped the held-out HP\'s ratio (0.80, acrylic acid) to the '
+         'training minimum 1.00, a combination with its dehydration upgrade that no training product has: the '
+         'cause of the v2 leave-one-product-out HP failure (development LOPO, v2 hyperparameters, 2 members, 3 '
+         'seeds: HP 82.0 -> 14.8 %; every other LOPO fold bit-identical; LOCO unaffected).'
+         + on(bool(mk.get('clip_exempt')), '--no-clip-exempt'),
+         '5. **HPO criterion unchanged** (leave-configurations-out only'
+         + (f'; **this run: leave-one-product-out weight {w_lopo:g}**, `--hpo-lopo-weight`' if w_lopo > 0 else '')
+         + '): the study proposed adding the leave-one-product-out folds with weight 0.5; with the clip exemption '
+         'that criterion still switches the selection, to a candidate whose single-seed LOPO advantage (46.1 vs '
+         '49.7 %) reverses over three seeds (54.5 ± 8.0 vs 49.5 %), at +1.3 points of the LOCO criterion, +21 % '
+         'run time and a post-selection LOPO estimate.',
+         '6. **Reporting**: out-of-fold channel and price-intensity fidelity per scheme and held-out '
+         'configuration (section 5).',
+         '',
+         "Not used: a pure-b' feedstock intensity (`--fs-b-only`: LOPO channel error +4 points), `w_ch` 1 or 10, "
+         'wider input-clipping margins (they do not resolve the HP / oxalic trade-off).\n',
+         ROUND5_RECHECK,
+         '**Post-selection caveat.** The round-5 options were designed and selected on the same deterministic '
+         'development folds as this report\'s CV (first on the v2 rows, then re-checked on the corrected rows), '
+         'so the CV estimates of this run are post-selection like v2\'s; the v2 -> ' + THIS_RUN + ' differences of '
+         'the CV tables also include the data corrections (the development rows changed). Fresh folds do not '
+         'exist for LOFO and LOPO.\n',
          '']
     return '\n'.join(L)
 
@@ -2649,6 +2978,45 @@ def ad_section(ad, per):
     return '\n'.join(L)
 
 
+def test_reuse_notice(ctx, plan=None):
+    """Markdown notice of the report: the third use of the frozen test split
+    (THIS_RUN after PRIOR_RUNS), what changed in between and why the test
+    numbers are optimistic."""
+    mk = ctx.get('mk_extra') or {}
+    model = [lab for on, lab in (
+        ((ctx.get('lk_extra') or {}).get('ch_space') == 'surface',
+         'the channel / price-intensity loss term in surface space with a fixed weight'),
+        (bool(mk.get('power_gate')), 'the power gate (no electricity export without a turbogenerator)'),
+        (bool(ctx.get('target_mask')), 'masking the known defective channel targets in the loss ('
+         + '; '.join(f"{k}: {', '.join(v)}" for k, v in (ctx.get('target_mask') or {}).items()) + ')'),
+        (bool(mk.get('clip_exempt')), 'never clipping the exact final-product stoichiometric ratio'),
+        (float((plan or {}).get('hpo_lopo_weight', 0.) or 0.) > 0,
+         'leave-one-product-out folds in the HPO criterion')) if on]
+    prov = '; '.join(f'{r}: {p}, `results/{r}/`' for r, p in PRIOR_RUNS)
+    return ('> **Third use of the frozen test split.** This is the third run of the pipeline that evaluates on the '
+            f'frozen test split (`split.json`, unchanged): {THIS_RUN}, after v1 and v2 ({prov}; each folder keeps '
+            'that run\'s report and headline tables). Between the runs the pipeline was changed on development-set '
+            'evidence only: v1 -> v2 the training protocol and the model (DESIGN.md section 6, round 4); v2 -> '
+            f'{THIS_RUN} the training data, by the data corrections found by the final review of v2 (D15: the '
+            'succinic neutral configurations never simulated the salt formation, acidulation and gypsum '
+            'filtration, regenerated; H1: 47 TAL_SA samples lost to a failed simulator reset, re-run; DESIGN.md '
+            'section 1)'
+            + (', and the model (round 5, DESIGN.md section 6: ' + '; '.join(model) + ')' if model else '')
+            + f'; summary in "Changes v1 -> v2 -> {THIS_RUN}" below. No test sample was used to fit, tune, select '
+            'or calibrate anything. But the test results of v1 and v2 had been seen: the v1 results set the '
+            'round-4 agenda, and the review that found the v2 -> ' + THIS_RUN + ' data defects and set the '
+            'round-5 agenda read the v2 report, test results included. The test split is therefore an '
+            f'adaptively re-used hold-out: the {THIS_RUN} test MAPE and the v1 -> v2 -> {THIS_RUN} test changes are '
+            'likely optimistic and are not an independent confirmation of the changes. The data corrections also '
+            'replace the test rows of the regenerated configurations, so the test sets of v2 and '
+            f'{THIS_RUN} are not identical (`n_test` below). The primary evidence is the development CV and its '
+            'matched LOCO estimate of the OOD test (themselves optimistic after selection). '
+            f'{THIS_RUN} was fixed before its test evaluation (code version, protocol and settings in '
+            f'`plan.json`) and is the released model whatever the comparison with v1 / v2 shows; that comparison '
+            'is not used to choose a version. The v1 release intervals had been calibrated partly on the test '
+            'configurations, which v2 and later no longer do.\n')
+
+
 def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
     import numpy as np
     import pandas as pd
@@ -2670,7 +3038,19 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
          f"{ctx['mk_extra']['r_structure']!r}`, DESIGN.md section 3)"
          if ctx.get('mk_extra', {}).get('r_structure') else '')
       + ('; extrapolation safeguards (sugar-availability prior `fs_prior`, neutralization gate, '
-         'feedstock-input clipping `clip_groups`)' if ctx.get('mk_extra', {}).get('fs_prior') else '') + '.\n')
+         'feedstock-input clipping `clip_groups`)' if ctx.get('mk_extra', {}).get('fs_prior') else '')
+      + ('; power gate (`ModelConfig.power_gate`: net electricity intensity >= 0 where electricity is not a '
+         'coproduct)' if ctx.get('mk_extra', {}).get('power_gate') else '')
+      + ("; pure-b' feedstock intensity (`ModelConfig.fs_b_only`)" if ctx.get('mk_extra', {}).get('fs_b_only')
+         else '')
+      + ('; never clipped: ' + ', '.join(f'`{c}`' for c in ctx['mk_extra']['clip_exempt'])
+         + ' (`ModelConfig.clip_exempt`)' if ctx.get('mk_extra', {}).get('clip_exempt') else '')
+      + (f"; channel loss `LossConfig.ch_space={ctx['lk_extra'].get('ch_space')!r}` with fixed "
+         f"`w_ch={ctx['lk_extra'].get('w_ch')}` (chosen on out-of-fold channel fidelity, not an HPO dimension)"
+         if ctx.get('lk_extra') else '')
+      + ('; defective channel targets masked in the PI-NN loss (' + ', '.join(
+          f"{k}: {', '.join(v)}" for k, v in ctx['target_mask'].items()) + ')' if ctx.get('target_mask') else '')
+      + '.\n')
     if D['recent_raw_files']:
         P(f'> **Partial data:** {len(D["recent_raw_files"])} raw file(s) were still being written when the tables '
           'were built; the numbers describe the data available at that time.\n')
@@ -2681,8 +3061,8 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       f'models (protocol `{protocol["name"]}`, section 3). (2) *Final-test estimate*: the selected PI-NN '
       f'ensemble ({plan["final_members"]} members, `models/final_dev`) and the baselines, trained once on the whole '
       'development set and evaluated on the frozen test split. No test sample was used to fit, tune, select or '
-      'calibrate anything, but the v1 test results directed which failure modes round 4 investigated, so the '
-      'test split is a re-used hold-out (notice below). '
+      'calibrate anything, but the test results of the earlier runs (v1, v2) were seen before this run was '
+      'designed, so the test split is a re-used hold-out (notice below). '
       f'(3) *Release model*: {plan["release_members"]}-member PI-NN ensemble with the same hyperparameters and '
       'procedure trained on ALL data '
       '(`models/release`); it has no independent test estimate -- the CV and final-test numbers are the estimates '
@@ -2690,20 +3070,7 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       'MPSP over the held-out samples\' simulated TY points; '
       '"fit MAPE" is the irreducible error of the per-sample 4-coefficient fit on the same points.\n')
     v1 = checks.get('v1') or {}
-    P('> **Second use of the frozen test split.** This is the second run of the pipeline that evaluates on the '
-      'frozen test split (`split.json`, unchanged). The first run (v1) is commit fd3f386; its report and headline '
-      'tables are kept in `results/v1/`. Between the two runs the pipeline was changed on development-set '
-      'evidence only (DESIGN.md section 6, "Development-set diagnostics, round 4"; summary in the section '
-      '"Changes since v1" below): no test sample was used to fit, tune, select or calibrate anything. But the v1 '
-      'test results (OOD error above ridge and HGB, in-distribution error far above the random CV, recovery R² '
-      '0.04 on the OOD test) set the round-4 agenda: the protocol and recovery-input causes were looked for '
-      'because of failures seen on the test. The test split is therefore an adaptively re-used hold-out: the v2 '
-      'test MAPE and the v1 -> v2 test improvement are likely optimistic and are not an independent '
-      'confirmation of the round-4 changes. The primary evidence is the development CV and its matched LOCO '
-      'estimate of the OOD test (themselves optimistic after selection; "Changes since v1"). v2 was fixed '
-      'before its test evaluation (code version, protocol and settings in `plan.json`) and is the released '
-      'model whatever the v1 / v2 test comparison shows; that comparison is not used to choose a version. The '
-      'v1 release intervals had been calibrated partly on the test configurations, which v2 no longer does.\n')
+    P(test_reuse_notice(ctx, plan))
     # summary
     head, fh = cv['headline'], fin['headline']
     P('## Summary\n')
@@ -2772,8 +3139,8 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
               'out-of-fold scores (pooled over samples; nominal 0.90): ' + '; '.join(parts)
               + ' (section 6; `predict()` flags such rows `intervals_calibrated = False`).')
     P('')
-    P(v1_comparison(fh, head, v1))
-    P(changes_since_v1(ctx))
+    P(runs_comparison(fh, head, checks.get('prior') or {'v1': v1}))
+    P(changelog(ctx, plan))
     # data
     ds = checks['data_summary']
     rep = D['report']
@@ -2859,15 +3226,17 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         P(md_table(pt) + '\n')
         P('(`members_at_max_epochs`: members that ran into the epoch limit; `members_best_le_20`: members whose '
           'best epoch was <= 20.) `tables/protocol_epochs.csv`.\n')
-    tf1 = (checks.get('v1') or {}).get('timings_fits')
+    prior = checks.get('prior') or {'v1': checks.get('v1') or {}}
+    prev = next((r for r, _ in reversed(PRIOR_RUNS) if (prior.get(r) or {}).get('timings_fits') is not None), None)
+    tf1 = (prior.get(prev) or {}).get('timings_fits') if prev else None
     tf2 = checks.get('timings_fits')
     if tf1 is not None and tf2 is not None and len(tf2):
-        cmp = tf2.merge(tf1, on=['stage', 'method'], how='left', suffixes=('', '_v1'))
+        cmp = tf2.merge(tf1, on=['stage', 'method'], how='left', suffixes=('', f'_{prev}'))
         cmp = cmp[cmp['method'].isin(list(NN_BASES) + list(ABLATIONS))]
-        cols = [c for c in ('stage', 'method', 'fits', 'mean_seconds', 'fits_v1', 'mean_seconds_v1',
-                            'mean_member_epochs', 'mean_member_epochs_v1') if c in cmp]
-        P('Cost per network fit, v2 vs v1 (`results/v1/tables/timings_fits.csv`; seconds per fit, member epochs '
-          'summed over the members):\n')
+        cols = [c for c in ('stage', 'method', 'fits', 'mean_seconds', f'fits_{prev}', f'mean_seconds_{prev}',
+                            'mean_member_epochs', f'mean_member_epochs_{prev}') if c in cmp]
+        P(f'Cost per network fit, {THIS_RUN} vs {prev} (`results/{prev}/tables/timings_fits.csv`; seconds per fit, '
+          'member epochs summed over the members):\n')
         P(md_table(cmp[cols]) + '\n')
     # hpo
     t = hpo['table']
@@ -2875,15 +3244,20 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
     P(f'Random search over {len(t)} candidates (candidate 0 = package defaults) with {plan["hpo_k"]}-fold '
       f'leave-configurations-out CV (folds stratified by biorefinery; {plan.get("hpo_members", 1)} network(s) per '
       'fit, trained with the protocol of section 3), criterion = fold mean of the configuration-balanced '
-      'held-out MPSP MAPE (`criterion`; each held-out configuration counts once). '
+      'held-out MPSP MAPE (each held-out configuration counts once)'
+      + (f', weighted {1 - hpo.get("lopo_weight", 0.):g} : {hpo.get("lopo_weight", 0.):g} between these LOCO folds '
+         '(`criterion_loco`) and the leave-one-product-out folds (`criterion_lopo`, mean over the held-out products; '
+         'DESIGN.md section 6, round 5)' if hpo.get('lopo_weight', 0.) > 0 else '') + ' (`criterion`). '
       + (f'Search size from the measured cost of candidate 0 and the {a.budget_hours} h budget '
          f'(estimate {plan["estimate"]["total_hours"]:.2f} h for the whole run on {a.threads} workers). '
          if plan.get('estimate') else '') + '\n')
     show = t[['candidate', 'width', 'depth', 'dropout', 'lr', 'weight_decay', 'w_mpsp', 'w_ch', 'w_phys',
-              'colloc_ratio', 'early_stop', 'clip_inputs', 'criterion', 'criterion_se', 'mpsp_mape',
-              'mpsp_mape_cfg_gmean', 'fit_mape', 'epochs', 'seconds_per_fit', 'selected']]
-    P(md_table(show.sort_values('criterion'), pct_cols=('criterion', 'criterion_se', 'mpsp_mape',
-                                                        'mpsp_mape_cfg_gmean', 'fit_mape'))
+              'colloc_ratio', 'early_stop', 'clip_inputs', 'criterion', 'criterion_se']
+             + [c for c in ('criterion_loco', 'criterion_lopo') if hpo.get('lopo_weight', 0.) > 0 and c in t]
+             + ['mpsp_mape', 'mpsp_mape_cfg_gmean', 'fit_mape', 'epochs', 'seconds_per_fit', 'selected']]
+    P(md_table(show.sort_values('criterion'), pct_cols=('criterion', 'criterion_se', 'criterion_loco',
+                                                        'criterion_lopo', 'mpsp_mape', 'mpsp_mape_cfg_gmean',
+                                                        'fit_mape'))
       + '\n\n(MAPE columns in %.) **Selected:** ' + ', '.join(f'{k}={v}' for k, v in hpo['selected'].items())
       + '. `tables/hpo_candidates.csv`, `figures/hpo_search.png`.\n')
     P('**Only the PI-NN is tuned.** The plain MLP reuses the width, depth, learning rate, weight decay and '
@@ -2905,10 +3279,10 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       'MAPE = mean over folds (± s.e.); pooled = over all out-of-fold samples; R² pooled out-of-fold. '
       'Caveats: the HPO selected the hyperparameters on this development set and is not nested in the CV; and '
       'the leave-one-configuration-out, -feedstock-out, -product-out and productivity folds are deterministic '
-      f'(random CV: seed {a.seed}), so they are the folds on which round 4 diagnosed and selected the v2 changes '
-      '-- post-selection estimates, optimistic, most of all leave-one-feedstock-out (4 folds) and '
+      f'(random CV: seed {a.seed}), so they are the folds on which rounds 4 and 5 diagnosed and selected the v2 and '
+      f'{THIS_RUN} changes -- post-selection estimates, optimistic, most of all leave-one-feedstock-out (4 folds) and '
       'leave-one-product-out (7 folds), whose v1 -> v2 gains are not established at the fold level ("Changes '
-      'since v1").\n')
+      f'v1 -> v2 -> {THIS_RUN}").\n')
     cols = ['scheme', 'method', 'n_folds_common', 'mpsp_mape', 'mpsp_mape_se', 'mpsp_mape_median', 'mpsp_mape_pooled',
             'fit_mape'] + [f'R2_{k}' for k in TARGETS]
     P(md_table(head[cols], pct_cols=('mpsp_mape', 'mpsp_mape_se', 'mpsp_mape_median', 'mpsp_mape_pooled',
@@ -2958,6 +3332,28 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
     if lp is not None and len(lp):
         P('Leave-one-product-out, per held-out product (MAPE %):\n')
         P(md_table(lp, pct_cols=tuple(c for c in lp.columns if c not in ('product',))) + '\n')
+    fs_ = checks.get('fidelity')
+    if fs_ is not None and len(fs_):
+        P('**Out-of-fold channel and price-intensity fidelity** (PI-NN ensembles of the CV; '
+          '`evaluate.channel_fidelity`, configuration-balanced; DESIGN.md section 6, round 5): `ch_<c>` = RMS '
+          'error of the channel numerator over the sample\'s points / RMS target total numerator (price channels '
+          'as price x intensity; `ch_rms` = root sum of squares over the channels); per price key the error of '
+          'dMPSP/dp = intensity surface / g against the simulated per-point intensity: `sens` relative RMS, '
+          '`bias` |median ratio - 1|, `resp` RMS (dMPSP/dp predicted - simulated) x p / MPSP; `*_valid` without '
+          'the configurations whose feedstock targets are masked in the loss (DEFECTIVE_TARGETS). In %:\n')
+        cols = ['scheme'] + [c for c in FIDELITY_REPORT_COLS + ('ch_feedstock_valid', 'sens_fs_valid')
+                             if c in fs_]
+        P(md_table(fs_[cols], pct_cols=tuple(cols[1:])) + '\n')
+        pc = checks.get('fidelity_per_config')
+        if pc is not None and len(pc):
+            q = pc[pc['scheme'] == 'config']
+            cc = ['config_id', 'n_samples'] + [c for c in ('bias_fs', 'resp_fs', 'bias_el', 'resp_el', 'share_el',
+                                                            'bias_ng', 'resp_ng', 'ch_electricity')
+                                               if c in q]
+            P('Per held-out configuration (leave-one-configuration-out; medians over its samples; `bias` signed, '
+              '`share_el` = simulated p_el dMPSP/dp_el / MPSP), in %; all schemes in '
+              '`tables/cv_fidelity_per_config.csv`, per sample `tables/cv_channel_fidelity.csv.gz`:\n')
+            P(md_table(q[cc].reset_index(drop=True), pct_cols=tuple(cc[2:])) + '\n')
     P('Full tidy results: `tables/cv_results.csv`; summary: `tables/cv_headline.csv`; out-of-fold predictions: '
       '`tables/cv_oof_predictions.csv.gz`.\n')
     # final
@@ -3124,6 +3520,10 @@ def parse_args(argv=None):
                          f'{ABLATION_LOCO_FOLDS} in full mode, 4 in quick mode; 0 = all; the PI-NN and the plain MLP '
                          'always run on every LOCO fold; full mode: the budget may shrink it)')
     ap.add_argument('--hpo-members', type=int, default=2, help='full mode: ensemble members per HPO fit')
+    ap.add_argument('--hpo-lopo-weight', type=float, default=None,
+                    help='weight of the leave-one-product-out folds in the HPO criterion (default '
+                         f'HPO_LOPO_WEIGHT = {HPO_LOPO_WEIGHT:g}: the v2 criterion, LOCO folds only; quick '
+                         'mode: 0; DESIGN.md section 6, round 5)')
     ap.add_argument('--split-file', default=SPLIT_FILE,
                     help='frozen final test split (created from PLANNED_CONFIGS if missing, then never changed)')
     ap.add_argument('--min-test-configs', type=int, default=None,
@@ -3153,6 +3553,25 @@ def parse_args(argv=None):
                     help='PI-NN without the sugar-availability prior of the feedstock intensity '
                          '(ModelConfig.fs_prior), the neutralization gate (ModelConfig.neutralization_gate) '
                          "and the clipping of the feedstock inputs (ModelConfig.clip_groups)")
+    # round 5 (DESIGN.md section 6): each flag restores the v2 behaviour of one component
+    ap.add_argument('--no-power-gate', action='store_true',
+                    help='PI-NN without the power gate (ModelConfig.power_gate: net electricity intensity >= 0 '
+                         'where electricity is not among the coproducts)')
+    ap.add_argument('--no-clip-exempt', action='store_true',
+                    help='clip the final-product stoichiometric ratio like any other input when clip_inputs >= 0 '
+                         '(v2; instead of CLIP_EXEMPT)')
+    ap.add_argument('--fs-b-only', action='store_true',
+                    help="opt-in: pure-b' feedstock intensity (ModelConfig.fs_b_only; not adopted, DESIGN.md "
+                         "section 6, round 5)")
+    ap.add_argument('--v2-channel-loss', action='store_true',
+                    help="v2 channel loss: channels and intensities in coefficient space with the HPO's w_ch, "
+                         "instead of CHANNEL_LOSS (LossConfig.ch_space='surface', fixed w_ch)")
+    ap.add_argument('--no-target-mask', action='store_true',
+                    help='keep the known defective channel targets (DEFECTIVE_TARGETS: the TAL feedstock channel, '
+                         'D8) in the PI-NN loss')
+    ap.add_argument('--v2-model', action='store_true',
+                    help='the v2 model settings: --no-power-gate --v2-channel-loss --no-target-mask '
+                         '--no-clip-exempt (and no --fs-b-only)')
     ap.add_argument('--v1-protocol', action='store_true',
                     help='v1 training protocol (PROTOCOL_V1): configuration-grouped calibration and '
                          'early-stopping hold-outs in CV (per scheme INNER_GROUP_V1) and final_dev, instead '
@@ -3166,6 +3585,8 @@ def parse_args(argv=None):
     ap.add_argument('--force-pool', action='store_true', help=argparse.SUPPRESS)  # debug: pool even with 1 worker
     ap.add_argument('--nice', type=int, default=0, help='increase the process niceness')
     a = ap.parse_args(argv)
+    if a.v2_model:
+        a.no_power_gate = a.v2_channel_loss = a.no_target_mask = a.no_clip_exempt = True
     if a.out is None:
         a.out = os.path.join(DEFAULT_RESULTS, 'quick') if a.quick else DEFAULT_RESULTS
     if a.models is None:
@@ -3210,6 +3631,16 @@ def main(argv=None):
             mk_extra['water_gate'] = True
         if not a.no_extrapolation_safeguards:
             mk_extra.update(EXTRAPOLATION_SAFEGUARDS)
+        if POWER_GATE and not a.no_power_gate:
+            mk_extra['power_gate'] = True
+    if (FS_B_ONLY or a.fs_b_only) and not a.v2_model:
+        mk_extra['fs_b_only'] = True
+    if CLIP_EXEMPT and not a.no_clip_exempt:
+        mk_extra['clip_exempt'] = list(CLIP_EXEMPT)
+    if not a.v2_channel_loss and CHANNEL_LOSS:
+        ctx['lk_extra'] = dict(CHANNEL_LOSS)
+    if not a.no_target_mask and DEFECTIVE_TARGETS:
+        ctx['target_mask'] = {k: list(v) for k, v in DEFECTIVE_TARGETS.items()}
     if not a.no_masking:
         mk_extra['channel_inputs'] = 'physics' if a.v1_g_inputs else MASKING_PRESET
     if not a.no_r_structure:
@@ -3290,6 +3721,11 @@ def main(argv=None):
     if len(cv['oof_scores']):
         cv['oof_scores'].to_csv(os.path.join(tdir, 'cv_oof_scores.csv.gz'), index=False)
     cv['crossfit'].to_csv(os.path.join(tdir, 'cv_coverage_crossfit.csv'), index=False)
+    checks['fidelity'], checks['fidelity_per_config'] = fidelity_tables(cv.get('fidelity'))
+    if len(checks['fidelity']):
+        cv['fidelity'].to_csv(os.path.join(tdir, 'cv_channel_fidelity.csv.gz'), index=False)
+        checks['fidelity'].to_csv(os.path.join(tdir, 'cv_fidelity_summary.csv'), index=False)
+        checks['fidelity_per_config'].to_csv(os.path.join(tdir, 'cv_fidelity_per_config.csv'), index=False)
     checks['loco_matched'] = loco_matched(cv['results'], S)
     checks['loco_matched'].to_csv(os.path.join(tdir, 'cv_loco_ood_families.csv'), index=False)
     checks['protocol'] = protocol_table(cv, fin, hpo, plan)
@@ -3300,7 +3736,8 @@ def main(argv=None):
     fin['intervals'], fin['intervals_per_config'] = final_intervals(fin, S)
     fin['intervals'].to_csv(os.path.join(tdir, 'final_intervals.csv'), index=False)
     fin['intervals_per_config'].to_csv(os.path.join(tdir, 'final_intervals_per_config.csv'), index=False)
-    checks['v1'] = load_v1_tables(a.out, fallback=not a.quick)
+    checks['prior'] = {run: load_run_tables(a.out, run, fallback=not a.quick) for run, _ in PRIOR_RUNS}
+    checks['v1'] = checks['prior']['v1']
     res = cv['results']
     lp = res[(res['scheme'] == 'product') & (res['fold'] >= 0) & (res['metric'] == 'mpsp_mape')]
     if len(lp):

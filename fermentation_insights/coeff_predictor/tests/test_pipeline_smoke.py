@@ -46,6 +46,16 @@ def _run(root, name, *flags, quick=True):
     pd.DataFrame([dict(scheme='config', method='pinn', mpsp_mape=0.144)]).to_csv(v1 / 'cv_headline.csv', index=False)
     pd.DataFrame([dict(stage='cv', method='pinn', fits=54, mean_seconds=88.6, mean_member_epochs=580.)]
                  ).to_csv(v1 / 'timings_fits.csv', index=False)
+    # ... and of the v2 run (the report compares v1 / v2 / v3)
+    v2 = out / 'v2' / 'tables'
+    v2.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([dict(set='test_ood', method='pinn', mpsp_mape=0.069, mpsp_mape_median=0.036, R2_g=0.90,
+                       n_test=103),
+                  dict(set='test_id', method='pinn', mpsp_mape=0.032, mpsp_mape_median=0.022, R2_g=0.98,
+                       n_test=141)]).to_csv(v2 / 'final_test_headline.csv', index=False)
+    pd.DataFrame([dict(scheme='config', method='pinn', mpsp_mape=0.093)]).to_csv(v2 / 'cv_headline.csv', index=False)
+    pd.DataFrame([dict(stage='cv', method='pinn', fits=60, mean_seconds=40.2, mean_member_epochs=600.)]
+                 ).to_csv(v2 / 'timings_fits.csv', index=False)
     E._W.clear()
     try:
         rc = E.main((['--quick', '--threads', '1'] if quick else [])
@@ -71,7 +81,9 @@ def test_pipeline_runs_to_the_report(run_v2):
     assert run_v2['rc'] == 0
     out = run_v2['out']
     rep = (out / 'REPORT.md').read_text()
-    for txt in ('Second use of the frozen test split', 'Changes since v1', 'v1 vs v2 headline numbers',
+    for txt in ('Third use of the frozen test split', f'Changes v1 -> v2 -> {E.THIS_RUN}',
+                f'v1 / v2 / {E.THIS_RUN} headline numbers', '### v1 -> v2', f'### v2 -> {E.THIS_RUN}',
+                'v1_mape', 'v2_mape', f'{E.THIS_RUN}_mape', f'Cost per network fit, {E.THIS_RUN} vs v2',
                 '## 3. Training protocol', 'Cross-fitted interval coverage', 'LOCO restricted to',
                 'No test sample was used for selection or calibration', '## 7. Release model'):
         assert txt in rep, txt
@@ -86,6 +98,48 @@ def test_pipeline_runs_to_the_report(run_v2):
     head = pd.read_csv(t / 'final_test_headline.csv')
     assert {'test_ood', 'test_id', 'train_all'} <= set(head['set'])
     assert np.isfinite(head[(head['set'] == 'test_ood') & (head['method'] == 'pinn')]['mpsp_mape']).all()
+
+
+def test_round5_defaults_and_fidelity_tables(run_v2):
+    """Round 5: the pipeline PI-NN has the power gate, the surface channel
+    loss with the fixed weight and the defective-target mask; the CV writes
+    the out-of-fold channel / price-intensity fidelity tables (development
+    samples only) and the report shows them."""
+    from fermentation_insights.coeff_predictor.train import Ensemble
+    out, models = run_v2['out'], run_v2['models']
+    ens = Ensemble.load(str(models / 'final_dev'))
+    assert ens.mcfg.power_gate == E.POWER_GATE and ens.spec.power_export == E.POWER_GATE
+    assert ens.mcfg.fs_b_only == E.FS_B_ONLY
+    assert ens.mcfg.clip_exempt == list(E.CLIP_EXEMPT)
+    assert ens.lcfg.ch_space == E.CHANNEL_LOSS['ch_space'] and ens.lcfg.w_ch == E.CHANNEL_LOSS['w_ch']
+    t = out / 'tables'
+    fid = pd.read_csv(t / 'cv_channel_fidelity.csv.gz')
+    summ = pd.read_csv(t / 'cv_fidelity_summary.csv')
+    assert {'config', 'feedstock', 'product'} <= set(summ['scheme'])
+    _, dev = E.apply_split(run_v2['samples'], run_v2['split'])
+    dev_ids = set(dev['sample_id'].astype(str))
+    assert set(fid['sample_id'].astype(str)) <= dev_ids          # development samples only
+    loco = fid[fid['scheme'] == 'config']
+    assert loco['sample_id'].is_unique and set(loco['sample_id'].astype(str)) == dev_ids
+    # (the synthetic points carry no per-point intensities q__*, so no sens_* columns here)
+    assert np.isfinite(summ['ch_rms']).all() and np.isfinite(summ['ch_feedstock']).all()
+    rep = (out / 'REPORT.md').read_text()
+    assert 'Out-of-fold channel and price-intensity fidelity' in rep and 'power gate' in rep
+
+
+def test_v2_model_flag_restores_v2(tables_dir):
+    from fermentation_insights.coeff_predictor.train import Ensemble
+    root, s, fr = tables_dir
+    rc, out, models = _run(root, 'v2model', '--v2-model')
+    assert rc == 0
+    ens = Ensemble.load(str(models / 'final_dev'))
+    assert not ens.mcfg.power_gate and not ens.spec.power_export and ens.lcfg.ch_space is None
+    assert not ens.mcfg.fs_b_only and ens.mcfg.clip_exempt is None
+    rep = (out / 'REPORT.md').read_text()
+    # the settings line does not claim the round-5 components; the changelog marks them as not used
+    assert 'power gate (`ModelConfig.power_gate`' not in rep and 'never clipped:' not in rep
+    for flag in ('--no-power-gate', '--v2-channel-loss', '--no-target-mask', '--no-clip-exempt'):
+        assert f'Not used in this run (`{flag}`)' in rep, flag
 
 
 def test_oof_scores_cover_dev_once_and_never_test(run_v2):
@@ -187,14 +241,23 @@ def test_full_mode_runs_resumes_and_replans(tables_dir):
     root, s, fr = tables_dir
     # a tiny budget: plan_budget shrinks the search to its minimum of 8 candidates
     # (--hpo-candidates would bypass the planning and plan.json reuse)
+    # --hpo-lopo-weight 0.5 exercises the leave-one-product-out part of the HPO criterion (opt-in since round 5)
+    # (kept before --ablation-loco-folds, whose value the replan check below replaces)
     flags = ['--threads', '4', '--budget-hours', '0.01', '--members', '2', '--hpo-members', '1',
-             '--ablation-loco-folds', '4']
+             '--hpo-lopo-weight', '0.5', '--ablation-loco-folds', '4']
     rc, out, models = _run(root, 'full', *flags, quick=False)
     assert rc == 0
     plan = json.loads((out / 'plan.json').read_text())
     assert plan['mode'] == 'full' and plan['ablation_loco_folds'] == 4 and plan['hpo_candidates'] == 8
     assert plan['cv_members'] == plan['final_members'] == plan['release_members'] == 2
-    assert plan['request'] == dict(budget_hours=0.01, hpo_candidates=0, hpo_members=1, ablation_loco_folds=4)
+    assert plan['request'] == dict(budget_hours=0.01, hpo_candidates=0, hpo_members=1, ablation_loco_folds=4,
+                                   hpo_lopo_weight=0.5)
+    # the HPO criterion weighs the leave-one-product-out folds (--hpo-lopo-weight)
+    hpo = pd.read_csv(out / 'tables' / 'hpo_candidates.csv')
+    w = 0.5
+    np.testing.assert_allclose(hpo['criterion'], (1 - w) * hpo['criterion_loco'] + w * hpo['criterion_lopo'])
+    folds = pd.read_csv(out / 'tables' / 'hpo_folds.csv')
+    assert folds['fold'].astype(str).str.startswith('lopo').sum() == 8 * s['fermentation_product'].nunique()
     assert plan['estimate']['fits_budget'] is False
     for name in ('final_dev', 'release'):
         conf = Ensemble.load(str(models / name)).conformal
