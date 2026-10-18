@@ -1,11 +1,11 @@
 {
- "floor_mape_cfg_mean": 0.07362876863440347,
- "floor_mape_cfg_gmean": 0.061200598477117917,
- "with_bp_mape_cfg_mean": 0.08481797608332059,
- "with_bp_mape_cfg_gmean": 0.07065545885696274,
- "const_mape_cfg_mean": 0.12633895820305735,
- "const_mape_cfg_gmean": 0.11513649066489498,
- "fit_mape_cfg_mean": 0.014272591384561717,
- "fit_mape_cfg_gmean": 0.013378545354985406,
- "n_configs": 34
+ "floor_mape_cfg_mean": 0.07566087601301512,
+ "floor_mape_cfg_gmean": 0.0627738461582327,
+ "with_bp_mape_cfg_mean": 0.08602956926083014,
+ "with_bp_mape_cfg_gmean": 0.07212128958907903,
+ "const_mape_cfg_mean": 0.1251363037812207,
+ "const_mape_cfg_gmean": 0.1141610292624656,
+ "fit_mape_cfg_mean": 0.013856605420718817,
+ "fit_mape_cfg_gmean": 0.012960104620746428,
+ "n_configs": 37
 }

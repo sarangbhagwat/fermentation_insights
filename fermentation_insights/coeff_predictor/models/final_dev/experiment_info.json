@@ -1,12 +1,12 @@
 {
- "job_key": "81312e506b59664c8fb34500",
+ "job_key": "04c197fdf3e1503e14c95f9d",
  "tag": "final(dev->test)",
  "method": "pinn",
  "members": 5,
  "mk": {
-  "width": 64,
+  "width": 128,
   "depth": 2,
-  "dropout": 0.1,
+  "dropout": 0.05,
   "clip_inputs": 0.0,
   "water_gate": true,
   "fs_prior": true,
@@ -15,20 +15,26 @@
    "feedstock",
    "pretreatment"
   ],
+  "power_gate": true,
+  "clip_exempt": [
+   "final_product_stoich_mass_ratio",
+   "phys_pp_fp_MW_ratio"
+  ],
   "channel_inputs": "physics_v2",
   "r_structure": "physics",
-  "masked_width": 32,
+  "masked_width": 64,
   "masked_depth": 1
  },
  "lk": {
-  "w_mpsp": 1.0,
-  "w_ch": 0.1,
-  "w_phys": 1.0,
-  "colloc_ratio": 0.5
+  "w_mpsp": 0.3,
+  "w_ch": 3.0,
+  "w_phys": 0.03,
+  "colloc_ratio": 2.0,
+  "ch_space": "surface"
  },
  "tk": {
-  "lr": 0.0045,
-  "weight_decay": 0.0004,
+  "lr": 0.0047,
+  "weight_decay": 6e-05,
   "epochs": 300,
   "patience": 40,
   "min_epochs": 20,
@@ -49,13 +55,13 @@
   "method_scores": "pinn"
  },
  "best_epochs": [
-  121,
-  282,
-  105,
-  57,
-  90
+  84,
+  74,
+  159,
+  46,
+  162
  ],
- "n_train_samples": 1306,
- "data_hash": "51d0efe2b4f517a4",
- "saved": "2026-10-17 17:29:50"
+ "n_train_samples": 1353,
+ "data_hash": "c345efda41c4fdca",
+ "saved": "2026-10-18 07:04:00"
 }
