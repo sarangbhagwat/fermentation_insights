@@ -81,6 +81,16 @@ before that (v2) still carry them. The v3 pipeline trains on the corrected
 data and masks the D8-affected feedstock-channel targets in the loss (§6,
 round 5).
 
+Disclosure (test split, data verification only): while verifying the D15
+regeneration and the D8 identity, the data work of round 5 read recorded
+simulation points of a few test-split samples (succinic_glucose|s1|0,
+test-OOD configuration; succinic_neutral_glucose|s1|0 and the in-distribution
+test samples of TAL_corn, TAL_cornstover and TAL_glucose): to check that an
+unchanged configuration reproduces its recorded MPSPs and to read the
+deterministic baseline TY grid. No model was fit, tuned, selected or
+calibrated with them; the adapter fix came from the Bioindustrial-Park code
+and every number quoted here was recomputed on development rows only.
+
 | id | configurations / fields | defect | effect on the coefficients and the model | status |
 |---|---|---|---|---|
 | D1 | lactic, random samples | the feedstock-price bounds were rebound after sampling (prices outside the intended range) | none now: the random samples were regenerated with the bound fix (`adapters/lactic.py` 408-421; old files in `raw_lactic_D1`, prices 0.0005-0.175 USD/kg = U(0, 200) USD/dry t). The fix was not versioned (lactic configs carry no `adapter_version`) | fixed by regeneration |
