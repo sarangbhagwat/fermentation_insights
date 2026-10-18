@@ -19,8 +19,14 @@ refers to its sections.
 > settings (§2 below). The v1 and v2 reports are kept in `results/v1/` and
 > `results/v2/` as history only.
 
-**Accuracy at a glance** (v3 run; MPSP MAPE over the held-out samples'
-simulated titer-yield points; generated from `results/tables` by
+**Accuracy at a glance** (v3 run; MPSP absolute percentage error over each
+held-out sample's simulated titer-yield points. The CV rows give its mean
+over the folds, in which each held-out configuration, feedstock or product
+counts once, and its value pooled over all held-out samples, which weights
+the configurations by their numbers of samples and is larger where the
+worst-predicted configurations are also the largest (leave-one-configuration-out:
+oxalic acid, isobutanol, ethanol); the final-test lines are pooled over the
+test samples. Generated from `results/tables` by
 `python -m fermentation_insights.coeff_predictor.report_checks`, checked by
 `tests/test_readme_numbers.py`):
 
@@ -41,9 +47,16 @@ simulated titer-yield points; generated from `results/tables` by
 In short: for a new configuration of a known feedstock and product (the
 typical use) the error depends on the family: 1-4 % for HP and succinic
 acid, 8-18 % for TAL and lactic acid and 17-39 % for ethanol (ranges of the
-leave-one-configuration-out folds, the line above); the recovery
-intervals under-cover the TAL and lactic configurations and over-cover the
-others (section 4.5). For a new feedstock or a new product family the PI-NN
+leave-one-configuration-out folds, the line above); the recovery (g)
+intervals under-cover every TAL configuration, known or new, and new lactic
+configurations, the d′ intervals the lactic ones, and the others are
+over-covered (section 4.5). The model does not reproduce the economy of
+scale: it gives about half of the simulated MPSP change for a 2-3x larger
+plant (section 7). The training data of the HP and TAL plants (and,
+slightly, of sugarcane ethanol and isobutanol) understate their MPSP by
+about 1-13 % at the baseline point, because BioSTEAM's anaerobic
+wastewater reactor counts its biogas twice (data defect D17, section 7);
+the model inherits that bias. For a new feedstock or a new product family the PI-NN
 is **not better than a nearest-configuration lookup** at the fold level,
 and its intervals are not calibrated (sections 4.2, 4.3, 7).
 
@@ -113,8 +126,8 @@ per-sample least-squares fits of exactly this equation to simulated MPSPs
   training box, `colloc_price_range = [1, 1]`): **positive MPSP** and a
   **non-negative feedstock intensity**. Monotonicity in yield and titer is
   NOT enforced for any product, because the data of two configurations
-  violate it: all isobutanol samples (7 % of the data; the MPSP rises with
-  the yield, whose deficit is sold as ethanol) and 30 oxalic samples (2 %;
+  violate it: 108 of the 109 isobutanol samples (7 % of the data; the MPSP
+  rises with the yield, whose deficit is sold as ethanol) and 30 oxalic samples (2 %;
   at high titer the juice evaporation cuts the power export). Monotonicity
   in productivity is replaced by the hard structure below. The natural-gas
   non-negativity is disabled because the natural-gas demand is a hinge
@@ -440,13 +453,23 @@ inflection yield or outside the training titer range.
   coverage (per key: mean, pooled, worst and 10 % quantile over the
   configurations). The coverage is marginal over the samples of new
   configurations (configurations weighted by their numbers of samples), not
-  guaranteed per configuration: it varies widely between configurations, so a new configuration of a family whose
-  errors are larger than usual can be under-covered, while for a query close
-  to the training configurations the intervals are conservative. REPORT.md
-  (section 6) compares the estimate with the realized test coverage; no test
-  sample was used to calibrate. `P.ensemble.meta['conformal_random_cv']` holds,
-  for information only, the quantiles calibrated on the random-CV scores
-  (in-distribution queries).
+  guaranteed per configuration: it varies widely between configurations and
+  families (next bullets). REPORT.md (section 6) compares the estimate with
+  the realized test coverage; no test sample was used to calibrate.
+  `P.ensemble.meta['conformal_random_cv']` holds, for information only, the
+  quantiles calibrated on the random-CV scores (in-distribution queries).
+* **A known configuration** (a training configuration with new parameter
+  values; coverage of the shipped quantiles on the random-CV out-of-fold
+  scores, REPORT.md section 6, "Coverage for a KNOWN configuration"): the
+  intervals are conservative pooled over samples (MPSP 0.99, g 0.92,
+  a′ b′ c′ d′ 0.97-0.99) but NOT for every family. g covers only 0.45 of
+  the TAL samples (0.21-0.65 per TAL configuration), c′ 0.80 and MPSP 0.93
+  of TAL; d′ covers 0.56 and b′ 0.87 of the lactic samples. Every other
+  family is covered at 0.99-1.00 for every key, i.e. its intervals are too
+  wide. The productivity tails give the same picture (TAL g 0.39, lactic d′
+  0.55). The TAL recovery varies within a configuration with a module
+  parameter that is not a model input (section 7, "TAL recovery noise"), so
+  the TAL g intervals are too narrow for any TAL query, known or new.
 * **Measured coverage (nominal 0.90).** Cross-fitted LOCO estimate for a new
   configuration, pooled over samples (the targeted quantity) / mean over
   configurations: a′ 0.90 / 0.94, b′ 0.90 / 0.93, c′ 0.90 / 0.94, d′
@@ -496,8 +519,14 @@ the MPSP response to a 100 % price change, in % of MPSP) the median error
 over configurations is 0.3 % for the feedstock, 0.7 % for electricity and
 0.3 % for natural gas. The exception is TAL: its feedstock-channel targets
 are masked in the loss (data defect D8), so its feedstock sensitivity comes
-from the product-blind feedstock head (relative error +19.5 % for
-TAL_SA_sugarcane in-sample, +22.4 % for TAL_corn on the test set). Out of
+from the product-blind feedstock head (relative error +22.4 % for TAL_corn
+on the test set). The largest in-sample error, +19.5 % for
+TAL_SA_sugarcane, is mostly a defect of that configuration's data (D16,
+section 7): its simulated cane mill receives the juice recycle twice, so
+its fermentation gets about 15 % more sugar per kg cane than the other
+sugarcane configurations (more than the cane holds) and its simulated
+feedstock demand is too low, while the product-blind head predicts about
+the physical demand. Out of
 fold the errors are larger (REPORT.md section 5, per configuration): for a
 new configuration the electricity response is off by 112 % of MPSP for
 isobutanol (118 % in leave-one-product-out, 163 % in
@@ -551,9 +580,21 @@ error of the predicted g).
 given), `g_predicted`, `g_source`, `<k>_std`, `<k>_lo`, `<k>_hi`,
 `ch__<channel>__<k>`, `int__<fs|el|ng>__<k>`, `ad_ratio`, `in_domain`,
 `outside_range`, `price_outside_range`, `intervals_calibrated`, `imputed`,
-`contextual_defaults`, `contextual_source`, `not_applicable` and
-`filled_from_registry`. `mpsp()` returns `row, y, t, MPSP, MPSP_std,
-MPSP_lo, MPSP_hi, g_source, intervals_calibrated`.
+`contextual_defaults`, `contextual_source`, `not_applicable`,
+`contextual_outside_range` and `filled_from_registry`. `mpsp()` returns
+`row, y, t, MPSP, MPSP_std, MPSP_lo, MPSP_hi, g_source,
+intervals_calibrated, contextual_outside_range`.
+
+`contextual_outside_range` lists the contextual parameters (the `p_*`
+inputs other than prices, and `feedstock_capacity`) that lie outside the
+training range of the row's configuration (`config_id`) or, without one, of
+its (product pair, feedstock) combination, or that were never defined for it
+in training; an `ApplicabilityWarning` gives the values and ranges. It is
+separate from `in_domain`, whose range check uses the global training range
+(41 000-1 060 000 kg/h wet feedstock for the capacity, wide only because the
+configurations differ in scale). In particular, a capacity more than about
+±20 % from a configuration's baseline is an extrapolation of its scale
+response, which the model reproduces only about half (section 7).
 
 ## 5. Field reference
 
@@ -773,7 +814,35 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   isobutanol), 4 feedstocks, and the scale, financial and design assumptions
   of the Bioindustrial-Park modules. Yields are covered up to
   each configuration's inflection yield, and titers and productivities over
-  the simulated ranges.
+  the simulated ranges. Each configuration's feedstock capacity was sampled
+  only 0.81-1.19 x its baseline (next bullet).
+* **Scale (capacity) response: about half of the simulated economy of
+  scale.** The capacity was sampled within ±10-20 % of each configuration's
+  baseline, with every other parameter varied at the same time, so the
+  scale response within a configuration is weakly identified (the model has
+  no capital-scaling structure; the capital channels see the scale only
+  through the log-capacity input). Against BioSTEAM (every parameter at its
+  baseline, baseline yield, titer and productivity, capacity scaled;
+  REPORT.md section 8 (ii-c), `data_generation/checks/capacity_response.csv`)
+  the release model reproduces a median 0.60 / 0.55 of the simulated MPSP
+  decrease of a 2x / 3x plant (configurations whose simulated MPSP falls).
+  MPSP change at 2x / 3x, predicted vs. simulated: ethanol_cornstover
+  −5.6 / −8.5 % vs. −11.1 / −15.9 %, IBO_EtOH_corn −4.9 / −6.7 % vs.
+  −9.9 / −14.0 %, succinic_cornstover −6.5 / −11.0 % vs. −14.0 / −19.5 %,
+  TAL_cornstover −4.8 / −7.0 % vs. −7.9 / −11.1 %; at 0.5x (median over
+  the configurations) +2.9 % vs. +8.3 %. The simulated HP plants have little
+  economy of scale (capital about proportional to the capacity, and growing
+  faster beyond 2x for the hexanol and sugarcane designs). The MPSP
+  intervals (half-width a median 31 % of MPSP) cover 70 of the 72 simulated
+  2-3x points, but a scale-up comparison is a paired difference, and there
+  the predicted change is about half the simulated one. The global
+  applicability-domain check does not catch this (86 % of the 2-3x queries
+  stay `in_domain`: the global capacity range spans the configurations'
+  different scales), so `predict()` reports a capacity outside the
+  configuration's training range in `contextual_outside_range`, with an
+  ApplicabilityWarning (section 4, "Output columns"). Do not read scale-up
+  effects from the model. A wider capacity sampling (e.g. 0.3-3x) and a
+  hard capital-scaling structure are open items.
 * **New-product extrapolation is poor and not better than a lookup.** In
   leave-one-product-out CV the PI-NN's MPSP error is 44.8 % (fold mean, 7
   products; 9.7-69.9 % per product), against 52.8 % for a
@@ -814,8 +883,9 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     feedstock); the price sensitivities of isobutanol, ethanol and oxalic
     acid are rough (section 4.6).
   - TAL's feedstock sensitivity is product-blind (its defective feedstock
-    targets are masked, D8): +19.5 % for TAL_SA_sugarcane in-sample,
-    +22.4 % for TAL_corn on the test set.
+    targets are masked, D8): +22.4 % for TAL_corn on the test set; the
+    +19.5 % for TAL_SA_sugarcane in-sample is mostly that configuration's
+    data defect D16 (section 4.6).
   - The saccharification mode (SHF vs. SSCF) of the lactic configurations
     is not an input: both modes get the same coefficients, and the model
     averages them. In-sample signed MPSP error of `models/release`
@@ -853,6 +923,13 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   off for every product (section 2). The natural-gas intensities are fits
   of a hinge-shaped demand and can be negative in parts of the domain;
   clip the natural-gas use at 0 when reporting it.
+* **TAL recovery noise.** Within a TAL configuration the recovery g varies
+  with the decarboxylation conversion of the TAL separation
+  (`bp_separation_tal_decarboxylation_conversion`, a sampled module
+  parameter that is not a model input): sd(ln g) 0.11, about a 10 % MPSP
+  noise floor for TAL from g alone (DESIGN.md §6, round 4). The model
+  predicts a configuration's typical g, and the g intervals cover only about
+  half of the TAL samples, for known configurations too (section 4.5).
 * **Per-configuration bias.** The remaining error is mostly a systematic
   bias per configuration, not noise. The ensemble spread does not capture
   it, and the conformal intervals cover it only on average over
@@ -888,7 +965,8 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   - Known data defects not corrected by the patches (definitions, affected
     configurations, effect on the coefficients and status: DESIGN.md §1,
     "Known data defects"; D15 and H1 were fixed by regeneration after the v2
-    models):
+    models; D16 and D17, found in the final data review, are in the data of
+    the shipped models):
 
     | id | configurations | defect | effect |
     |---|---|---|---|
@@ -900,6 +978,8 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     | D14 | oxalic | fermentation reaction creates mass; no aeration | physically invalid fermentation balance; `aerobic=True` misleading |
     | D15 | succinic_neutral | v2 data: no salt formation simulated (module default `base_neutralizes_product=False`) | in the v2 models the downstream table claims acidulation and gypsum that the data lack; fixed by regeneration (adapter v3: MPSP +0.22 USD/kg vs. low pH); the v3 models train on the corrected data |
     | H1 | TAL_SA_glucose, TAL_SA_sugarcane | v2 data: samples after a failed reset recorded without points | fixed by regeneration (harness reload/`retry`, robust evaporator root search in the TAL adapter) |
+    | D16 | TAL_SA_sugarcane | the Bioindustrial-Park system appends the juice recycle to the cane mill a second time, so its fermentation gets 15 % more sugar per kg cane than the other sugarcane configurations (more than the cane holds) | feedstock demand understated: MPSP about 1-6 % low (median ~3 %), b′ 9-12 % low; most of the +19.5 % in-sample feedstock-sensitivity error (section 4.6); not corrected (needs regeneration and a re-run) |
+    | D17 | all HP and TAL, ethanol_sugarcane, IBO_EtOH_corn (the systems with BioSTEAM's `InternalCirculationRx`; oxalic_neutral_sugarcane has one too, with no effect) | the anaerobic IC reactor of the wastewater treatment counts its biogas twice (BioSTEAM, `method='lumped'`), and the boiler burns the phantom methane | MPSP too low at the baseline by 1-5 % (HP; corn stover 4-5 %), 1-13 % (TAL; corn stover 7-13 %), 0.9 % (ethanol_sugarcane; up to 10 % at low yield) and 0.6 % (IBO); the bias depends on the yield, so b′ (up to 20 % low for corn and corn stover) and the electricity / natural-gas intensities are biased; not corrected (needs regeneration and a re-run; `data_generation/biosteam_fixes.py` prepares the correction) |
 
   - TAL's final-product purity varies with titer.
   - Some cost-allocation conventions differ between modules and cannot be

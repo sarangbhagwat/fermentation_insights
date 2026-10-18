@@ -23,3 +23,17 @@ git am /path/to/fi-HP.patch
 | fi-ethanol | 2 | cellulosic `size_batch` argument order (fermenter sizing); corn SSF `_N_ins = 2`; corn SSF mass-conserving yeast growth (`Glucose -> Yeast` by weight, as `bst.Fermentation`) |
 | fi-oxalic | 1 | pandas 3; `Model(metrics=...)` → `indicators`; negative-flow guard in a polishing filter; shared HP/cellulosic fixes |
 | fi-isobutanol | 2 | nskinetics pin update; beer-column Rmin guard fix |
+
+Known upstream defects that these branches do NOT patch (the shipped data
+carry them; DESIGN.md section 1, D16 and D17; `../ADAPTERS.md`, "Known
+module and BioSTEAM defects in the shipped data"):
+
+* `biorefineries/TAL/systems/system_SA_solubility_exploit_ethanol_sugarcane.py:116`
+  appends the juice recycle `M201-0` to the crushing mill `U201` a second
+  time (D16, TAL_SA_sugarcane). The fix for the next data rebuild is to
+  comment the line out on `fi-TAL`, as the other TAL systems do, and to
+  re-export `fi-TAL.patch`.
+* BioSTEAM's `InternalCirculationRx` (lumped method) counts its biogas twice
+  (D17; every HP and TAL system, ethanol sugarcane, isobutanol, oxalic). It
+  is in biosteam, not in Bioindustrial-Park; the opt-in runtime correction
+  is `data_generation/biosteam_fixes.py`.

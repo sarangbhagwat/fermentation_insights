@@ -191,6 +191,15 @@ facilities`); map a group to `None` only if it would double count.
 3. Sum over areas of `installed_cost` ≈ TEA `installed_cost`.
 4. Typical seconds per TY point and failure rate.
 5. A smoke campaign (`--sample-limit 2`) completes and the JSONL looks right.
+6. Mass balances: every unit's outlets equal its inlets (no unit creates
+   mass), and no unit lists the same inlet stream twice; the sugar fed to
+   fermentation does not exceed the sugar the feedstock can supply
+   (`F_sugar_fed <= F_feedstock x fs_w_fermentable_sugar_eq x sugar
+   availability`, `report_checks.sugar_balance_check`, REPORT.md section 1).
+   Both checks found defects in the shipped data (D16, D17 below).
+7. Wastewater treatment with BioSTEAM's `InternalCirculationRx`: its biogas
+   is counted twice (D17); check the IC unit's mass balance, and simulate
+   with `biosteam_fixes.apply('ic_biogas')` to see the effect.
 
 Status of item 1: the baseline coefficients of the 32 configurations of the
 publication are compared with the publication's in REPORT.md section 8 (i)
@@ -206,3 +215,36 @@ against the measured flows (F_ferm_product / F_sugar_fed / y and
 F_ferm_product / V_broth / t, min / median / max per configuration) is
 reported in REPORT.md section 1 (`report_checks.yt_definition_check`,
 `results/tables/yt_definition_check.csv`; report only, it rejects nothing).
+
+## Known module and BioSTEAM defects in the shipped data
+
+Found in the final data review (2026-10-18) and documented in DESIGN.md
+section 1, "Known data defects"; both are in the training data of the
+shipped models and need a data regeneration (and a pipeline re-run) to
+correct. `sim_checks.py` (`scripts/run_sim_checks.sh`) re-simulates the
+affected configurations with and without the correction and writes the
+effect to `checks/`.
+
+* **D16, TAL_SA_sugarcane.** Bioindustrial-Park
+  `TAL/systems/system_SA_solubility_exploit_ethanol_sugarcane.py:116`
+  (upstream, not a change of the fi-TAL port) appends the juice recycle
+  `M201-0` to the crushing mill `U201`, which BioSTEAM 2.54's juicing system
+  already connects, so the recycle enters the mill twice and the
+  fermentation receives 15 % more sugar per kg cane than the other
+  sugarcane configurations (more than the cane holds). Fix at the next
+  rebuild: comment the line out on the fi-TAL branch (as the other six TAL
+  systems do), bump the TAL `adapter_version`, recalibrate the
+  configuration's max-titer line and regenerate its samples.
+  (`sim_checks.py` check `duplicate_inlets`, which finds no other unit with
+  a repeated inlet in the 41 configurations; `checks/duplicate_inlets_*.csv`.)
+* **D17, every system with an `InternalCirculationRx`** (all HP and TAL,
+  ethanol_sugarcane, IBO_EtOH_corn, oxalic_neutral_sugarcane). BioSTEAM's
+  lumped IC reactor model (`biosteam/wastewater/high_rate/internal_circulation_rx.py`,
+  `_run`) degasses both the reacted helper copy of the influent and the
+  reacted outlets into the biogas, so the biogas, and the boiler fuel, is
+  counted twice. `biosteam_fixes.py` holds an opt-in runtime correction
+  (only the helper copy's gas is discarded; BioSTEAM itself is untouched);
+  enable it in the harness with a `harness_version` bump at the next
+  rebuild, regenerate HP, TAL, ethanol_sugarcane and IBO_EtOH_corn, and
+  report the defect upstream. (`sim_checks.py` check `ic_biogas`;
+  `checks/ic_biogas_*.csv`.)
