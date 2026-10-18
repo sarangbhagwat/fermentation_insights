@@ -196,3 +196,84 @@ def test_regime_vocabularies_are_validated_and_normalized(shipped):
     for k, v in (('fermentation_mode', 'continuous'), ('neutralizing_agent', 'KOH')):
         _, msgs = _caught(P.predict, dict(KNOWN, **{k: v}))
         assert any(f'{k}={v!r} was not seen in training' in m for m in msgs)
+
+
+@pytest.fixture(scope='module')
+def with_ranges(shipped, tmp_path_factory):
+    """The release checkpoint with the per-configuration contextual ranges
+    (``spec_registry['context_range']``; added to an older checkpoint by
+    ``refresh_spec_registry`` from its training samples)."""
+    s, P = shipped
+    if (P.spec.spec_registry or {}).get('context_range'):
+        return P
+    import shutil
+    from fermentation_insights.coeff_predictor.predict import refresh_spec_registry
+    dst = str(tmp_path_factory.mktemp('ck') / 'release')
+    shutil.copytree(os.path.join(HERE, 'models', 'release'), dst)
+    assert refresh_spec_registry(dst, s)
+    return _quiet(CoefficientPredictor.load, dst)
+
+
+def test_feedstock_capacity_validation_and_reporting(shipped):
+    _, P = shipped
+    base = dict(config_id='HP_corn', r=0.3, feedstock_price=0.2)
+    # a given capacity is used and not reported as defaulted
+    out, msgs = _caught(P.predict, dict(base, p_feedstock_capacity=60000.))
+    assert 'feedstock_capacity' not in out['contextual_defaults'][0].split(', ')
+    assert not any('assumed baseline values: feedstock_capacity' in m for m in msgs)
+    ref = _quiet(P.predict, base)
+    assert 'feedstock_capacity' in ref['contextual_defaults'][0].split(', ')
+    assert not np.allclose(out[K].to_numpy(), ref[K].to_numpy())
+    # fs_F_mass (the training tables' name) alone is the capacity, not overridden by the registry
+    np.testing.assert_allclose(_quiet(P.predict, dict(base, fs_F_mass=60000.))[K].to_numpy(), out[K].to_numpy())
+    # invalid values are rejected (as r <= 0), never silently replaced by the baseline
+    for v in (-10, 0, 'n/a', 'abc', float('inf')):
+        with pytest.raises(ValueError, match='positive number'):
+            _quiet(P.predict, dict(base, p_feedstock_capacity=v))
+    with pytest.raises(ValueError, match='positive number'):
+        _quiet(P.predict, dict(base, fs_F_mass=-1.))
+    # not given: None / NaN / ''
+    for v in (None, float('nan'), ''):
+        np.testing.assert_allclose(_quiet(P.predict, dict(base, p_feedstock_capacity=v))[K].to_numpy(),
+                                   ref[K].to_numpy())
+
+
+def test_unknown_fields_reach_the_missing_spec_error_and_fs_w_typos(shipped):
+    from fermentation_insights.coeff_predictor.predict import MissingSpecError
+    _, P = shipped
+    with pytest.raises(MissingSpecError, match=r"Unknown field\(s\), ignored: 'confg_id' \(did you mean 'config_id'"):
+        _quiet(P.predict, dict(confg_id='HP_corn', r=0.3, feedstock_price=0.2))
+    _, msgs = _caught(P.predict, dict(KNOWN, fs_w_watre=0.2))
+    assert any('IGNORED' in m and "'fs_w_watre' (did you mean 'fs_w_water'" in m for m in msgs), msgs
+    _, msgs = _caught(P.predict, dict(KNOWN, fs_w_water=0.2))
+    assert not any('IGNORED' in m for m in msgs), msgs
+
+
+def test_contextual_parameters_outside_the_configuration_range(with_ranges, shipped):
+    s, _ = shipped
+    P = with_ranges
+    base = dict(config_id='HP_corn', r=0.3, feedstock_price=0.2)
+    out, msgs = _caught(P.predict, base)
+    assert out['contextual_outside_range'][0] == ''
+    assert not any('outside the training range of the configuration' in m for m in msgs)
+    cap = float(s.loc[s['config_id'] == 'HP_corn', 'p_feedstock_capacity'].median())
+    # 3x the capacity: inside the global range (in_domain unchanged), outside the configuration's
+    out, msgs = _caught(P.predict, dict(base, p_feedstock_capacity=3 * cap))
+    assert out['contextual_outside_range'][0] == 'feedstock_capacity'
+    assert bool(out['in_domain'][0])
+    assert any('feedstock_capacity=' in m and 'configuration HP_corn' in m and 'economy of scale' in m
+               for m in msgs), msgs
+    # the same check for a (pair, feedstock) query and in mpsp()
+    spec = dict(feedstock='corn', fermentation_product='HP', final_product='AcrylicAcid', r=0.3,
+                feedstock_price=0.2, p_feedstock_capacity=3 * cap)
+    assert _quiet(P.predict, spec)['contextual_outside_range'][0] == 'feedstock_capacity'
+    m = _quiet(P.mpsp, dict(base, p_feedstock_capacity=3 * cap), y=0.5, t=50.)
+    assert m['contextual_outside_range'][0] == 'feedstock_capacity'
+    # another contextual parameter, and one never defined for the configuration in training
+    assert _quiet(P.predict, dict(base, p_IRR=0.3))['contextual_outside_range'][0] == 'p_IRR'
+    out = _quiet(P.predict, dict(config_id='ethanol_cornstover', r=0.3, feedstock_price=0.05,
+                                 p_operating_days=200))
+    assert out['contextual_outside_range'][0] == 'p_operating_days'
+    # training rows are inside their configuration's ranges
+    rows = s.groupby('config_id').head(2).reset_index(drop=True)
+    assert (_quiet(P.predict, rows)['contextual_outside_range'] == '').all()

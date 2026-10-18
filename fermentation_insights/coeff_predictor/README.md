@@ -590,7 +590,7 @@ or imputed field is reported per row.
 | `feedstock_type` | pure_sugar, starch, sugar_juice or lignocellulose | feedstock name, else unknown level |
 | `fs_w_*` | kg/kg wet feedstock (mass fractions, wet basis) | feedstock name, else training median (`imputed`) |
 | `fs_w_fermentable_sugar_eq` | kg glucose-eq. fermentable sugar / kg wet feedstock, in (0, 1.12] (> 1 only for anhydro sugars, e.g. pure starch 1.11) | **required** unless the feedstock is known by name |
-| `p_feedstock_capacity` | kg/h wet feedstock | configuration / (pair, feedstock) baseline, else feedstock name (baseline), else training baseline (`contextual_defaults`) |
+| `p_feedstock_capacity` | kg/h wet feedstock (> 0; alias fs_F_mass) | configuration / (pair, feedstock) baseline, else feedstock name (baseline), else training baseline (`contextual_defaults`); a value <= 0, non-numeric or 'n/a' raises ValueError; outside the configuration's training range: `contextual_outside_range` |
 | **Fermentation product and regime** | | |
 | `theoretical_yield` | g fermentation product / g glucose-eq. sugar | **required** unless the fermentation product is known by name |
 | `inflection_yield` | g fermentation product / g glucose-eq. sugar | **required** unless the fermentation product is known by name |

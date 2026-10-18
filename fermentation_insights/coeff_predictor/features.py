@@ -157,7 +157,7 @@ FIELD_UNITS = {
     'theoretical_yield': 'g fermentation product / g glucose-eq. sugar',
     'inflection_yield': 'g fermentation product / g glucose-eq. sugar',
     'T_fermentation': 'K',
-    'p_feedstock_capacity': 'kg/h wet feedstock',
+    'p_feedstock_capacity': 'kg/h wet feedstock (> 0; alias fs_F_mass)',
     'y': 'g fermentation product / g glucose-eq. sugar',
     't': 'g/L',
     'MPSP': 'USD/kg final product',
@@ -798,7 +798,9 @@ def build_spec_registry(samples):
     'config': {config_id: entry}, 'pair_feedstock': {'fp|pp|feedstock':
     entry + 'configs'}, 'feedstock_context': {name: {FEEDSTOCK_DEPENDENT
     baseline medians}}, 'pair_descriptors': {'fp|pp': {fp_*/pp_* of the
-    training rows}}, 'version': SPEC_REGISTRY_VERSION}. An entry is
+    training rows}}, 'context_range': training ranges of the contextual
+    parameters per configuration / (pair, feedstock)
+    (:func:`_context_ranges`), 'version': SPEC_REGISTRY_VERSION}. An entry is
     ``{'values': {...}, 'varying': [...]}`` (:func:`_context_entry`): the
     baseline-sample values of the spec inputs, normalized as the training
     transform reads them, with None where the field was NaN (not applicable)
@@ -863,7 +865,51 @@ def build_spec_registry(samples):
             reg['feedstock_context'][str(name)] = {c: _mode_or_median(_to_float(base[c]))
                                                    for c in FEEDSTOCK_DEPENDENT if c in base}
     reg['baseline'] = _baseline_extras(samples)
+    reg['context_range'] = _context_ranges(samples, params)
     return reg
+
+
+#: name of the effective feedstock capacity in ``reg['context_range']``
+#: (``p_feedstock_capacity``, else ``fs_F_mass``, as ``phys_log10_capacity``)
+CAPACITY_KEY = 'feedstock_capacity'
+
+
+def _context_ranges(samples, params):
+    """Training range [min, max] of every contextual ``p_*`` parameter
+    (``params``: prices and capacity aliases excluded; the price channels
+    are exactly linear, ``FeatureSpec.price_outside_range``) and of the
+    effective feedstock capacity (:data:`CAPACITY_KEY`) over the training
+    samples of each configuration (``'config'``) and of each (product pair,
+    feedstock) combination (``'pair_feedstock'``); parameters never finite
+    in the group are left out. Used only by the user API
+    (``CoefficientPredictor``: ``contextual_outside_range``); training and
+    the applicability domain do not read it."""
+    out = {'config': {}, 'pair_feedstock': {}}
+    if not len(samples):
+        return out
+    cap = _to_float(samples['p_feedstock_capacity']) if 'p_feedstock_capacity' in samples \
+        else pd.Series(np.nan, index=samples.index)
+    if 'fs_F_mass' in samples:
+        cap = cap.where(cap.notna(), _to_float(samples['fs_F_mass']))
+    cols = {c: _to_float(samples[c]) for c in params if c in samples}
+    cols[CAPACITY_KEY] = cap
+
+    def ranges(idx):
+        e = {}
+        for c, v in cols.items():
+            v = v.loc[idx]
+            v = v[np.isfinite(v)]
+            if len(v):
+                e[c] = [float(v.min()), float(v.max())]
+        return e
+
+    if 'config_id' in samples:
+        for cid, grp in samples.groupby('config_id'):
+            out['config'][str(cid)] = ranges(grp.index)
+    if all(c in samples for c in _NAME_COLS):
+        for (a, b, f), grp in samples.groupby(list(_NAME_COLS[1:]) + ['feedstock']):
+            out['pair_feedstock'][f'{a}|{b}|{f}'] = ranges(grp.index)
+    return out
 
 
 #: baseline values of a training configuration that are not spec inputs of

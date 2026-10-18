@@ -125,7 +125,13 @@ productivity space), ``in_domain``, ``outside_range``,
 product pair is not in training: the intervals are then not calibrated),
 ``imputed`` (per row), ``contextual_defaults`` (contextual parameters not
 given by the user; their origin in ``contextual_source``), ``not_applicable``
-(contextual parameters kept NaN) and ``filled_from_registry``. Without per-channel heads (``channels=False``) the
+(contextual parameters kept NaN), ``contextual_outside_range`` (contextual
+parameters, incl. ``feedstock_capacity``, outside the training range of the
+row's configuration or (pair, feedstock) combination, or never defined for
+it; with an ApplicabilityWarning; not part of ``in_domain``, whose range
+check is global) and ``filled_from_registry``. A given feedstock capacity
+(``p_feedstock_capacity``, alias ``fs_F_mass``) must be a positive number
+(ValueError otherwise). Without per-channel heads (``channels=False``) the
 breakdown has a ``ch__rest__<k>`` channel. Intervals are omitted when the
 calibration set was too small for the nominal level
 (``ensemble.conformal['<k>_level']``). With a user recovery, ``g_std`` = 0 and
@@ -146,8 +152,13 @@ is False (the scores come from the CV fold ensembles), and
 ``conformal['crossfit']`` holds a cross-fitted coverage estimate per key
 (mean, pooled, min, q10 over the held-out configurations). Coverage is
 marginal over the samples of new configurations (configurations weighted by
-their numbers of samples) and varies between configurations; queries close
-to the training configurations get conservative intervals.
+their numbers of samples) and varies between configurations and families.
+For a KNOWN configuration (random-CV out-of-fold scores) the intervals are
+conservative pooled over samples (MPSP 0.99, g 0.92 for nominal 0.90) but
+not per family: g covers about 0.45 of the TAL samples (every TAL
+configuration; its recovery varies with a module parameter that is not an
+input) and d' about 0.56 of the lactic ones, while the other families are
+covered at about 1.0 (REPORT.md section 6).
 ``conformal['<k>_level']`` is then nominal (``conformal['level_kind']``).
 ``ensemble.meta['conformal_random_cv']`` (when present) holds, for
 information only, the quantiles calibrated on the random-CV scores.
@@ -167,7 +178,8 @@ from .features import (MissingSpecError, ApplicabilityWarning, REQUIRED_FIELDS, 
                        FREE_TEXT_CATEGORICAL, LIGNOCELLULOSE_ONLY, SPEC_REGISTRY_VERSION, SPEC_BOOLEAN,
                        SPEC_CATEGORICAL, SPEC_NUMERIC, CANONICAL_PARAMETERS, EXCLUDED_ALWAYS, FEEDSTOCK_TYPES,
                        FeatureSpec, apply_spec_registry, build_spec_registry, is_not_applicable, parse_bool,
-                       warn_if_outside, _as_frame, _feedstock_type, _jsonable, _omitted)
+                       warn_if_outside, _as_frame, _feedstock_type, _jsonable, _omitted,
+                       CAPACITY_KEY, FREE_SUGARS, STRUCTURAL_SUGARS)
 from .model import COEFF_KEYS, mpsp_equation_np
 from .train import Ensemble, setup_torch
 
@@ -183,8 +195,16 @@ FERMENTATION_MODES = ('batch', 'fed-batch', 'continuous')
 #: price relative difference above which a price and its alias conflict
 _ALIAS_RTOL = 1e-3
 #: column prefixes of the training tables and of derived features that a
-#: spec may carry without being user fields (never reported as unknown)
-_PASS_PREFIXES = ('m__', 'q__', 'int__', 'ch__', 'x_', 'bp_', 'c__', 'fp_', 'pp_', 'phys_', 'ds_', 'fs_w_', 'diag_')
+#: spec may carry without being user fields (never reported as unknown);
+#: ``fs_w_*`` keys are checked against the checkpoint's composition columns
+#: (:meth:`CoefficientPredictor._known_fields`)
+_PASS_PREFIXES = ('m__', 'q__', 'int__', 'ch__', 'x_', 'bp_', 'c__', 'fp_', 'pp_', 'phys_', 'ds_', 'diag_')
+#: the two names of the feedstock capacity [kg/h wet feedstock] (the
+#: training tables carry both; ``phys_log10_capacity`` reads
+#: ``p_feedstock_capacity``, else ``fs_F_mass``)
+_CAPACITY_FIELDS = ('p_feedstock_capacity', 'fs_F_mass')
+#: relative tolerance of the contextual training-range check
+_CTX_RTOL = 1e-6
 #: names, query and bookkeeping fields accepted without being model inputs:
 #: registry names, the y / t query, outputs of ``predict``/``mpsp`` and the
 #: non-input columns of the processed training tables (so training rows can
@@ -194,7 +214,7 @@ _PASS_FIELDS = frozenset((
     'ferm_product_chemical', 'final_product_chemical', 'product_water_solubility',
     'g_predicted', 'g_source', 'ad_ratio', 'in_domain', 'outside_range', 'price_outside_range',
     'intervals_calibrated', 'imputed', 'contextual_defaults', 'contextual_source', 'not_applicable',
-    'filled_from_registry', 'MPSP_lo', 'MPSP_hi', 'MPSP_std',
+    'contextual_outside_range', 'filled_from_registry', 'MPSP_lo', 'MPSP_hi', 'MPSP_std',
     'sample_id', 'biorefinery', 'sample_kind', 'seed', 'sample_index', 'source_file', 'separation_variant',
     'y_min', 'y_max', 't_min', 't_max', 'baseline_productivity', 'baseline_yield', 'baseline_titer',
     'downstream_spec_version', 'inflection_yield_config', 'n_points_raw', 'n_ok_raw', 'n_infeasible', 'n_failed',
@@ -263,7 +283,10 @@ class CoefficientPredictor:
         """Rows after the registry fill (+ contextual defaults). With
         ``details``: also per-row dicts ``filled``, ``unknown``, ``ambiguous``,
         ``contextual``, ``context_source``, ``not_applicable``,
-        ``cross_feedstock``, ``conflict``, ``imputed_extra``."""
+        ``cross_feedstock``, ``conflict``, ``imputed_extra``,
+        ``context_outside`` ([(name, value, lo, hi)] outside the training
+        range of ``context_ref``, the row's configuration or (pair,
+        feedstock) combination)."""
         df = _as_frame(spec).reset_index(drop=True)
         if not len(df):
             raise ValueError('no specification rows: pass a dict, a list of dicts or a DataFrame with at least '
@@ -282,6 +305,7 @@ class CoefficientPredictor:
             for c in SPEC_BOOLEAN:                   # True/False, yes/no, 1/0 (else ValueError)
                 if c in rec:
                     rec[c] = parse_bool(rec[c], c)
+            cap_user = self._check_capacity(rec)     # positive number where given (else ValueError)
             rec, f = apply_spec_registry(rec, reg, info)
             # no neutralization (or nothing to neutralize) and no agent given:
             # 'none', as the training rows encode a missing agent
@@ -314,7 +338,9 @@ class CoefficientPredictor:
                 if c.startswith('p_') and c not in prices and is_not_applicable(rec[c]):
                     rec[c] = float('nan')
                     na.add(c)
-            if any(c in f for c in ('p_feedstock_capacity', 'fs_F_mass')):
+            if cap_user:
+                pass                                  # given by the user: not a default
+            elif any(c in f for c in _CAPACITY_FIELDS):
                 ctx.append('feedstock_capacity')
                 src['feedstock_capacity'] = src.get('p_feedstock_capacity', src.get('fs_F_mass'))
             elif _bad(rec.get('p_feedstock_capacity')) and _bad(rec.get('fs_F_mass')):
@@ -324,6 +350,7 @@ class CoefficientPredictor:
             ctx = sorted(set(ctx))
             fs_known = not _bad_name(rec.get('feedstock')) and str(rec['feedstock']) in reg.get('feedstock', {})
             fp_known = str(rec.get('fermentation_product')) in reg.get('fermentation_product', {})
+            ref, outside = self._context_outside(rec, info, reg)
             rows.append(rec)
             det.append(dict(filled=list(f), unknown=info.get('unknown', []),
                             ambiguous=[c for c in info.get('ambiguous', []) if c not in unused],
@@ -334,6 +361,7 @@ class CoefficientPredictor:
                             custom_feedstock=list(info.get('custom_feedstock', [])),
                             unseen_levels=unseen, alias_conflict=alias,
                             config_id=None if _bad_name(rec.get('config_id')) else str(rec['config_id']),
+                            context_ref=ref, context_outside=outside,
                             calibrated=bool(fs_known and fp_known and pair in reg.get('pair', {})) if reg else True))
         out = pd.DataFrame(rows)
         return (out, det) if details else (out, [d['filled'] for d in det])
@@ -386,6 +414,84 @@ class CoefficientPredictor:
                     out.append((c, given, given[0][0]))
         return out
 
+    @staticmethod
+    def _check_capacity(rec):
+        """Validate a user-given feedstock capacity (``p_feedstock_capacity``
+        or its training-table name ``fs_F_mass``, kg/h wet feedstock): a
+        positive finite number (ValueError otherwise, as ``r <= 0`` is
+        rejected; the capacity is never 'not applicable'). ``fs_F_mass``
+        given alone is used as ``p_feedstock_capacity`` (the two are equal in
+        the training tables wherever both are defined; otherwise a
+        registry-filled ``p_feedstock_capacity`` would take precedence over
+        it). Returns the names the user gave."""
+        given = {}
+        for c in _CAPACITY_FIELDS:
+            v = rec.get(c)
+            # not given: None, '' or NaN (an infinite value is invalid)
+            if v is None or (isinstance(v, str) and not v.strip()) or (isinstance(v, float) and math.isnan(v)):
+                continue
+            msg = (f'{c}={v!r}: the feedstock capacity must be a positive number [kg/h wet feedstock] '
+                   '(omit it for the configuration / feedstock baseline)')
+            if is_not_applicable(v):
+                raise ValueError(msg + "; it is never 'not applicable'")
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                raise ValueError(msg) from None
+            if not (math.isfinite(x) and x > 0):
+                raise ValueError(msg)
+            given[c] = x
+        if 'fs_F_mass' in given and 'p_feedstock_capacity' not in given:
+            rec['p_feedstock_capacity'] = given['fs_F_mass']
+        elif len(given) == 2 and abs(given['fs_F_mass'] / given['p_feedstock_capacity'] - 1) > 1e-6:
+            warnings.warn(f"p_feedstock_capacity={given['p_feedstock_capacity']:g} and fs_F_mass="
+                          f"{given['fs_F_mass']:g} differ -- using p_feedstock_capacity", UserWarning, stacklevel=5)
+        return sorted(given)
+
+    @staticmethod
+    def _context_outside(rec, info, reg):
+        """(reference, [(name, value, lo, hi)]): the contextual parameters
+        of the filled row outside the training range of its configuration
+        (``config_id``, unless overridden by conflicting names or a custom
+        feedstock) or, else, of its (product pair, feedstock) combination
+        (``reg['context_range']``; checkpoints without it: no check). The
+        feedstock capacity is checked as :data:`features.CAPACITY_KEY`.
+        Reported in ``contextual_outside_range``, separately from
+        ``in_domain`` (whose range check uses the global training range)."""
+        cr = reg.get('context_range') or {}
+        ref, rng = None, None
+        cid = None if _bad_name(rec.get('config_id')) else str(rec['config_id'])
+        if cid is not None and not info.get('conflict') and not info.get('custom_feedstock') \
+                and cid in cr.get('config', {}):
+            ref, rng = f'configuration {cid}', cr['config'][cid]
+        else:
+            key = f"{rec.get('fermentation_product')}|{rec.get('final_product')}|{rec.get('feedstock')}"
+            if key in cr.get('pair_feedstock', {}):
+                fp, pp, fs = key.split('|')
+                ref, rng = f'{fp} -> {pp} on {fs}', cr['pair_feedstock'][key]
+        if not rng:
+            return ref, []
+        out = []
+        for c, (lo, hi) in rng.items():
+            if c == CAPACITY_KEY:
+                v = rec.get('p_feedstock_capacity')
+                v = rec.get('fs_F_mass') if _bad(v) else v
+            else:
+                v = rec.get(c)
+            if _bad(v):
+                continue
+            v = float(v)
+            tol = _CTX_RTOL * max(abs(lo), abs(hi), 1e-12)
+            if v < lo - tol or v > hi + tol:
+                out.append((c, v, lo, hi))
+        # given, but never defined for the reference in training (NaN there:
+        # encoded as missing in its training rows)
+        known = set().union(*map(set, cr.get('config', {}).values())) if cr.get('config') else set()
+        for c in sorted(known - set(rng) - {CAPACITY_KEY}):
+            if not _bad(rec.get(c)):
+                out.append((c, float(rec[c]), float('nan'), float('nan')))
+        return ref, out
+
     def _known_fields(self):
         """Fields a spec may carry: the user fields (inputs, aliases,
         documented fields) and the pass-through names (:data:`_PASS_FIELDS`)."""
@@ -396,8 +502,16 @@ class CoefficientPredictor:
                     | set(SPEC_CATEGORICAL) | set(SPEC_NUMERIC) | set(CANONICAL_PARAMETERS)
                     | {d['name'] for d in self.spec.numeric} | set(self.spec.categoricals or {}))
             user.discard('fs_w_*')
+            # composition columns: the checkpoint's feedstock registry (every
+            # fs_w_* of its training tables) and the sugar components read by
+            # features.sugar_availability; an fs_w_* key outside them is
+            # ignored by the model and reported (a typo, e.g. 'fs_w_watre')
+            fs_w = {k for e in ((self.spec.spec_registry or {}).get('feedstock') or {}).values()
+                    for k in e if k.startswith('fs_w_')}
+            if fs_w:
+                user |= fs_w | {f'fs_w_{k}' for k in FREE_SUGARS + STRUCTURAL_SUGARS}
             outs = {f'{k}{s}' for k in COEFF_KEYS + ('g',) for s in ('', '_std', '_lo', '_hi')}
-            kf = self._known = (frozenset(user), frozenset(user | outs | _PASS_FIELDS))
+            kf = self._known = (frozenset(user), frozenset(user | outs | _PASS_FIELDS), bool(fs_w))
         return kf
 
     def _unknown_fields(self, columns):
@@ -405,14 +519,19 @@ class CoefficientPredictor:
         fields nor pass-through names: they are ignored by the model (e.g. a
         misspelled price would otherwise silently fall back to the
         configuration's baseline)."""
-        user, known = self._known_fields()
+        user, known, fs_w_checked = self._known_fields()
         out = []
         for c in columns:
             c = str(c)
-            if c in known or c.startswith(_PASS_PREFIXES):
+            if c in known or c.startswith(_PASS_PREFIXES) or (c.startswith('fs_w_') and not fs_w_checked):
                 continue
             out.append((c, difflib.get_close_matches(c, sorted(user), n=2, cutoff=0.75)))
         return out
+
+    @staticmethod
+    def _format_unknown(unk, n=8):
+        return '; '.join(f'{c!r}' + (f" (did you mean {' or '.join(map(repr, m))}?)" if m else '')
+                         for c, m in unk[:n]) + (' ...' if len(unk) > n else '')
 
     def missing_fields(self, spec):
         """Required fields still missing (or physically invalid) after the
@@ -449,6 +568,7 @@ class CoefficientPredictor:
         miss = [self._missing_row(rec) for rec in _records(df)]
         bad = [(i, m) for i, m in enumerate(miss) if m]
         unknown = [(i, k, nm) for i, d in enumerate(det) for k, nm in d['unknown']]
+        unk_fields = self._unknown_fields(_as_frame(spec).columns)
         if bad:
             parts = '; '.join(f'row {i}: {", ".join(m)}' for i, m in bad[:10])
             unk = '; '.join(f'row {i}: ' + self._suggest(k, nm) for i, k, nm in unknown[:6])
@@ -456,6 +576,7 @@ class CoefficientPredictor:
                 f'missing required specification field(s) ({parts}). Required: '
                 + ', '.join(f'{c} [{FIELD_UNITS.get(c, "")}]' for c in REQUIRED_FIELDS)
                 + (f'. Unrecognized names: {unk}' if unk else '')
+                + ('. Unknown field(s), ignored: ' + self._format_unknown(unk_fields) if unk_fields else '')
                 + ". Known feedstocks/fermentation products can be given "
                 "by name ('feedstock', 'fermentation_product', 'final_product') to fill "
                 "composition, yields and stoichiometric ratio from the registry; "
@@ -465,12 +586,9 @@ class CoefficientPredictor:
                           + ' -- descriptors/composition not filled from the registry were imputed',
                           UserWarning, stacklevel=3)
         if warn:
-            unk = self._unknown_fields(_as_frame(spec).columns)
-            if unk:
+            if unk_fields:
                 warnings.warn('unknown specification field(s) IGNORED by the model: '
-                              + '; '.join(f'{n!r}' + (f" (did you mean {' or '.join(map(repr, m))}?)" if m else '')
-                                          for n, m in unk[:8])
-                              + (' ...' if len(unk) > 8 else '') + ' -- field reference: README section 5, '
+                              + self._format_unknown(unk_fields) + ' -- field reference: README section 5, '
                               'P.field_units', UserWarning, stacklevel=3)
             al = [(i, a) for i, d in enumerate(det) for a in d['alias_conflict']]
             if al:
@@ -548,6 +666,27 @@ class CoefficientPredictor:
             warnings.warn('contextual parameters not specified, assumed baseline values: ' + ', '.join(ctx)
                           + (' (from: ' + '; '.join(srcs[:6]) + (' ...' if len(srcs) > 6 else '') + ')'
                              if srcs else ''), UserWarning, stacklevel=stacklevel)
+
+    @staticmethod
+    def _warn_context_outside(det, stacklevel=4):
+        bad = [(i, d) for i, d in enumerate(det) if d.get('context_outside')]
+        if not bad:
+            return
+        parts = []
+        for i, d in bad[:6]:
+            parts.append(f"row {i}: " + ', '.join(f'{c}={v:.4g} (training {lo:.4g}-{hi:.4g})' if lo == lo
+                                                  else f'{c}={v:.4g} (not defined in training)'
+                                                  for c, v, lo, hi in d['context_outside'][:4])
+                         + f" for {d['context_ref']}")
+        cap = any(c == CAPACITY_KEY for _, d in bad for c, *_ in d['context_outside'])
+        warnings.warn('contextual parameter(s) outside the training range of the configuration (or product pair '
+                      'and feedstock): ' + ' | '.join(parts)
+                      + (' -- each configuration\'s capacity was sampled only about +/-10-20 % around its baseline, '
+                         'and the model reproduces only about half of the simulated economy of scale (README '
+                         'section 7): do not read scale-up effects from it' if cap else
+                         ' -- the response to these parameters is extrapolated')
+                      + '; in_domain does not include this check (column contextual_outside_range)',
+                      ApplicabilityWarning, stacklevel=stacklevel)
 
     def _warn_uncalibrated(self, det, stacklevel=4):
         bad = [i for i, d in enumerate(det) if not d['calibrated']]
@@ -708,9 +847,11 @@ class CoefficientPredictor:
         out['contextual_defaults'] = [', '.join(d['contextual']) for d in det]
         out['contextual_source'] = ['; '.join(d['context_source']) for d in det]
         out['not_applicable'] = [', '.join(d['not_applicable']) for d in det]
+        out['contextual_outside_range'] = [', '.join(c for c, *_ in d['context_outside']) for d in det]
         out['filled_from_registry'] = [', '.join(d['filled']) for d in det]
         if warn:
             self._warn_imputed(batch, det)
+            self._warn_context_outside(det)
         return out
 
     def _check_yt(self, df, y, t, warn):
@@ -761,6 +902,7 @@ class CoefficientPredictor:
             warn_if_outside(ratio, oor)
         if warn:
             self._warn_imputed(batch, det)
+            self._warn_context_outside(det, stacklevel=3)
         impossible = self._check_yt(df, y, t, warn)
         outs = ens.member_outputs(batch)
         n = len(batch)
@@ -777,6 +919,8 @@ class CoefficientPredictor:
             rows['MPSP_lo'], rows['MPSP_hi'] = (mu - hw).ravel(), (mu + hw).ravel()
         rows['g_source'] = np.repeat(self._g_source(g_user), len(y))
         rows['intervals_calibrated'] = np.repeat([d['calibrated'] for d in det], len(y))
+        rows['contextual_outside_range'] = np.repeat([', '.join(c for c, *_ in d['context_outside'])
+                                                      for d in det], len(y))
         if warn:
             self._warn_uncalibrated(det, stacklevel=3)
         return pd.DataFrame(rows)
