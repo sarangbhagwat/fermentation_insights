@@ -1672,6 +1672,11 @@ def stage_final(a, plan, runner, dev, ctx, hp, sp, D, models_dir, cv):
                          calib_info=info('pinn', release=True), calib_extra=extra('pinn'),
                          meta=dict(kind='release')))
     results = runner.run(jobs, 'final + release')
+    for j in jobs:
+        # the checkpoint of the current models directory, not the absolute
+        # path stored in a cached fit result (a moved or re-cloned checkout)
+        if j.get('save_model') and not results[j['key']].get('error'):
+            results[j['key']]['saved_model'] = j['save_model']
     refresh_registries(jobs, results, s)
     import pandas as pd
     rows = []
@@ -1868,11 +1873,31 @@ def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
                                                                                if m != 'pinn'])
     checks['baseline_paired'].to_csv(os.path.join(tdir, 'cv_baselines_paired.csv'), index=False)
     checks['family_coverage'] = checks['config_coverage'] = None
+    checks['id_family_coverage'] = checks['id_config_coverage'] = None
     if conf and sc is not None and len(sc):
         fam = dict(zip(D['samples']['config_id'].astype(str), D['samples']['biorefinery'].astype(str)))
         checks['family_coverage'], checks['config_coverage'] = RC.family_coverage(sc, conf, families=fam)
         checks['family_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_by_family.csv'), index=False)
         checks['config_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_loco_per_config.csv'), index=False)
+        # a KNOWN configuration: random-CV (new parameter draws) and
+        # productivity-tail out-of-fold scores, per family and configuration
+        import pandas as pd
+        from fermentation_insights.coeff_predictor.train import CONF_KEYS
+        fr, cr = [], []
+        for sch in ('random', 'productivity'):
+            f_, c_ = RC.family_coverage(sc, conf, scheme=sch, keys=CONF_KEYS, families=fam)
+            if len(f_):
+                fr.append(f_.assign(scheme=sch))
+                cr.append(c_.assign(scheme=sch, family=c_['config_id'].map(fam)))
+        if fr:
+            checks['id_family_coverage'] = pd.concat(fr, ignore_index=True)[['scheme', 'key', 'family', 'n',
+                                                                               'n_configs', 'coverage']]
+            checks['id_config_coverage'] = pd.concat(cr, ignore_index=True)[['scheme', 'key', 'family',
+                                                                               'config_id', 'coverage']]
+            checks['id_family_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_in_distribution_by_family.csv'),
+                                                index=False)
+            checks['id_config_coverage'].to_csv(os.path.join(tdir, 'interval_coverage_in_distribution_per_config.csv'),
+                                                index=False)
     checks['ad'] = checks['ad_per_config'] = None
     path = (fp or {}).get('saved_model') or os.path.join(a.models, 'final_dev')
     if fp and not fp.get('error') and os.path.isdir(path):
@@ -1919,6 +1944,20 @@ def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
             t.to_csv(os.path.join(tdir, f'price_response_{os.path.basename(path_)}.csv'), index=False)
         except Exception as e:
             log(f'tables: WARNING price response of {path_} failed: {type(e).__name__}: {e}')
+    checks['capacity_response'] = None
+    cap_csv = os.path.join(PKG_DIR, RC.CAPACITY_RESPONSE_CSV)
+    rel_path = os.path.join(a.models, 'release')
+    if os.path.exists(cap_csv) and os.path.isdir(rel_path):
+        try:
+            import pandas as pd
+            from fermentation_insights.coeff_predictor.predict import CoefficientPredictor
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                t = RC.capacity_response(CoefficientPredictor.load(rel_path), pd.read_csv(cap_csv), D['samples'])
+            checks['capacity_response'] = t
+            t.to_csv(os.path.join(tdir, 'capacity_response_release.csv'), index=False)
+        except Exception as e:
+            log(f'tables: WARNING capacity response failed: {type(e).__name__}: {e}')
     r = cv['results']
     r = r[(r['scheme'] == 'random') & (r['fold'] >= 0) & (r['metric'] == 'mpsp_mape_cfg_gmean_random')]
     checks['random_cv_random_samples'] = r.groupby('method')['value'].mean().to_dict()
@@ -1941,11 +1980,21 @@ def clustered_and_twin_checks(a, D, cv, fin, checks, S, Pts, tdir, fp, saved_mod
     res = cv['results']
     checks['yt_check'] = RC.yt_definition_check(D['samples'], D['points'])
     checks['yt_check'].to_csv(os.path.join(tdir, 'yt_definition_check.csv'), index=False)
+    checks['sugar_check'] = RC.sugar_balance_check(D['samples'], D['points'])
+    checks['sugar_check'].to_csv(os.path.join(tdir, 'sugar_balance_check.csv'), index=False)
     fam = dict(zip(D['samples']['config_id'].astype(str), D['samples']['biorefinery'].astype(str)))
     checks['baseline_family'] = RC.baseline_family_stats(res, fam, methods=[m for m in BASE_METHODS if m != 'pinn'])
     checks['baseline_family'].to_csv(os.path.join(tdir, 'cv_baselines_paired_family.csv'), index=False)
     loco = set(res.loc[res['scheme'] == 'config', 'label'].astype(str))
     newp = RC.single_config_products(D['samples'][D['samples']['config_id'].astype(str).isin(loco)])
+    # the same over the known-product families only (the new-product folds
+    # are single-configuration families of their own)
+    res_k = res[(res['scheme'] != 'config') | ~res['label'].astype(str).isin(newp)]
+    checks['baseline_family_known'] = RC.baseline_family_stats(res_k, fam, methods=[m for m in BASE_METHODS
+                                                                                    if m != 'pinn'])
+    checks['baseline_family_known'].insert(1, 'excluded_folds', ', '.join(newp))
+    checks['baseline_family_known'].to_csv(os.path.join(tdir, 'cv_baselines_paired_family_known_product.csv'),
+                                           index=False)
     checks['loco_new_product_folds'] = newp
     checks['loco_known_product'] = RC.loco_subset(res, newp, methods=BASE_METHODS)
     checks['loco_known_product'].insert(0, 'excluded_folds', ', '.join(newp))
@@ -2637,7 +2686,9 @@ def fig_pub(path, pub, made):
             pad = 0.05 * (hi - lo if hi > lo else 1)
             ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color=INK3, ls='--', lw=1)
             med = _nanmedian(pub[f'{k}_ratio'])
-            ax.text(0.04, 0.96, f'median ratio = {med:.3f}\nn = {f.sum()}', transform=ax.transAxes, va='top',
+            nr = int(np.isfinite(pub[f'{k}_ratio'].to_numpy(float)).sum())
+            ax.text(0.04, 0.96, f'median ratio = {med:.3f}\nn = {f.sum()}'
+                    + (f' ({nr} defined ratios)' if nr != f.sum() else ''), transform=ax.transAxes, va='top',
                     fontsize=8, color=INK2)
         ax.set_xlabel(f'publication {TARGET_LABEL[k]}')
         ax.set_ylabel(f'this work {TARGET_LABEL[k]}')
@@ -3194,9 +3245,11 @@ def intervals_section(fin, protocol):
              'section 5), and a new configuration of a family whose scores are larger than the calibration set\'s '
              'is under-covered (development proxy of the frozen test with LOCO-calibrated intervals, 6 draws: '
              'MPSP coverage 0.86-0.99 per draw, mean 0.93, but TAL_glucose / TAL_corn 0.70 in 2 draws and '
-             'lactic_lowpH_SHF_cornstover 0.58 in one; DESIGN.md round 4f). For in-distribution queries the '
-             'LOCO-calibrated intervals are conservative (proxy 0.95-0.99; they are calibrated for new '
-             'configurations). No test sample was used for selection or calibration.\n')
+             'lactic_lowpH_SHF_cornstover 0.58 in one; DESIGN.md round 4f). For a known configuration (in '
+             'distribution) the intervals are conservative pooled over samples but not for every family: the '
+             'paragraph "Coverage for a KNOWN configuration" below (in the v1 and v2 reports this sentence read '
+             '"conservative (proxy 0.95-0.99)" without the per-family breakdown). No test sample was used for '
+             'selection or calibration.\n')
     return '\n'.join(L)
 
 
@@ -3239,6 +3292,59 @@ def coverage_reading(c, fam_cov=None, cfg_cov=None, nominal=None, tol=0.02):
     return out
 
 
+def in_distribution_coverage(shc, idf, idc=None, nominal=None, tol=0.1):
+    """(summary, markdown) of the coverage of the shipped (release)
+    quantiles for a KNOWN configuration: pooled on the random-CV and
+    productivity-tail out-of-fold scores (``shc``,
+    ``report_checks.shipped_quantile_coverage``) and the families whose
+    coverage is more than ``tol`` below nominal (``idf``, per family;
+    ``idc``, per configuration)."""
+    import numpy as np
+    nominal = 1 - ALPHA if nominal is None else nominal
+    if shc is None or not len(shc) or idf is None or not len(idf):
+        return '', ''
+    lab = {'random': 'random CV (new parameter draws)', 'productivity': 'productivity tails'}
+    pooled = []
+    for sch in ('random', 'productivity'):
+        t = shc[shc['scheme'] == sch].set_index('key')
+        if len(t):
+            pooled.append(f'{lab[sch]} ' + ', '.join(f'{k} {t.loc[k, "pooled"]:.2f}' for k in ('mpsp', 'g', 'a', 'b',
+                                                                                           'c', 'd') if k in t.index))
+    low = idf[idf['coverage'] < nominal - tol]
+    parts = []
+    for x in low.sort_values(['scheme', 'coverage']).itertuples():
+        seg = f'{x.key} {x.family} {x.coverage:.2f}'
+        if idc is not None and len(idc):
+            c = idc[(idc['scheme'] == x.scheme) & (idc['key'] == x.key) & (idc['family'] == x.family)]
+            if x.n_configs > 1 and len(c):
+                seg += f' (per configuration {c["coverage"].min():.2f}-{c["coverage"].max():.2f})'
+        parts.append((x.scheme, seg))
+    other = (idf[idf['coverage'] >= nominal - tol]['coverage'].min() if (idf['coverage'] >= nominal - tol).any()
+             else float('nan'))
+    by = {sch: [seg for s_, seg in parts if s_ == sch] for sch in ('random', 'productivity')}
+    low_txt = '; '.join(f'{lab[sch]}: ' + ', '.join(v) for sch, v in by.items() if v)
+    tal_g = bool(((low['family'] == 'TAL') & (low['key'] == 'g')).any())
+    md = ('**Coverage for a KNOWN configuration** (the shipped `models/release` quantiles, re-scored with its '
+          'spread floors, on the random-CV out-of-fold scores -- a training configuration with new parameter '
+          'draws -- and on the productivity-tail scores; `report_checks.shipped_quantile_coverage`, '
+          '`tables/interval_coverage_by_scheme.csv`; per family `tables/interval_coverage_in_distribution_by_family'
+          '.csv`, per configuration `tables/interval_coverage_in_distribution_per_config.csv`; nominal '
+          f'{nominal:.2f}). Pooled over the samples the intervals are conservative: ' + '; '.join(pooled) + '. '
+          + ('They are NOT conservative for every family: ' + low_txt
+             + (f'; every other family and key {other:.2f} or more' if np.isfinite(other) else '') + '.'
+             if low_txt else f'Every family and key is at {other:.2f} or more.')
+          + (' The TAL recovery under-coverage holds for every TAL configuration, known or new: the '
+             'within-configuration spread of g comes from a parameter that is not a model input (the TAL '
+             'decarboxylation conversion of the separation, `bp_separation_tal_decarboxylation_conversion`; '
+             'sd(ln g) 0.11, DESIGN.md section 6, round 4), i.e. noise for the model, which the score |error| / '
+             '(member spread + floor) does not represent; a per-family calibration or a score with a noise term '
+             'for g is an open item.' if tal_g else '') + '\n')
+    summ = ('* For a KNOWN configuration the shipped intervals are conservative pooled ('
+            + '; '.join(pooled) + ')' + (', but not for every family: ' + low_txt if low_txt else '')
+            + ' (section 6).') if pooled else ''
+    return summ, md
+
+
 def interval_extrapolation_section(shc, cfx, fam_cov=None, cfg_cov=None):
     """Markdown: per-key cross-fitted coverage (new configurations) and the
     coverage of the shipped quantiles on the leave-one-feedstock-out /
@@ -3253,7 +3359,7 @@ def interval_extrapolation_section(shc, cfx, fam_cov=None, cfg_cov=None):
                          f'{x.key} {x.pooled:.2f} / {x.mean:.2f} / {x.q10:.2f}' for x in c.itertuples())
                      + '. ' + coverage_reading(c, fam_cov, cfg_cov) + '\n')
     if shc is not None and len(shc):
-        t = shc[shc['scheme'] != 'config']
+        t = shc[shc['scheme'].isin(['feedstock', 'product'])]
         if len(t):
             L.append('**The intervals are not calibrated for a new feedstock or a new product.** Coverage of the '
                      'shipped quantiles (`models/release`, calibrated on the LOCO scores) on the out-of-fold scores '
@@ -3325,11 +3431,56 @@ def data_violation_note(byc):
             '`viol_mono_y` near the data\'s is not a model error. The predicted g is bounded by g_max.\n')
 
 
+def capacity_response_text(t, samples=None):
+    """Section 8 paragraph: the release model's MPSP response to the
+    feedstock capacity vs. BioSTEAM (``report_checks.capacity_response``)."""
+    import numpy as np
+    import pandas as pd
+    if t is None or not len(t):
+        return ''
+    span = ''
+    if samples is not None and 'p_feedstock_capacity' in samples:
+        c = samples.groupby('config_id')['p_feedstock_capacity'].agg(['min', 'max', 'median']).dropna()
+        if len(c):
+            span = (f' Each configuration\'s training capacity spans only {c["min"].div(c["median"]).min():.2f}-'
+                    f'{c["max"].div(c["median"]).max():.2f} x its median (with every other parameter varied at '
+                    'the same time), so the within-configuration scale response is weakly identified.')
+    big = t[t['mult'] >= 2]
+    sh = big.groupby('mult')['share_of_simulated_change'].median()
+    piv = t.pivot_table(index='config_id', columns='mult', values=['dMPSP_sim_pct', 'dMPSP_pred_pct'])
+    cols = [m for m in (0.5, 2., 3.) if m in piv['dMPSP_sim_pct'].columns]
+    tab = pd.DataFrame({'config_id': piv.index})
+    for m in cols:
+        tab[f'sim {m:g}x %'] = piv[('dMPSP_sim_pct', m)].to_numpy()
+        tab[f'pred {m:g}x %'] = piv[('dMPSP_pred_pct', m)].to_numpy()
+    rise = big[big['dMPSP_sim_pct'] > 0]
+    out_flag = big['contextual_outside_range'].astype(str).str.contains('feedstock_capacity').mean()
+    ind = big['in_domain'].mean()
+    return ('**(ii-c) Capacity response** (report only): MPSP change from the configuration\'s baseline capacity '
+            'to 0.5x / 2x / 3x, predicted (`models/release`, queried by `config_id` with the capacity) vs. '
+            'simulated (BioSTEAM, every parameter at baseline, baseline yield, titer and productivity; '
+            '`data_generation/sim_checks.py`, `data_generation/checks/capacity_response.csv`; '
+            '`report_checks.capacity_response`, `tables/capacity_response_release.csv`). Median share of the '
+            'simulated MPSP decrease that the model reproduces (configurations whose simulated MPSP falls): '
+            + ', '.join(f'{m:g}x {v:.2f} (n = {int(big.loc[big["mult"] == m, "share_of_simulated_change"].notna().sum())})'
+                        for m, v in sh.items() if np.isfinite(v)) + '.' + span
+            + (' The simulated MPSP RISES at 2x or 3x for ' + ', '.join(sorted(rise['config_id'].unique()))
+               + ' (their simulated fixed capital investment grows faster than the capacity there, e.g. 8.8x at 3x '
+               'for HP_hexanol_sugarcane: cost correlations used beyond their size ranges, not investigated; far '
+               'outside the training range).' if len(rise) else '')
+            + f' The global applicability-domain check keeps {100 * ind:.0f} % of the 2-3x queries in_domain (the '
+            'global capacity range is wide because the configurations differ in scale); the per-configuration '
+            f'contextual range check flags {100 * out_flag:.0f} % of them (`contextual_outside_range`, with an '
+            'ApplicabilityWarning). Scale-up effects should not be read from the model:\n\n'
+            + md_table(tab.round(1)) + '\n')
+
+
 def loco_structure_section(checks):
     """Section 5 paragraphs on the structure of the LOCO folds
     (``clustered_and_twin_checks``): the family-level comparison with the
     baselines, LOCO without the new-product folds, and LOCO per family."""
     import numpy as np
+    import pandas as pd
     L = []
     bf = checks.get('baseline_family')
     if bf is not None and len(bf):
@@ -3345,9 +3496,24 @@ def loco_structure_section(checks):
                  'independent and overstate the precision. Family-level comparison (the paired fold differences '
                  'averaged per family, then tested over the families; `report_checks.baseline_family_stats`, '
                  '`tables/cv_baselines_paired_family.csv`; percentage points):\n')
+        bk = checks.get('baseline_family_known')
+        if bk is not None and len(bk):
+            k = bk.copy()
+            for c in ('mean', 'median', 'se', 'dominant_delta'):
+                k[c] = 100 * k[c]
+            k['scheme'] = 'config, known-product families'
+            t = pd.concat([t, k[t.columns.intersection(k.columns)]], ignore_index=True)
         L.append(md_table(t[['scheme', 'method', 'n_folds', 'n_families', 'mean', 'se', 'median', 'n_pinn_better',
-                             'n_baseline_better', 'p_wilcoxon', 'p_sign', 'dominant_family', 'dominant_delta']])
-                 + '\n')
+                             'n_baseline_better', 'p_wilcoxon', 'p_sign', 'p_min_attainable', 'dominant_family',
+                             'dominant_delta']]) + '\n')
+        if bk is not None and len(bk):
+            L.append('Rows `config, known-product families`: the same without the new-product folds '
+                     f'({bk["excluded_folds"].iloc[0]}; each is a family of one configuration whose product is '
+                     'nowhere else in training), i.e. for the use "a new configuration of a known product". With '
+                     f'{int(bk["n_families"].max())} families the smallest attainable two-sided p is '
+                     f'{bk["p_min_attainable"].max():.3f} (`p_min_attainable`), so the direction (`n_pinn_better`) '
+                     'and the mean / median are the evidence there; '
+                     '`tables/cv_baselines_paired_family_known_product.csv`.\n')
     kp, newp = checks.get('loco_known_product'), checks.get('loco_new_product_folds') or []
     if kp is not None and len(kp) and newp:
         r = kp.set_index('method')
@@ -3448,6 +3614,29 @@ def _no_twin_cov(checks, key):
             if len(c) else '')
 
 
+def _known_family_text(checks, ms):
+    """Clause of the family-level LOCO comparison over the known-product
+    families only (without the new-product folds)."""
+    bk = checks.get('baseline_family_known')
+    if bk is None or not len(bk):
+        return ''
+    r = bk.set_index('method')
+    ms = [m for m in ms if m in r.index]
+    if not ms:
+        return ''
+    n = int(r['n_families'].max())
+    return (f'. The mean leans on the two new-product families ({r["excluded_folds"].iloc[0]}); over the {n} '
+            'known-product families (the use "a new configuration of a known product"): '
+            + ', '.join(f'{METHOD_LABEL[m]} - PI-NN {100 * r.loc[m, "mean"]:+.1f} pp (median '
+                        f'{100 * r.loc[m, "median"]:+.1f}), PI-NN better in {int(r.loc[m, "n_pinn_better"])}/{n}'
+                        for m in ms)
+            + (' -- the PI-NN is better in every known-product family' if all(int(r.loc[m, 'n_pinn_better']) == n
+                                                                         for m in ms)
+               else ' -- the direction is not the same in every known-product family')
+            + f', but {n} families cannot reach p < 0.05 (smallest attainable two-sided p '
+            f'{r["p_min_attainable"].max():.3f})')
+
+
 def loco_structure_summary(checks):
     """Summary bullets on the LOCO fold structure (family clustering,
     new-product folds, per-family errors)."""
@@ -3466,7 +3655,9 @@ def loco_structure_summary(checks):
                  + (' -- the LOCO advantage over these baselines holds at the family level'
                     if all(r.loc[m, 'mean'] > 0 and np.isfinite(r.loc[m, 'p_wilcoxon']) and r.loc[m, 'p_wilcoxon'] < 0.05
                            for m in ms) else ' -- an advantage is not established at the family level for all of them')
-                 + ' (all baselines: section 5).')
+                 + '; median over the families ' + ', '.join(f'{METHOD_LABEL[m]} {100 * r.loc[m, "median"]:+.1f} pp'
+                                                             for m in ms)
+                 + _known_family_text(checks, ms) + ' (all baselines: section 5).')
     kp, newp = checks.get('loco_known_product'), checks.get('loco_new_product_folds') or []
     if kp is not None and len(kp) and newp and (kp['method'] == 'pinn').any():
         r = kp.set_index('method')
@@ -3751,6 +3942,9 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
               'coverage of the shipped (release) quantiles on the leave-one-feedstock-out / leave-one-product-out '
               'out-of-fold scores (pooled over samples; nominal 0.90): ' + '; '.join(parts)
               + ' (section 6; `predict()` flags such rows `intervals_calibrated = False`).')
+        summ = in_distribution_coverage(shc, checks.get('id_family_coverage'), checks.get('id_config_coverage'))[0]
+        if summ:
+            P(summ)
     P('')
     P(runs_comparison(fh, head, checks.get('prior') or {'v1': v1}))
     P(changelog(ctx, plan))
@@ -3801,6 +3995,20 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
              'in F_ferm_product but not in the module\'s broth titer. The lactic SSCF titer ratio below 1 is not '
              'explained. The coefficients are fitted on the nominal y and t (the modules\' own definitions), which '
              'are the inputs of the unifying equation.' if len(dep) else '') + '\n')
+    sb = checks.get('sugar_check')
+    if sb is not None and len(sb):
+        ex = sb[sb['exceeds']]
+        ok = sb[~sb['exceeds']]
+        P('**Sugar fed vs. sugar available** (per simulated point F_sugar_fed / (F_feedstock x '
+          'fs_w_fermentable_sugar_eq x sugar availability), the availability being the physics prior '
+          '`features.sugar_availability`; `report_checks.sugar_balance_check`, `tables/sugar_balance_check.csv`): '
+          + (f'{len(ok)} configurations at {ok["ratio_min"].min():.2f}-{ok["ratio_max"].max():.2f} (below 1: '
+             'sugar losses before fermentation). ' if len(ok) else '')
+          + ('MORE sugar fed than the feedstock holds (> 1.01): ' + '; '.join(
+              f'`{x.config_id}` {x.ratio_min:.4f}-{x.ratio_max:.4f}' for x in ex.itertuples())
+             + ' -- known data defect D16 (DESIGN.md section 1: the TAL_SA_sugarcane system appends the juice '
+             'recycle to the crushing mill a second time; the defect is in the data and is not corrected).'
+             if len(ex) else 'None exceeds 1.01.') + '\n')
     cov = checks.get('data_coverage')
     if cov is not None and len(cov):
         short = cov[(cov['retained'] < cov['planned'].fillna(0)) | (cov['empty_reset_failed'] > 0)]
@@ -4052,6 +4260,8 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
         P(intervals_section(fin, protocol))
         P(interval_extrapolation_section(checks.get('shipped_coverage'), cv.get('crossfit'),
                                          checks.get('family_coverage'), checks.get('config_coverage')))
+        P(in_distribution_coverage(checks.get('shipped_coverage'), checks.get('id_family_coverage'),
+                                   checks.get('id_config_coverage'))[1])
         P(ad_section(checks.get('ad'), checks.get('ad_per_config')))
     else:
         P('Final models failed (see log).\n')
@@ -4162,6 +4372,7 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
             if len(big):
                 b = (100 * big).round(1).reset_index()
                 P(md_table(b) + '\n')
+    P(capacity_response_text(checks.get('capacity_response'), D['samples']))
     P('**(iii) Channel breakdown** of the held-out test configurations (final PI-NN; mean over each configuration\'s '
       'test samples): `tables/channel_breakdown.csv`, `figures/channels_test.png`.\n')
     if len(ch):

@@ -83,6 +83,26 @@ def test_data_violation_rates_of_the_fitted_coefficients():
     assert set(zip(byc['constraint'], byc['config_id'])) == {('mono_y', 'B'), ('g_le_gmax', 'B')}
 
 
+def test_family_stats_report_the_smallest_attainable_p():
+    fam = {'A1': 'A', 'B1': 'B', 'C1': 'C', 'D1': 'D', 'E1': 'E'}
+    res = _res({**{(k, 'pinn'): .1 for k in fam}, **{(k, 'plain'): .2 for k in fam}})
+    t = RC.baseline_family_stats(res, fam, methods=('plain',)).iloc[0]
+    assert t['n_pinn_better'] == 5 and t['p_min_attainable'] == pytest.approx(2 / 2 ** 5)
+    # five families of one sign: the Wilcoxon p cannot go below it
+    assert t['p_wilcoxon'] >= t['p_min_attainable'] - 1e-12
+
+
+def test_sugar_balance_flags_more_sugar_fed_than_available():
+    from fermentation_insights.coeff_predictor import features as F
+    s = pd.DataFrame({'sample_id': ['s1', 's2'], 'config_id': ['ok', 'bad'], F.W_SUGAR: [0.9, 0.9],
+                      'fs_w_glucose': [0.9, 0.9], 'feedstock_type': ['pure_sugar', 'pure_sugar']})
+    p = pd.DataFrame({'sample_id': ['s1', 's1', 's2'], 'F_sugar_fed': [80., 81., 95.],
+                      'F_feedstock': [100., 100., 100.]})
+    t = RC.sugar_balance_check(s, p).set_index('config_id')
+    assert not t.loc['ok', 'exceeds'] and t.loc['ok', 'n_points'] == 2
+    assert t.loc['bad', 'exceeds'] and t.loc['bad', 'ratio_max'] == pytest.approx(95 / 90)
+
+
 def test_sim_checks_collect_pairs_as_is_and_corrected_runs(tmp_path):
     import json
     from fermentation_insights.coeff_predictor.data_generation import sim_checks as SC

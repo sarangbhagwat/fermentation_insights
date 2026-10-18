@@ -228,7 +228,8 @@ def paired_test_comparison(final, samples_by_id, points_by_id, sets=('test_ood',
     return pd.DataFrame(rows)
 
 
-def shipped_quantile_coverage(scores, conf, schemes=('config', 'feedstock', 'product'), method='pinn'):
+def shipped_quantile_coverage(scores, conf, schemes=('config', 'feedstock', 'product', 'random', 'productivity'),
+                              method='pinn'):
     """Coverage of the interval quantiles ``conf`` (an ensemble's
     ``conformal`` dict, e.g. of ``models/release``) on the out-of-fold scores
     (``cv_oof_scores.csv.gz``) of each CV scheme, re-scored with that
@@ -238,7 +239,10 @@ def shipped_quantile_coverage(scores, conf, schemes=('config', 'feedstock', 'pro
     quantiles were computed from these very scores (in-sample: about the
     nominal level by construction; the cross-fitted estimate is the honest
     one); for leave-one-feedstock-out and leave-one-product-out it is the
-    coverage the shipped intervals would have for a new feedstock / product."""
+    coverage the shipped intervals would have for a new feedstock / product;
+    for random CV and the productivity tails, that for a KNOWN configuration
+    (new parameter draws, resp. productivities beyond the sampled range) --
+    pooled; per family see :func:`family_coverage` with ``scheme``."""
     from fermentation_insights.coeff_predictor.train import rescore_conformal, CONF_KEYS
     eps = {k: conf.get(f'{k}_eps') for k in CONF_KEYS if k != 'mpsp' and conf.get(f'{k}_eps') is not None}
     eps['mpsp_rel'] = conf.get('mpsp_eps_rel', 0.01)
@@ -374,6 +378,8 @@ def baseline_family_stats(res, families, scheme='config', methods=('knn', 'plain
         rows.append(dict(scheme=scheme, method=m, n_folds=int(len(d)), n_families=st['n_folds'],
                          mean=st['mean'], se=st['se'], median=st['median'], n_pinn_better=nw,
                          n_baseline_better=nb, p_wilcoxon=st['p_wilcoxon'], p_sign=_sign_p(nb, nw),
+                         # smallest two-sided p attainable with this many families (all of one sign)
+                         p_min_attainable=2. ** (1 - st['n_folds']) if st['n_folds'] else math.nan,
                          dominant_family=st.get('dominant_fold'), dominant_delta=st.get('dominant_delta')))
     return pd.DataFrame(rows)
 
@@ -485,6 +491,83 @@ def yt_definition_check(samples, points, tol=0.01):
         r['departs'] = bool(max(abs(r['y_ratio_min'] - 1), abs(r['y_ratio_max'] - 1), abs(r['t_ratio_min'] - 1),
                                 abs(r['t_ratio_max'] - 1)) > tol)
         rows.append(r)
+    return pd.DataFrame(rows)
+
+
+def sugar_balance_check(samples, points, tol=0.01):
+    """Sugar fed to fermentation vs. the sugar the feedstock can supply,
+    per configuration: per simulated point F_sugar_fed / (F_feedstock x
+    fs_w_fermentable_sugar_eq x sugar_availability) (``features.
+    sugar_availability``: free sugars + starch + saccharification yield x
+    structural polysaccharides, glucose-eq.); min / median / max and whether
+    the maximum exceeds 1 + ``tol`` (more sugar fed than the feedstock holds:
+    a mass-balance defect of the process model, e.g. D16, DESIGN.md
+    section 1). Values below 1 are expected (sugar losses before
+    fermentation)."""
+    from fermentation_insights.coeff_predictor import features as F
+    need = ('F_sugar_fed', 'F_feedstock')
+    if not all(c in points for c in need) or F.W_SUGAR not in samples:
+        return pd.DataFrame()
+    s = samples.copy()
+    s['_avail'] = F.sugar_availability(s)
+    s['_w'] = pd.to_numeric(s[F.W_SUGAR], errors='coerce')
+    s = s[['sample_id', 'config_id', '_avail', '_w']].astype({'sample_id': str})
+    p = points[['sample_id', *need]].astype({'sample_id': str}).merge(s, on='sample_id', how='inner')
+    with np.errstate(divide='ignore', invalid='ignore'):
+        p['ratio'] = p['F_sugar_fed'] / (p['F_feedstock'] * p['_w'] * p['_avail'])
+    rows = []
+    for c, g in p.groupby('config_id'):
+        v = g['ratio'].replace([np.inf, -np.inf], np.nan).dropna()
+        if not len(v):
+            continue
+        rows.append(dict(config_id=str(c), n_points=int(len(v)), ratio_min=float(v.min()),
+                         ratio_median=float(v.median()), ratio_max=float(v.max()),
+                         exceeds=bool(v.max() > 1 + tol)))
+    return pd.DataFrame(rows)
+
+
+#: simulated capacity response (``data_generation/sim_checks.py``,
+#: ``scripts/run_sim_checks.sh``), relative to the package directory
+CAPACITY_RESPONSE_CSV = os.path.join('data_generation', 'checks', 'capacity_response.csv')
+
+
+def capacity_response(P, sim, samples):
+    """Model vs. BioSTEAM response of the MPSP to the feedstock capacity
+    (report only). ``sim``: :data:`CAPACITY_RESPONSE_CSV` (per configuration,
+    every parameter at its baseline, the baseline yield, titer and
+    productivity, ``p_feedstock_capacity`` scaled by ``mult``); the model is
+    queried by ``config_id`` with that capacity, productivity and the
+    baseline sample's feedstock price. Per configuration x multiplier:
+    simulated and predicted MPSP, their changes relative to ``mult`` = 1 (%),
+    the predicted share of the simulated change (for ``mult`` > 1 where the
+    simulated MPSP falls by more than 0.5 %), the MPSP error (%), and the
+    ``in_domain`` / ``contextual_outside_range`` flags of the query."""
+    import warnings
+    sim = sim[sim['status'] == 'ok']
+    base = samples[samples['sample_kind'].astype(str) == 'baseline'].groupby('config_id').first()
+    reg = (P.spec.spec_registry or {}).get('config', {})
+    rows = []
+    for cid, g in sim.groupby('config_id'):
+        if cid not in reg or cid not in base.index or not (g['mult'] == 1).any():
+            continue
+        specs = [dict(config_id=cid, r=float(x.r), feedstock_price=float(base.loc[cid, 'feedstock_price']),
+                      p_feedstock_capacity=float(x.p_feedstock_capacity)) for x in g.itertuples()]
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            q = P.predict(specs)
+        y, t = g['y'].to_numpy(float), g['t'].to_numpy(float)
+        m = ((q['a'] + q['b'] / y + q['c'] / t + q['d'] / (y * t)) / q['g']).to_numpy(float)
+        i1 = int(np.flatnonzero(g['mult'].to_numpy(float) == 1)[0])
+        s_ = g['MPSP'].to_numpy(float)
+        for j, x in enumerate(g.itertuples()):
+            ds, dm = 100 * (s_[j] / s_[i1] - 1), 100 * (m[j] / m[i1] - 1)
+            rows.append(dict(config_id=cid, mult=float(x.mult), p_feedstock_capacity=float(x.p_feedstock_capacity),
+                             MPSP_sim=float(s_[j]), MPSP_pred=float(m[j]), dMPSP_sim_pct=ds, dMPSP_pred_pct=dm,
+                             # where the simulated MPSP falls with the scale (economy of scale)
+                             share_of_simulated_change=dm / ds if ds < -0.5 and x.mult > 1 else np.nan,
+                             err_pct=100 * (m[j] / s_[j] - 1), in_domain=bool(q['in_domain'].iloc[j]),
+                             contextual_outside_range=str(q['contextual_outside_range'].iloc[j])
+                             if 'contextual_outside_range' in q else ''))
     return pd.DataFrame(rows)
 
 
@@ -680,7 +763,8 @@ def readme_summary(tables_dir):
     cf, shc = t('cv_coverage_crossfit.csv'), t('interval_coverage_by_scheme.csv')
     fh = t('final_test_headline.csv')
     pct = lambda v: '–' if not np.isfinite(v) else f'{100 * v:.1f}'
-    L = ['| CV scheme (development set) | estimates | PI-NN MPSP MAPE % (± s.e.) | best baseline % | '
+    L = ['| CV scheme (development set) | estimates | PI-NN MPSP MAPE %: mean over folds, each held-out group '
+         'counting once (± s.e.); pooled over the held-out samples | best baseline % (mean over folds) | '
          'PI-NN vs. kNN, paired over folds: kNN − PI-NN pp (PI-NN better / folds) | coverage MPSP / g '
          '(nominal 0.90) |', '|---|---|---|---|---|---|']
     for sch, lab, what in _README_SCHEMES:
@@ -707,8 +791,10 @@ def readme_summary(tables_dir):
             nk = int(k.loc[k['method'] == 'pinn', 'n_folds'].iloc[0])
             nx = len(str(k['excluded_folds'].iloc[0]).split(', '))
             what += f' (all {nk + nx} folds; {nx} of them hold out the only configuration of a product, see below)'
+        pooled = h.loc['pinn', 'mpsp_mape_pooled'] if 'mpsp_mape_pooled' in h else np.nan
         L.append(f'| {lab} | {what} | {pct(h.loc["pinn", "mpsp_mape"])}'
-                 + (f' (± {pct(se)})' if np.isfinite(se) else '') + f' | {_README_METHODS[bm]} '
+                 + (f' (± {pct(se)})' if np.isfinite(se) else '')
+                 + (f'; pooled {pct(pooled)}' if np.isfinite(pooled) else '') + f' | {_README_METHODS[bm]} '
                  f'{pct(base[bm])} | {kn} | {cov} |')
     L.append('')
     for st, lab in (('test_ood', 'held-out configurations (HP_corn, TAL_sugarcane, succinic_glucose, '
@@ -731,7 +817,7 @@ def readme_summary(tables_dir):
                       f'configuration {", ".join(mate)} (REPORT.md section 2): PI-NN {pct(w.loc["pinn", "mpsp_mape"])} % '
                       f'(n = {int(w.loc["pinn", "n_samples"])}), best baseline {_README_METHODS[wb.idxmin()]} '
                       f'{pct(wb.min())} %')
-        L.append(f'* Final test, {lab}: PI-NN {pct(f.loc["pinn", "mpsp_mape"])} % (n = '
+        L.append(f'* Final test, {lab}: PI-NN {pct(f.loc["pinn", "mpsp_mape"])} % (pooled over n = '
                  f'{int(f.loc["pinn", "n_test"])} samples), best baseline {_README_METHODS[b.idxmin()]} '
                  f'{pct(b.min())} %' + tw + ' (`models/final_dev`; a re-used hold-out, REPORT.md).')
     kp = os.path.join(tables_dir, 'cv_loco_known_product.csv')
@@ -749,7 +835,7 @@ def readme_summary(tables_dir):
                    + (f'; the new-product folds {", ".join(new)} %' if new else ''))
         L.append(f'* Leave-one-configuration-out over the {int(k.loc["pinn", "n_folds"])} folds of a KNOWN product '
                  f'(the folds {", ".join(ex)} hold out the only configuration of their product, so they are '
-                 f'new-product folds): PI-NN {pct(k.loc["pinn", "mean"])} %, '
+                 f'new-product folds; means over folds): PI-NN {pct(k.loc["pinn", "mean"])} %, '
                  + ', '.join(f'{_README_METHODS[m]} {pct(k.loc[m, "mean"])} %' for m in ('plain', 'knn')
                              if m in k.index) + fam + '.')
     return '\n'.join([README_BEGIN] + L + [README_END])

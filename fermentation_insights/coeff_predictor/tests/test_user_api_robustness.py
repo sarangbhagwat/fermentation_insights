@@ -277,3 +277,18 @@ def test_contextual_parameters_outside_the_configuration_range(with_ranges, ship
     # training rows are inside their configuration's ranges
     rows = s.groupby('config_id').head(2).reset_index(drop=True)
     assert (_quiet(P.predict, rows)['contextual_outside_range'] == '').all()
+
+
+def test_capacity_response_check(with_ranges, shipped):
+    from fermentation_insights.coeff_predictor import report_checks as RC
+    s, _ = shipped
+    b = s[(s['config_id'] == 'HP_corn') & (s['sample_kind'] == 'baseline')].iloc[0]
+    cap = float(b['p_feedstock_capacity'])
+    sim = pd.DataFrame(dict(config_id='HP_corn', mult=[1., 2.], p_feedstock_capacity=[cap, 2 * cap],
+                            y=float(b['baseline_yield']), t=float(b['baseline_titer']), r=float(b['r']),
+                            status='ok', MPSP=[1.40, 1.33]))
+    t = RC.capacity_response(with_ranges, sim, s).set_index('mult')
+    assert t.loc[1., 'dMPSP_pred_pct'] == 0. and t.loc[2., 'dMPSP_sim_pct'] == pytest.approx(-5., abs=1e-9)
+    assert t.loc[2., 'contextual_outside_range'] == 'feedstock_capacity'
+    assert t.loc[1., 'contextual_outside_range'] == ''
+    assert np.isfinite(t.loc[2., 'share_of_simulated_change'])
