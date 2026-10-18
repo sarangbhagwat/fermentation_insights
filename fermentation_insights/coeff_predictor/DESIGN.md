@@ -77,13 +77,15 @@ Defects found in the data review that are not (or not fully) corrected by
 the patches above. "Effect" is what they do to the training targets and the
 model; none of them was corrected for the v2 models. D15 and H1 were fixed
 afterwards by regenerating the affected data (2026-10-17); models trained
-before that (v2) still carry them.
+before that (v2) still carry them. The v3 pipeline trains on the corrected
+data and masks the D8-affected feedstock-channel targets in the loss (§6,
+round 5).
 
 | id | configurations / fields | defect | effect on the coefficients and the model | status |
 |---|---|---|---|---|
 | D1 | lactic, random samples | the feedstock-price bounds were rebound after sampling (prices outside the intended range) | none now: the random samples were regenerated with the bound fix (`adapters/lactic.py` 408-421; old files in `raw_lactic_D1`, prices 0.0005-0.175 USD/kg = U(0, 200) USD/dry t). The fix was not versioned (lactic configs carry no `adapter_version`) | fixed by regeneration |
 | D5 | HP low-pH (8 configurations) | the cation-exchange regeneration H2SO4 (`H2SO4_fresh` → T611) and the anion-exchange NaOH are not in `acid_cost` / `base_cost`; `acid_cost` = 0 in every low-pH HP configuration | their cost is in materials_other instead of the neutralization channel (lactic and oxalic book such reagents as neutralization); totals unaffected, channel labels and the `acid_regeneration` field ('none') understate HP's reagent use | open |
-| D8 | TAL, TAL_SA | the spiked acetate (10 g/L AcOH-eq. by default, up to 0.45 g per g sugar) also makes TAL, at the sugars' yield fraction and with a 1.5× higher theoretical yield per g (AcOH → 1/3 TAL, 0.700 g/g, vs glucose 0.4667 g/g), but `F_sugar_fed` counts the sugars only: F_ferm/(y·F_sugar) reaches 1.65, while F_ferm = y·(F_sugar + 1.5·F_acetate) within 0.5 % (median; development rows) | y is the module's (and the publication's) yield on all substrates, glucose-eq. by theoretical TAL yield, so it agrees with ADAPTERS.md; but the sugar demand per kg TAL is 1/y − 1.5·a/t (a = acetate per L broth, 1.8-10.4 g/L between points), so the feedstock channel carries a negative c′ (all 144 development TAL samples; median −2.7, −7.3 to −0.7) and a positive d′ (median 0.29), where the other products have c′ ≈ d′ ≈ 0 (medians 0.000 / 0.002); no sugar-only feedstock description explains that, and, through the feedstock-only sub-network shared by all products of a feedstock, plausibly biases the corn feedstock intensity of other products (REPORT.md section 8 (ii-b): corn feedstock sensitivities 19-24 % low) | analysed, y kept ("D8 analysis" below); mitigation left to the model study (mask the TAL feedstock-channel targets, or an acetate co-feed input) |
+| D8 | TAL, TAL_SA | the spiked acetate (10 g/L AcOH-eq. by default, up to 0.45 g per g sugar) also makes TAL, at the sugars' yield fraction and with a 1.5× higher theoretical yield per g (AcOH → 1/3 TAL, 0.700 g/g, vs glucose 0.4667 g/g), but `F_sugar_fed` counts the sugars only: F_ferm/(y·F_sugar) reaches 1.65, while F_ferm = y·(F_sugar + 1.5·F_acetate) within 0.5 % (median; development rows) | y is the module's (and the publication's) yield on all substrates, glucose-eq. by theoretical TAL yield, so it agrees with ADAPTERS.md; but the sugar demand per kg TAL is 1/y − 1.5·a/t (a = acetate per L broth, 1.8-10.4 g/L between points), so the feedstock channel carries a negative c′ (all 188 development TAL samples; median −3.0, −7.3 to −0.7 USD/kg·g/L; in the intensity, kg feedstock per kg TAL, −98 to −9) and a positive d′ (median 0.33), where the other products have c′ ≈ d′ ≈ 0 (medians 0.000 / 0.002); no sugar-only feedstock description explains that, and, through the feedstock-only sub-network shared by all products of a feedstock, plausibly biases the corn feedstock intensity of other products (REPORT.md section 8 (ii-b) of v2: corn feedstock sensitivities 19-24 % low). Round 5 (§6): those low corn sensitivities came mainly from the coefficient-space channel loss (every corn configuration, ethanol and isobutanol included, 19-27 % low in-sample, 18-34 % out of fold) and vanish with the surface-space channel loss; TAL's large OLS c′ is mostly an ill-conditioned split (a pure b′/y fit is within 3.6-4.6 % RMS of TAL's feedstock intensity, its b′ within ±2-4 % of the product-blind value of the feedstock; TAL_SA_sugarcane −10 %) | analysed, y kept ("D8 analysis" below); mitigated in the v3 models: the TAL / TAL_SA feedstock-channel targets are masked in the loss (`experiments.DEFECTIVE_TARGETS`, §6 round 5); a carbon-basis regeneration or an acetate co-feed input remain open |
 | D9 | lactic | `R403._setup` rebuilds the hydrolysis reaction at X = 0.8 on every simulation, so the sampled `bp_hydrolysis_reactor_r403_hydrolysis_conversion` (0.745-0.850) is never applied | that `bp_*` has no effect (it is not a model input); no bias | open (harmless) |
 | D10 | isobutanol | the starch-content setter rescales the current composition, so the result depends on history | sampled and actual dry starch differ (sampled 0.59-0.85, actual 0.67-0.76, corr. 0.87), moisture drifts 13.4-17.1 % (baseline 15 %); the model sees the actual `fs_w_*`, so the inputs are right, but the starch range covered is narrow | open |
 | D13 | oxalic | the module's unit groups put lime, H2SO4 and CSL/MgCl2/DAP storage in facilities (99.6 % of the non-feedstock material cost) | channel labels only (facilities instead of fermentation / separation materials); totals unaffected | open |
@@ -129,17 +131,22 @@ before that (v2) still carry them.
   acetate's sugar substitution: sugar demand per kg TAL is 1/y − 1.5·a/t, a
   negative titer term in the feedstock channel whose coefficient changes with
   a between points: the fitted feedstock-channel c′ is negative in every
-  development TAL sample (median −2.7, range −7.3 to −0.7 USD/kg·g/L) and
-  d′ is positive (median 0.29), against c′ ≈ d′ ≈ 0 for the other products
+  development TAL sample (188 samples after the regeneration; median −3.0,
+  range −7.3 to −0.7 USD/kg·g/L) and d′ is positive (median 0.33), against c′ ≈ d′ ≈ 0 for the other products
   (medians 0.000 / 0.002).
 * **Decision.** y semantics unchanged: the recorded y is the module's own and
   consistent with ADAPTERS.md, and neither the carbon basis nor a sugar-only
   basis is clearly more correct (both change the functional form or need
   module changes). The data carry what a mitigation needs
-  (`x_F_acetate_fed`, `F_sugar_fed`, `V_broth` at every point). Left to the
-  model study: mask the TAL / TAL_SA feedstock-channel targets
-  (`ch__feedstock__*`), or normalise that channel by the sugar-equivalent
-  feed F_sugar_fed + 1.5·x_F_acetate_fed, or add an acetate co-feed input.
+  (`x_F_acetate_fed`, `F_sugar_fed`, `V_broth` at every point). Options were
+  to mask the TAL / TAL_SA feedstock-channel targets (`ch__feedstock__*`,
+  `int__fs__*`), to normalise that channel by the sugar-equivalent feed
+  F_sugar_fed + 1.5·x_F_acetate_fed, or to add an acetate co-feed input.
+  Round 5 (§6) adopted the mask (`experiments.DEFECTIVE_TARGETS`): the
+  product-blind feedstock head cannot represent the substitution term
+  anyway, and keeping it out of the shared head is what the other products
+  of corn and corn stover need; the normalisation and the co-feed input
+  stay open.
 
 Minor items, also not corrected: oxalic recoveries slightly above the
 stoichiometric ratio in 26 of 211 samples (max 1.003; lime loading > 1 gives
@@ -356,6 +363,9 @@ unchanged; the applicability-domain report still flags such queries.
 Checkpoints saved before this option existed load with clipping off. In
 the development CV it helped leave-configurations-out (oxalic) but hurt
 leave-one-product-out for HP and ethanol (§6), so it is not the default.
+`ModelConfig.clip_exempt` (round 5) lists columns that are never clipped:
+the pipeline exempts the exact final-product stoichiometric ratio and its
+MW-ratio twin, whose clipping caused the HP failure (§6, round 5, 5d-5e).
 
 **Channel-wise input masking** (`ModelConfig.channel_inputs`; library default
 `None` = one shared encoder; `experiments.py` default `'physics'` since
@@ -607,6 +617,28 @@ and 5-fold LOCO):
   alcohol inherits TAL's or HP's neutralization cost (ethanol LOPO: +13–18 %
   of the true numerator).
 
+**Power gate** (`ModelConfig.power_gate`, round 5; library default off;
+needs `FeatureSpec(downstream=True, power_export=True)`, which
+`train.train_ensemble` requests itself when the gate is on): the structural
+input `struct_power_export` (`features.power_export_factor`) is 1 if
+'electricity' is among the coproducts (an on-site boiler-turbogenerator can
+export surplus power, so the net purchased electricity may be negative), 0 if
+the coproducts are known without it (no generation, nothing to export), and
+unknown → 1 (ungated). Where it is 0, every coefficient of the net
+electricity intensity is mapped to `s·softplus(q/s) ≥ 0` (`s` =
+`POWER_GATE_SCALE` = 0.1 × the coefficient's training sd), so the purchased
+electricity and ∂MPSP/∂p_el are ≥ 0 at every y, t > 0. The map acts after the
+productivity structure (a monotone increasing map of a function decreasing in
+r keeps ∂MPSP/∂r ≤ 0) and before the price (exact price linearity); the
+reported `r_theta0` / `r_theta1` are before the gate. Rows with
+`struct_power_export` = 1 are unchanged (identical outputs to an ungated
+twin, tested). Data check (`check_constraints` row `power_gate`; the gate is
+disabled when the data violate it): on the development set the net
+electricity intensity is ≥ 0 at all 3667 points of the 177 samples without an
+electricity coproduct (ethanol corn, three lactic configurations; minimum
+0.086 kWh/kg), and a per-coefficient non-negative fit (NNLS) of their
+per-point intensities costs at most 0.09 % of MPSP (OLS 0.03 %).
+
 ## 4. Loss
 
     L = w_mpsp · mean_i [(MPSP̂_i − MPSP_i)/MPSP_i]²       (equation layer; simulated points)
@@ -647,6 +679,23 @@ Options (`LossConfig`; defaults = the loss above):
   numerator `g·MPSP_fit`. This is well conditioned (the per-sample OLS
   estimates of a', b', c', d' are strongly correlated, §6), but in the
   development CV it made in-family configurations worse (§6), so it is off;
+* `ch_space='surface'` (round 5; default None = `coef_space`) moves only the
+  channel / intensity term to surface space and keeps the total in
+  `coef_space`: per sample Σ_c mean_i ((m̂_c − m_c)/N)² over its simulated
+  points, price channels as price × intensity. This is the squared
+  out-of-fold channel-fidelity metric itself (`evaluate.channel_fidelity`,
+  §6 round 5), so every channel weighs by its economic size at the sample's
+  own TY points, instead of by its cross-configuration coefficient spread
+  (in coefficient space an electricity error of 25 % of MPSP for corn
+  ethanol, carried by a′, is 1.6 training sd of one of the 56 standardized
+  entries: 2.6 / 56 × w_ch = 0.005 of loss at the v2 weight 0.1, while
+  other channels can absorb it without changing the total). Its `w_ch` is on
+  a different scale from the coefficient-space one;
+* `train.mask_channel_targets(samples, {channel: [biorefinery | config_id |
+  product, ...]})` sets the channel's targets (a price channel: its
+  intensity targets) of those rows to NaN, i.e. masks them in the loss and
+  the target scales; totals, g and the other channels keep theirs (for
+  known defective decompositions, §1);
 * `config_balance=α` weights every sample by `n_config^(−α)` (batch-normalized),
   α = 1 → every configuration counts once (off by default; not better in CV).
 
@@ -846,6 +895,14 @@ price, so prices outside the training range are reported separately.
   `mpsp_mape_cfg_gmean`). Reasons (development diagnostics below): the
   point-weighted fold MAPE is dominated by the fold's largest configuration,
   and single-member results differ between seeds by up to ~50 % (relative).
+  Round 5 added the option (1 − w)·(that LOCO fold mean) + w·(mean over the
+  seven leave-one-product-out folds of the same statistic)
+  (`--hpo-lopo-weight w`; the LOPO CV estimates of such a run are then
+  post-selection, like LOCO's), but the pipeline keeps w =
+  `HPO_LOPO_WEIGHT` = 0, the v2 criterion: the clip exemption removes the
+  failure that motivated it, after which w = 0.5 selects on seed noise
+  (5e-5f). Under the round-5 channel loss `w_ch` is fixed (`CHANNEL_LOSS`)
+  and no longer searched.
 * Baselines: nearest-configuration lookup, ridge, gradient boosting, plain MLP
   (coefficients only); ablations removing each physics component. Baselines
   are fit on exactly the samples the networks train on (same calibration and
@@ -1739,14 +1796,423 @@ fold, and 79-82 % for all three PI-NN ablations, so the cause is shared by
 every PI-NN variant of the v2 run, plausibly the re-selected hyperparameters
 (the ablations use them too, and 4e with the v1 hyperparameters gave
 12.7 %). Succinic got worse already in 4e (protocol, 4d) and again in the v2
-run. Not diagnosed further: the direct test is to retrain the HP LOPO fold
-(development data only) with the v1-selected hyperparameters and with the
-package defaults, and to compare with 77.8 %; if the HPO choice is the
-cause, the HPO criterion (LOCO-type folds only) does not protect
-extrapolation to new products, and LOPO should enter the selection (a model
-change, i.e. a new run). The "All changes together" statement of REPORT.md
+run. Diagnosed in round 5 (below, 5d-5e): the cause is the HPO's choice
+`clip_inputs = 0`, which clips the held-out HP's final-product
+stoichiometric ratio (0.80) to the training minimum 1.00 (v2-selected hyperparameters with only
+the clipping switched off: HP 12.9 %); the exact stoichiometric ratios are
+now never clipped (`experiments.CLIP_EXEMPT`). The "All changes together" statement of REPORT.md
 ("Changes since v1": LOPO 86.1 → 50.1, 6 of 7 better) refers to 4e, not to
 the released run.
+
+### Development-set diagnostics, round 5: channel / price-intensity fidelity and the v2 LOPO regression (2026-10-17; never on test data)
+
+Data: a frozen copy of the processed tables of the v2 run (data hash
+51d0efe2b4f517a4, 1550 samples / 41 configurations), restricted to the
+development set with `development_set` (1306 samples / 37 configurations);
+no diagnostic or decision used a test sample, `models/final_dev` or
+`models/release`. Settings: the v2 pipeline (`make_job` with the water gate,
+masking 'physics_v2', r-structure 'physics', EXTRAPOLATION_SAFEGUARDS,
+downstream FeatureSpec, PROTOCOL v2) and the v2-selected hyperparameters,
+unless stated otherwise. With every new option off, the round-5 code
+reproduces the v2 code's predictions exactly (max difference 0.0 on the HP
+LOPO fold).
+
+**5a. Fidelity metrics** (`evaluate.channel_fidelity`, out of fold,
+configuration-balanced = mean over held-out configurations of their sample
+means): `ch_<c>` = RMS over the sample's simulated points of the error of
+channel c's numerator, relative to the RMS target total numerator (price
+channels as price × intensity); `ch_rms` = root sum of squares over the 14
+channels; per price key the predicted sensitivity dMPSP/dp = (q_a + q_b/y +
+q_c/t + q_d/(yt))/ĝ against the simulated per-point intensity (points
+`q__fs`, `q__el`, `q__ng`, exact at fixed design): `sens` = relative RMS
+error, `bias` = median ratio − 1 (signed; absolute in averages), `resp` = RMS
+of (dMPSP/dp predicted − simulated)·p/MPSP (the price response in % of
+MPSP). Relative electricity / NG errors are reported only where the
+simulated price share is material (≥ 2 % of MPSP: the net electricity of
+exporters crosses zero); `*` = without the TAL and lactic configurations
+whose feedstock targets are masked in option (2).
+
+**5b. Data checks.**
+
+* *Electricity without an electricity coproduct* (ethanol corn, three lactic
+  configurations; 177 samples, 3667 points): the net electricity intensity
+  is never negative (minimum 0.086 kWh/kg); a per-coefficient non-negative
+  fit costs ≤ 0.09 % of MPSP (OLS 0.03 %). The power gate (§3) is therefore
+  a valid hard constraint. Isobutanol lists electricity as a coproduct but
+  its CHP only covers its own demand: q_el = 0 at every point (no gate
+  applies; only the loss can fix its channel).
+* *Feedstock intensity.* Within a sample F_feedstock/F_sugar_fed is constant
+  (CV 0), so g·q_fs·y = (g/rec_i)·F_fs/F_sugar/basis: the non-b′ structure
+  of the primed intensity comes from (i) the per-point recovery rec_i
+  varying around the sample's median g (CV HP 2.5–5 %, TAL 6 %, lactic
+  8–11 % with correlation 0.81–0.84 with y·t, succinic / ethanol / oxalic
+  ≤ 0.6 %) and (ii) TAL's basis (D8: F_ferm/(y·F_sugar) has CV 0.13, up to
+  1.64). A pure b′/y fit of g·q_fs is within ≤ 5 % RMS of every sample's
+  intensity (lactic 6–9 %), and the product-blind b′ of each feedstock
+  (median over the non-TAL, non-lactic samples: corn 1.486, corn stover
+  2.232, glucose 1.124, sugarcane 6.783) matches each configuration's own
+  pure-b′ fit within ±2–4 %, TAL included; only lactic (+5 … +20 %) and
+  TAL_SA_sugarcane (−10 %) deviate. TAL's c′ = −17 … −90 is mostly an
+  ill-conditioned OLS split (4-coefficient fit residual 0.6–2.3 %, pure
+  b′ 3.6–4.6 %). So lactic's feedstock targets are not defective data (D1 was fixed
+  by regeneration, D9 is harmless): its d′ of 44–56 is the recovery shape
+  plus the b′–d′ collinearity of its domain (y ≥ 0.3, t ≥ 40 g/L), which a
+  product-blind feedstock head cannot represent either way.
+* *In-sample infidelity of v2* (dev-trained, 2 members, 3 seeds, evaluated
+  on its own training rows): every corn configuration's feedstock
+  sensitivity is 19–27 % low (also ethanol and isobutanol, whose own
+  targets are pure b′), isobutanol's electricity response is off by 94 % of
+  MPSP and its feedstock channel by 72 % of the numerator, corn ethanol's
+  electricity by 32 %, while MPSP fits at 2–8 %: with the coefficient-space
+  channel term at w_ch = 0.1 the MPSP fit leaves the decomposition free
+  (§4: a 25 %-of-MPSP electricity error costs 0.005 of loss).
+
+**5c. Options** (paired over seeds 0–2 on the same folds, one member per
+fit; LOCO = the 12 stratified LOCO folds of the pipeline ablations
+(`stratified_subset`) for the screen, all 37 for the finalists below; LOPO
+= 7 folds; LOFO = 4 folds; value (difference to v2, t over seeds); %):
+
+* (1) channel / intensity term in surface space (`LossConfig.ch_space =
+  'surface'`) with w_ch ∈ {1, 3, 10}; the total keeps coefficient space;
+* (2) masking the feedstock-channel targets of TAL and lactic in the loss
+  (`train.mask_channel_targets`);
+* (3) the power gate (§3);
+* (4) a pure-b′ feedstock intensity (`ModelConfig.fs_b_only`, motivated by
+  5b), and combinations.
+
+LOPO:
+
+| variant | MPSP fold | MPSP cfg | ch_rms | ch_feedstock | ch_electricity | sens_fs* | resp_fs | resp_el | resp_ng |
+|---|---|---|---|---|---|---|---|---|---|
+| v2 | 59.1 | 66.5 | 41.0 | 10.4 | 13.1 | 22.9 | 12.3 | 16.7 | 12.7 |
+| (1) w_ch 1 | 60.6 (+1.5, +0.9) | 66.8 (+0.3, +0.5) | 34.2 (−6.8, −23.6) | 2.9 (−7.5) | 10.3 (−2.8) | 19.5 (−3.4) | 9.3 (−3.1) | 14.2 (−2.5) | 13.5 (+0.8) |
+| (1) w_ch 3 | 59.5 (+0.4, +0.3) | 62.4 (−4.1, −2.8) | 33.2 (−7.9, −12.7) | 2.4 (−8.0) | 10.5 (−2.6) | 17.6 (−5.3) | 8.5 (−3.8) | 13.3 (−3.4) | 12.2 (−0.6) |
+| (1) w_ch 10 | 61.2 (+2.1, +4.6) | 65.4 (−1.0, −0.6) | 34.4 (−6.6, −6.1) | 2.3 (−8.1) | 10.3 (−2.8) | 20.5 (−2.4) | 9.2 (−3.1) | 13.1 (−3.5) | 14.1 (+1.4) |
+| (2) mask | 60.9 (+1.8, +2.9) | 66.7 (+0.2, +0.2) | 40.7 (−0.3, −0.3) | 7.3 (−3.1) | 13.9 (+0.8) | 20.2 (−2.7) | 10.8 (−1.5) | 16.9 (+0.2) | 13.0 (+0.3) |
+| (3) gate | 54.9 (−4.3, −5.5) | 62.5 (−3.9, −2.3) | 39.5 (−1.6, −2.5) | 10.5 (+0.2) | 12.9 (−0.2) | 21.1 (−1.8) | 11.8 (−0.5) | 16.9 (+0.2) | 12.3 (−0.4) |
+| (4) b′ only | 62.3 (+3.2, +1.6) | 68.0 (+1.5, +1.0) | 42.9 (+1.9, +2.2) | 9.9 (−0.5) | 13.5 (+0.4) | 19.2 (−3.7) | 11.7 (−0.6) | 16.0 (−0.7) | 14.8 (+2.1) |
+| (1, w 3) + (3) | 54.8 (−4.3, −3.5) | 62.6 (−3.8, −7.9) | 33.3 (−7.7, −10.7) | 2.6 (−7.8) | 11.2 (−1.9) | 18.7 (−4.2) | 8.8 (−3.5) | 15.4 (−1.3) | 12.8 (+0.0) |
+| (1, w 3) + (4) | 59.2 (+0.1, +0.3) | 64.2 (−2.3, −3.6) | 37.5 (−3.6, −17.3) | 2.0 (−8.4) | 10.9 (−2.2) | 17.6 (−5.3) | 8.3 (−4.0) | 13.7 (−3.0) | 13.9 (+1.1) |
+| (1, w 3) + (3) + (4) | 56.7 (−2.4, −2.4) | 65.0 (−1.5, −1.4) | 36.9 (−4.1, −2.9) | 2.0 (−8.4) | 11.8 (−1.3) | 18.2 (−4.7) | 8.7 (−3.7) | 15.8 (−0.8) | 13.8 (+1.1) |
+| (1, w 3) + (3) + (2) | 54.9 (−4.2, −4.1) | 64.3 (−2.2, −2.1) | 35.6 (−5.4, −4.2) | 2.3 (−8.1) | 11.8 (−1.3) | 19.4 (−3.5) | 8.9 (−3.4) | 15.9 (−0.8) | 13.5 (+0.8) |
+
+LOFO:
+
+| variant | MPSP fold | MPSP cfg | ch_rms | ch_feedstock | ch_electricity | sens_fs* | resp_fs | resp_el | resp_ng |
+|---|---|---|---|---|---|---|---|---|---|
+| v2 | 26.9 | 22.0 | 39.0 | 11.8 | 18.2 | 17.5 | 9.2 | 16.5 | 7.0 |
+| (1) w_ch 1 | 27.5 (+0.6, +0.2) | 22.7 (+0.7, +0.4) | 37.9 (−1.1, −1.1) | 9.1 (−2.8) | 17.6 (−0.5) | 13.2 (−4.3) | 7.5 (−1.6) | 15.7 (−0.8) | 6.1 (−0.9) |
+| (1) w_ch 3 | 26.4 (−0.5, −0.2) | 22.5 (+0.5, +0.3) | 36.6 (−2.4, −2.7) | 9.9 (−2.0) | 17.7 (−0.4) | 14.0 (−3.5) | 7.6 (−1.5) | 15.9 (−0.6) | 5.7 (−1.3) |
+| (1) w_ch 10 | 28.5 (+1.5, +0.8) | 23.6 (+1.6, +1.0) | 36.3 (−2.7, −8.7) | 9.2 (−2.6) | 17.9 (−0.2) | 13.8 (−3.7) | 7.7 (−1.5) | 16.1 (−0.3) | 5.3 (−1.7) |
+| (2) mask | 27.9 (+1.0, +0.6) | 22.3 (+0.3, +0.3) | 37.0 (−2.1, −2.8) | 6.2 (−5.6) | 18.2 (+0.0) | 10.9 (−6.6) | 6.5 (−2.7) | 16.6 (+0.2) | 6.6 (−0.4) |
+| (3) gate | 33.3 (+6.4, +7.1) | 24.1 (+2.1, +7.6) | 37.2 (−1.9, −1.8) | 9.3 (−2.5) | 14.8 (−3.3) | 14.3 (−3.2) | 8.0 (−1.2) | 14.9 (−1.6) | 6.4 (−0.5) |
+| (4) b′ only | 25.7 (−1.2, −0.6) | 21.5 (−0.5, −0.4) | 37.3 (−1.7, −2.9) | 6.6 (−5.2) | 18.2 (+0.1) | 12.4 (−5.1) | 6.3 (−2.9) | 16.3 (−0.1) | 7.2 (+0.2) |
+| (1, w 3) + (3) | 35.0 (+8.1, +9.7) | 25.3 (+3.3, +6.4) | 35.8 (−3.2, −7.6) | 10.2 (−1.6) | 14.9 (−3.3) | 14.9 (−2.6) | 8.4 (−0.8) | 14.7 (−1.8) | 5.5 (−1.5) |
+| (1, w 3) + (4) | 25.7 (−1.2, −0.5) | 22.0 (−0.0, −0.0) | 34.8 (−4.3, −4.1) | 2.7 (−9.2) | 17.4 (−0.8) | 5.3 (−12.2) | 4.0 (−5.2) | 15.6 (−0.8) | 5.8 (−1.1) |
+| (1, w 3) + (3) + (4) | 33.0 (+6.0, +1.9) | 24.6 (+2.6, +1.4) | 33.9 (−5.2, −4.0) | 3.2 (−8.6) | 14.8 (−3.4) | 6.2 (−11.3) | 4.5 (−4.6) | 14.8 (−1.7) | 5.8 (−1.2) |
+| (1, w 3) + (3) + (2) | 32.9 (+6.0, +2.1) | 24.4 (+2.4, +1.4) | 33.8 (−5.2, −6.9) | 4.2 (−7.6) | 14.9 (−3.2) | 7.1 (−10.4) | 4.9 (−4.3) | 15.0 (−1.5) | 5.6 (−1.4) |
+
+LOCO, all 37 folds (finalists):
+
+| variant | MPSP fold = cfg | MPSP geo-mean | ch_rms | ch_feedstock | ch_electricity | sens_fs* | bias_fs* | resp_fs | resp_el | resp_ng |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v2 | 9.0 | 5.2 | 25.7 | 9.9 | 10.8 | 15.2 | 9.1 | 7.8 | 10.4 | 4.6 |
+| (1, w 3) + (3) | 8.5 (−0.5, −0.8) | 5.4 (ratio 1.04: 1.06 / 1.00 / 1.06) | 16.2 (−9.5, −12.3) | 2.3 (−7.6) | 6.9 (−3.9) | 3.9 (−11.3) | 1.5 (−7.6) | 2.0 (−5.7) | 7.8 (−2.6) | 3.3 (−1.2) |
+| (1, w 3) + (3) + (2) **adopted** | 8.6 (−0.4, −0.6) | 5.6 (ratio 1.08: 1.13 / 1.01 / 1.09) | 16.5 (−9.2, −9.7) | 2.2 (−7.7) | 7.1 (−3.7) | 3.8 (−11.4) | 1.5 (−7.7) | 2.1 (−5.6) | 8.0 (−2.4) | 3.4 (−1.2) |
+| (1, w 3) + (3) + (4) | 9.1 (+0.1, +0.2) | – | 17.4 (−8.3, −9.9) | 2.1 (−7.7) | 7.2 (−3.6) | 3.4 (−11.8) | 1.5 (−7.6) | 2.4 (−5.4) | 8.1 (−2.3) | 3.5 (−1.1) |
+
+In-sample (all development rows, 2 members, 3 seeds): v2 → adopted MPSP
+3.4 → 3.3 %, ch_rms 21.2 → 5.7 %, feedstock channel 8.9 → 1.6 %,
+electricity 9.5 → 2.2 %, sens_fs* 13.4 → 2.5 %, resp_el 9.6 → 2.9 %, resp_ng
+4.1 → 1.8 %.
+
+Findings:
+
+* *(1) is the fix.* Comparing channels where their economic size is
+  measured, at the sample's own points, removes the coefficient-space
+  failure modes: the corn feedstock sensitivity bias of every corn
+  configuration (LOCO, per configuration median: v2 −34 … −18 %; adopted
+  −1.2 … +4.4 %), isobutanol's feedstock response (LOCO 95 → 7 % of MPSP)
+  and most of the electricity error. w_ch = 3 is chosen on fidelity:
+  w_ch 1 → 3 improves every scheme; w_ch 10 improves LOCO slightly more but
+  worsens the LOPO feedstock sensitivity (20.5 vs 17.6 %) and NG response,
+  i.e. fidelity saturates at 3 where it matters for extrapolation. MPSP:
+  fold and configuration-balanced means are unchanged or better in every
+  scheme; the typical in-family configuration is slightly worse on LOCO
+  (geometric mean 5.2 → 5.4–5.6 %, median +0.25 points; TAL / succinic /
+  ethanol +0.5–2 points, HP ±0.5), but this statistic moved
+  non-monotonically with w_ch on the 12-fold screen (ratios 1.04 / 1.06 /
+  0.95 for w_ch 1 / 3 / 10) and between seeds (0.90–1.13), i.e. it is at the
+  noise level of single-member fits. To check in the next pipeline run (5
+  members).
+* *(3) is valid physics and fixes a qualitative failure, at one
+  configuration's cost.* Without the gate 41–100 % of the held-out samples
+  of the non-exporting configurations get a negative (export) electricity
+  sensitivity (v2: 98–100 % in every scheme; predicted p_el·dMPSP/dp_el /
+  MPSP −0.7 … −42 % against +2 … +10 % simulated); with it 0 % by
+  construction and lactic's response error falls from 8–14 to 1–5 % of
+  MPSP. But in the corn LOFO fold ethanol corn's MPSP rises (v2 33 %, gated
+  92–106 %; LOCO 14 → 21 %): the ungated model predicted power export
+  (electricity −44 % of the numerator) against a missed DDGS / corn-oil
+  credit (coproducts +61 %) and capex_utilities +30 %; the gate removes the
+  compensating wrong-sign term and exposes the coproduct error. Without
+  ethanol corn the adopted variant's LOFO configuration-balanced MPSP
+  change is +0.6 points (with it +2.4; fold mean +6.0, carried by the corn
+  fold). Isobutanol (electricity listed as coproduct, net electricity 0,
+  ungated, the only configuration of its product) trades electricity
+  against other channels between variants (LOCO MPSP 59 → 37 %, electricity
+  response 78 → 109 % of MPSP), which dominates the averaged electricity
+  metrics in LOCO and LOPO.
+* *(2) helps new feedstocks.* With (1) + (3), masking TAL's and lactic's
+  feedstock targets reduces the LOFO feedstock-channel error 10.2 → 4.2 %
+  and the feedstock sensitivity error 14.9 → 7.1 % (MPSP −2.1); it is
+  neutral on LOCO and costs LOPO a little (configuration-balanced +1.7, t
+  2.1; ch_rms +2.3). Alone, in coefficient space, it is weaker than (1)
+  (LOCO feedstock channel 12.8 → 8.7 % vs 2.2 %). The masked
+  configurations' own feedstock sensitivity becomes product-blind (LOCO
+  bias lactic −6 … +29 %, TAL +0.2 … +16 %), the price of keeping their
+  unrepresentable shapes out of the shared feedstock heads.
+* *(4) is not adopted.* With (1) it gives the best new-feedstock
+  sensitivities (LOFO sens_fs* 5.3 %) but the recovery-shaped feedstock
+  terms the data do have (5b) move into other channels: LOPO ch_rms +4.3
+  (t 10.3) vs (1) alone, full LOCO MPSP +0.6 and ch_rms +1.2 vs (1) + (3).
+  It stays a library option (`ModelConfig.fs_b_only`, CLI `--fs-b-only`).
+* The channel-supervision ablation of the v2 run (`pinn-no_channels`, LOCO
+  −0.2 pp: "the intermediate data add little") measured the
+  coefficient-space term at w_ch = 0.1; in surface space the decomposition is
+  actually learned: in-sample channel errors of 1–2 % of the numerator
+  (feedstock 1.6, electricity 2.2, NG 1.4, coproducts 1.1 %) instead of
+  4–10 %, at unchanged MPSP. The MPSP gain from the intermediate data
+  remains small; their value is the faithful breakdown and price response.
+
+**Proposals of the study (pipeline, `experiments.py`; library defaults
+unchanged; each with a CLI flag restoring v2, all at once `--v2-model`;
+decided in 5f after a re-check on the corrected data):** (1) with w_ch = 3
+as `CHANNEL_LOSS`, a fixed setting chosen on fidelity, not an HPO dimension
+(`hpo_candidates(fixed=...)` keeps the other candidate dimensions;
+`--v2-channel-loss`); (3) `POWER_GATE` (`--no-power-gate`); (2)
+`DEFECTIVE_TARGETS = {'feedstock': ('TAL', 'lactic')}` (`--no-target-mask`);
+(4) opt-in only. The CV stage now stores the PI-NN's out-of-fold channels
+and intensities and reports the 5a metrics per scheme and per held-out
+configuration (`tables/cv_fidelity_summary.csv`,
+`cv_fidelity_per_config.csv`, `cv_channel_fidelity.csv.gz`, REPORT section
+5). Open: the coproduct credit of an unseen starch feedstock (ethanol corn
+LOFO), isobutanol's electricity (net zero in the data, no structural
+anchor), and the recovery-shaped part of the feedstock intensity (a
+product-specific recovery surface, not a constant g, would be needed).
+
+**5d. The v2 leave-one-product-out regression** (all seven LOPO folds,
+2 members, seeds 0–2, v2 settings; point MAPE of the held-out product, mean
+over seeds ± seed sd):
+
+| hyperparameters | ethanol | HP | IBO | lactic | oxalic | succinic | TAL | fold mean | median |
+|---|---|---|---|---|---|---|---|---|---|
+| v2-selected (candidate 7) | 61.6 ± 5.4 | **82.0 ± 3.8** | 65.6 ± 10.3 | 53.5 ± 1.6 | 50.9 ± 4.4 | 57.5 ± 2.4 | 42.6 ± 0.9 | 59.1 ± 1.1 | 57.5 |
+| v2-selected, `clip_inputs` 0 → −1 | 61.6 ± 5.6 | **12.9 ± 0.9** | 75.2 ± 11.6 | 48.4 ± 0.5 | 85.9 ± 7.6 | 58.3 ± 2.7 | 38.9 ± 1.1 | 54.5 ± 1.4 | 58.3 |
+| v1-selected (candidate 3) | 45.8 ± 5.1 | 12.8 ± 0.6 | 89.6 ± 10.5 | 51.7 ± 3.0 | 94.4 ± 55.3 | 41.9 ± 5.7 | 45.3 ± 1.0 | 54.5 ± 8.0 | 45.8 |
+| package defaults (candidate 0) | 55.0 ± 4.6 | 16.5 ± 2.9 | 83.7 ± 21.2 | 49.7 ± 1.1 | 61.3 ± 15.8 | 54.3 ± 2.8 | 41.4 ± 0.9 | 51.7 ± 5.2 | 54.3 |
+
+The v2 run's HP fold (77.8 %) is reproduced (82.0 %), and changing only
+`clip_inputs` from 0 to −1 in the v2-selected hyperparameters removes it
+(12.9 %; seed sd 0.9): the HP regression is the input clipping chosen by
+the v2 HPO, not the protocol or the other dimensions. Mechanism: with HP
+held out, only three continuous encoder inputs of HP lie outside the
+training range, the final-product stoichiometric mass ratio and its MW-ratio
+twin (HP → acrylic acid 0.80; in training 1.00 for every product sold
+without a mass-changing conversion and 1.19 for TAL_SA → sorbic acid, so
+HP lies 4.1 training sd below the minimum) and the final product's
+mass-specific heat of vaporization (1.3 sd). Clipping sets HP's ratio to
+1.00 while its upgrading and final-product descriptors say dehydration to
+acrylic acid: in training an upgrading conversion only occurs with the
+ratio 1.19, so the combination is new, and the sub-networks fed by the
+'final_product' group (materials_other, capex_downstream, the natural-gas
+intensity, g) extrapolate badly: signed contributions to HP's relative
+numerator error materials_other +22.0, capex_downstream +15.3, natural gas
++11.0 points (unclipped: +5.0, −4.5, +4.3), and ĝ 0.56 vs 0.66 (unclipped
+0.69); MPSP bias +82 % (unclipped +5 %). The same clipping helps oxalic,
+whose product and final-product descriptors lie 2–9 sd outside the range
+(pKa 7.0 sd, electron-based maximum yield 8–9 sd, final-product mass
+fraction 7.5 sd): 85.9 → 50.9 % with clipping, mostly through g (ĝ 0.80 →
+0.95, truth 1.00). Succinic is not affected by the hyperparameters' clipping
+(ĝ 0.70–0.71 vs 0.98 under all four rows; its separation train resembles
+TAL's and lactic's, whose recoveries are 0.64–0.73, open issue 8 of 4f).
+
+**5e. HPO criterion and search space.** The 16 HPO candidates of the v2
+run (same seeded sequence) on the seven LOPO folds (2 members, seed 0, as
+the HPO), against their LOCO criterion of the v2 run (same data hash, same
+5 stratified LOCO folds; `hpo_candidates.csv`):
+
+* the two criteria are unrelated across candidates (Spearman 0.05); the
+  LOCO top three (candidates 7, 15, 1) all clip the inputs, and every one of
+  the six candidates with `clip_inputs = 0` has a broken HP fold (24–113 %),
+  every one of the ten without clipping a sound one (10–20 %);
+* a criterion (1 − w)·LOCO + w·LOPO selects candidate 3 (the v1 choice) for
+  every w ≥ 0.25: LOCO criterion 10.1 vs 8.8 % for candidate 7 (+1.3
+  points, about one standard error of 1.2–1.4), LOPO criterion 46.1 vs
+  59.4 % (−13.3; HP 13 vs 86 %);
+* post-selection optimism: candidate 3's selection-seed LOPO fold mean is
+  45.8 %, its mean over seeds 0–2 54.5 ± 8.0 % (oxalic 43 % on seed 0, 94 ±
+  55 % over seeds): a LOPO-weighted selection inherits the seed noise of
+  single-seed LOPO folds, so its LOPO CV estimate is optimistic by several
+  points (here ~9) unless re-estimated on fresh seeds;
+* clipping margin: `clip_inputs` = 2 or 5 sd does not resolve the
+  HP / oxalic trade-off (HP 35.8 / 12.9 %, oxalic 79.1 / 87.0 %; edge
+  clipping gives 82.0 / 50.9 %, none 12.9 / 85.9 %): oxalic's benefit needs
+  clipping at the range edge;
+* exempting the exact stoichiometric ratio (and its MW-ratio twin) from
+  clipping (`ModelConfig.clip_exempt`) with the v2-selected
+  hyperparameters otherwise unchanged: HP 82.0 → 14.8 % (seed sd 2.6), and
+  every other LOPO fold is bit-identical to v2 (oxalic keeps 50.9 %: the
+  ratio lies inside the training range for every other held-out group, so
+  the clip bounds of the training rows do not change); LOPO fold mean
+  59.1 → 49.5 %, median 57.5 → 53.5 %. LOCO is unaffected for the same
+  reason.
+
+Cost of the LOPO term: the HPO trains 7 more folds per candidate (training
+rows 7836 vs 5224 for the 5 LOCO folds), i.e. 2.5× the HPO time; at the v2
+run's size 0.27 → 0.66 h on 4 workers, the whole run 1.89 → 2.29 h (+21 %,
+inside the 3 h budget of v2).
+
+**Proposals of the study** (decided in 5f): (i) search space / feature handling: the exact
+stoichiometric ratios are never clipped (`experiments.CLIP_EXEMPT`, every
+network of the pipeline; `--no-clip-exempt`): it removes the mechanism of
+the v2 regression at no cost elsewhere, whatever the HPO selects (adopted);
+(ii) criterion: LOPO enters with weight 0.5 (`--hpo-lopo-weight 0.5`; not
+adopted, 5f), chosen a priori from the tool's documented uses
+(new configurations and new products, README 4.3), not tuned on these
+numbers: the LOCO criterion alone is blind to product-extrapolation failures
+(its ranking is unrelated to LOPO's), at +21 % run time and, on this search,
+about one standard error of the LOCO criterion. Caveats: the 16-candidate
+LOPO values are single-seed (seed sd of a LOPO fold mean 1–8 points, of one
+product up to 55), so the selection is noisy and the selected candidate's
+LOPO CV estimate is post-selection (here ~9 points optimistic on the
+selection seed); the next run's REPORT must label its LOPO numbers as such
+(like LOCO's, §6 intro), ideally re-estimated on fresh seeds. LOFO is not
+added (4 folds, dominated by corn and by the feedstock structures of 4d;
+its failure modes are handled by those hard structures).
+
+**5f. Integration on the corrected data, and decisions** (2026-10-18;
+development rows of the regenerated tables only: data hash
+c345efda41c4fdca, `development_set` = 1353 samples / 37 configurations; no
+test sample, `models/final_dev` or `models/release` used). The patch of the
+study was applied to the code that already held the data corrections (D15,
+H1), and the proposals were re-checked through the pipeline's own job path
+(`experiments.make_job` with the `mk_extra` / `lk_extra` / `target_mask`
+context that `experiments.main` builds): v2 model settings against the
+proposals, v2-selected hyperparameters (w_ch = 3 under the surface loss),
+one member per fit, seeds 0–2 paired on the same folds, all 37 LOCO, 7 LOPO
+and 4 LOFO folds; metrics as in 5a (`*` = without TAL and lactic; value
+(difference, seed t); %). "final" = (1) + (3) + clip exemption + the TAL
+mask only (the decision below); "+ lactic mask" = the study's proposal.
+
+| scheme | variant | MPSP fold mean | MPSP cfg | MPSP geo-mean | ch_rms | ch_feedstock | sens_fs* | bias_fs* | resp_fs | resp_el | wrong-sign el. |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| LOCO | v2 | 9.7 | 9.7 | 5.6 | 25.2 | 9.9 | 15.1 | 9.7 | 7.8 | 9.8 | 84.9 |
+| LOCO | final | 9.3 (−0.4, −0.9) | 9.3 | 5.7 (+0.1, +1.9) | 15.7 (−9.5, −92) | 2.3 | 4.2 (−10.9) | 1.7 | 2.3 | 7.7 (−2.2) | 0 |
+| LOCO | + lactic mask | 9.1 (−0.6, −1.3) | 9.1 | 5.7 (+0.1, +0.4) | 15.8 | 2.1 | 3.7 | 1.5 | 2.2 | 8.0 | 0 |
+| LOCO | no mask | 9.4 (−0.3) | 9.4 | 5.8 | 15.8 | 2.3 | 4.5 | 1.9 | 2.4 | 7.8 | 0 |
+| LOCO | final without the gate | 10.2 (+0.4, +0.8) | 10.2 | 5.6 (+0.0) | 15.2 | 2.1 | 4.0 | 1.6 | 2.2 | 5.1 | 38.4 |
+| LOPO | v2 | 57.2 | 55.0 | 52.0 | 38.6 | 10.7 | 19.4 | 13.0 | 11.0 | 14.8 | 100 |
+| LOPO | final | 46.5 (−10.7, −4.4) | 36.6 (−18.5, −7.5) | 28.1 | 31.5 (−7.1, −11.7) | 2.4 | 18.1 | 16.5 (+3.4) | 8.0 | 14.0 | 0 |
+| LOPO | + lactic mask | 47.1 (−10.1, −3.0) | 38.7 (−16.4, −5.8) | 29.6 | 33.6 | 2.1 | 18.5 | 17.0 | 8.1 | 15.3 | 0 |
+| LOPO | no mask | 44.5 (−12.7) | 35.8 | 27.4 | 31.8 | 2.3 | 18.4 | 17.1 | 8.3 | 14.1 | 0 |
+| LOPO | final without the gate | 52.0 (−5.2) | 38.9 | 29.5 | 32.3 | 2.4 | 17.3 | 15.5 | 7.8 | 11.0 | 42.0 |
+| LOFO | v2 | 30.3 | 23.5 | 17.6 | 38.9 | 11.0 | 16.6 | 8.2 | 8.9 | 16.1 | 100 |
+| LOFO | final | 34.1 (+3.8, +2.0) | 24.7 (+1.1, +1.2) | 16.6 (−1.0) | 35.0 (−3.9, −12.6) | 8.5 | 12.7 (−3.9, −5.1) | 6.0 | 7.5 | 14.4 | 0 |
+| LOFO | + lactic mask | 35.1 (+4.8, +1.0) | 25.2 | 17.3 | 33.6 | 4.1 | 6.9 (−9.7, −1.8) | 5.2 | 4.8 | 14.5 | 0 |
+| LOFO | no mask | 33.6 (+3.3) | 24.6 | 16.9 | 34.6 | 7.9 | 11.9 | 5.8 | 7.2 | 14.4 | 0 |
+| LOFO | final without the gate | 29.6 (−0.7) | 23.4 | 16.5 | 36.1 | 9.0 | 13.3 | 6.6 | 7.6 | 15.8 | 98.3 |
+
+Folds (seeds averaged per fold, final vs v2): LOCO 14 better / 23 worse,
+median +0.12 points, t over folds −0.40; LOPO 6 / 1 (median −5.2, t −1.45;
+HP 54.9 → 13.2, isobutanol 70.5 → 39.7, lactic 55.7 → 49.3, oxalic 52.1 →
+47.3, succinic 61.1 → 55.9, TAL 46.4 → 43.3, ethanol 59.7 → 76.7); LOFO 2 /
+2 (corn 47.3 → 63.3, corn stover 31.7 → 35.8, glucose 9.5 → 7.2, sugarcane
+32.7 → 30.1). Per configuration (LOCO): the corn feedstock bias is −32 …
+−16 % under v2 (every corn configuration: HP 3, TAL 2, succinic 2,
+ethanol, isobutanol) and −0.6 … +1.0 % with the final settings (isobutanol
++8.7 %); isobutanol 70.5 → 39.7 %, oxalic 52.1 → 47.3 %; the losers are the
+three ethanol configurations (corn 18.0 → 27.9, corn stover 27.4 → 38.0,
+sugarcane 17.8 → 20.2 %), consistent over seeds (corn stover, seeds 0 / 1
+/ 2: 25.8 / 28.0 / 28.2 → 39.2 / 28.9 / 45.7 %), and the same holds out
+of family (LOFO: ethanol corn 48 → 111 %, ethanol corn stover 22 → 35 %;
+LOPO ethanol 60 → 77 %). Attribution, with the final settings minus the
+power gate (same seeds and folds): the ethanol corn stover loss comes from
+the surface channel loss (LOCO 27.4 → 51.9 % without the gate; the gate
+brings it back to 38.0 %), the ethanol corn loss from the gate (LOCO 19.3
+→ 27.9 %, LOFO corn fold 48.8 → 63.3 %, all of the LOFO deterioration:
+without the gate LOFO is 29.6 % vs v2 30.3 %), and LOPO ethanol mostly from
+the surface loss (59.7 → 73.5 %, gate +3). The gate improves the LOCO
+fold mean (10.2 → 9.3 %) and LOPO (52.0 → 46.5 %, seed t −2.7; isobutanol
+72.1 → 39.7 %, lactic 55.6 → 49.3 %), and without it 38 % (LOCO), 42 %
+(LOPO) and 98 % (LOFO) of the non-exporting held-out samples are again
+predicted to export power.
+
+The study's findings replicate on the corrected rows: the surface channel
+loss removes most of the decomposition error in every scheme (ch_rms −9.5
+LOCO, −7.1 LOPO, −3.9 LOFO points; seed t −12 to −92), the corn
+feedstock-sensitivity bias disappears, the power gate removes every
+wrong-sign electricity prediction (85–100 % of the held-out samples of the
+non-exporting configurations under v2), and the clip exemption fixes HP's
+LOPO fold (54.9 → 13.2 % here). MPSP: LOCO and LOPO means better (LOPO −10.7
+points, seed t −4.4; 6 of 7 products), the typical in-family configuration
+unchanged (geometric mean +0.1, median fold +0.12), LOFO worse (+3.8, seed t
++2.0), carried by ethanol corn and ethanol corn stover. The lactic mask's
+new-feedstock gain (sens_fs* 12.7 → 6.9 % in LOFO) comes from the corn fold
+alone and is seed-dependent (corn fold, seeds 0 / 1 / 2: 27.8 / 64.8 / 6.8 %
+without, 13.3 / 6.1 / 16.1 % with it; the other three folds unchanged or
+slightly worse), while it costs LOPO 2.1 points configuration-balanced
+(seed t 2.6) and makes lactic's own feedstock sensitivity product-blind.
+The TAL mask alone is neutral on every metric (vs. no mask: LOCO +0.0,
+LOPO +2.0 / LOFO +0.5 points of MPSP, within seed noise).
+
+HPO criterion with the clip exemption (study data, 16 candidates, seed 0, 2
+members; the HP and TAL LOPO folds of the six `clip_inputs = 0` candidates
+re-fit with `clip_exempt`, the other folds and candidates unchanged because
+the exemption only acts where the ratio lies outside the training range):
+every candidate's HP fold becomes sound (10–24 %), the Spearman correlation
+of the LOCO and LOPO criteria rises from 0.05 to 0.31, and w = 0.5 still
+selects candidate 3 (the v1 choice; LOCO 10.1, LOPO 46.1 %) over the
+LOCO-only choice, candidate 7 (LOCO 8.8, LOPO 49.7 % with the exemption; w
+≤ 0.25 keeps candidate 7). Over seeds 0–2 that ranking reverses (5d / 5e:
+candidate 3 LOPO 54.5 ± 8.0 %, candidate 7 with the exemption 49.5 %), so
+after the exemption the LOPO term selects on single-seed noise, at +1.3
+points of the LOCO criterion and +21 % run time.
+
+**Decisions (v3 pipeline; library defaults unchanged; each with its CLI
+flag, `--v2-model` for (1)–(4)):**
+
+1. *Adopt* the surface channel loss with w_ch = 3 (`CHANNEL_LOSS`,
+   `--v2-channel-loss`): the decomposition and price-sensitivity gains are
+   large and replicated on both data versions; MPSP is better on average and
+   unchanged for the typical in-family configuration; the ethanol losses are
+   reported (REPORT "Changes v1 -> v2 -> v3", and the per-configuration
+   fidelity table) and stay open.
+2. *Adopt* the power gate (`POWER_GATE`, `--no-power-gate`): a hard physical
+   constraint verified on the data, which removes a qualitative failure; its
+   ethanol-corn cost is the exposure of a compensating error (missed DDGS /
+   corn-oil credit), not a new one.
+3. *Adopt* the clip exemption (`CLIP_EXEMPT`, `--no-clip-exempt`): removes
+   the mechanism of the v2 HP regression, bit-identical elsewhere.
+4. *Adopt* the mask of the TAL feedstock-channel targets only
+   (`DEFECTIVE_TARGETS = {'feedstock': ('TAL',)}`, `--no-target-mask`): a
+   correction of defective targets (D8), neutral within noise. *Do not
+   adopt* the lactic mask: lactic's targets are not defective, and its gain
+   is one fold and seed-dependent at a LOPO cost.
+5. *Do not adopt* the LOPO term of the HPO criterion (`HPO_LOPO_WEIGHT = 0`;
+   opt-in `--hpo-lopo-weight`): the exemption removes its motivation, and
+   the remaining selection effect is seed noise at +21 % run time and a
+   post-selection LOPO estimate.
+6. *Do not adopt* the pure-b′ feedstock intensity (opt-in `--fs-b-only`),
+   w_ch 1 or 10, or wider clip margins (5c–5e).
+
+`experiments.CODE_VERSION` 4 → 5 (new fit-job semantics: loss space, gate,
+clip exemption, target masks, the channel outputs stored for the fidelity
+tables). Open: ethanol (its coproduct credits and its turbogenerator /
+boiler structure have no product neighbour), isobutanol's electricity (net
+zero in the data), the recovery-shaped part of the feedstock intensity
+(lactic, a product-specific recovery surface would be needed), succinic's g
+under LOPO, and the D8 normalisation / acetate co-feed input.
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 

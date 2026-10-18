@@ -12,6 +12,12 @@ process- and system-level data, and the model is built around that
 structure. The design is documented in [DESIGN.md](DESIGN.md); § below
 refers to its sections.
 
+> **Status of the numbers.** Accuracy, coverage and sensitivity figures quoted
+> in this README are those of the **v2 run** (the shipped checkpoint;
+> `results/v2/`). The v3 pipeline (corrected training data D15 / H1 and the
+> round-5 model changes, §2 and §6 below) must be re-run to produce the v3
+> checkpoint; its `results/REPORT.md` then supersedes these figures.
+
 ## 1. What it predicts, and why
 
     MPSP(y, t) = (a' + b'/y + c'/t + d'/(y·t)) / g
@@ -98,7 +104,7 @@ per-sample least-squares fits of exactly this equation to simulated MPSPs
 Defaults: the library defaults are `FeatureSpec(downstream=False)` and
 `ModelConfig(water_gate=False, channel_inputs=None, r_structure=None,
 fs_prior=False, clip_groups=None, neutralization_gate=False)`. The experiment
-pipeline (`experiments.py`, v2), and so the release checkpoint, uses the
+pipeline (`experiments.py`; since v2), and so the release checkpoint, uses the
 downstream features, the gate, masking with the preset `'physics_v2'` (the
 recovery does not see the reagent prices), the productivity structure and the
 extrapolation safeguards (`--no-downstream`, `--no-water-gate`,
@@ -106,6 +112,25 @@ extrapolation safeguards (`--no-downstream`, `--no-water-gate`,
 `--no-extrapolation-safeguards` switch them off; `--v1-protocol` restores the
 v1 training protocol); DESIGN.md §3 and §6 have the development-set evidence
 for these choices.
+
+**Pipeline changes after the v2 run (round 5, used by the v3 run; NOT in the
+shipped v2 checkpoint; DESIGN.md §6, round 5):**
+the channel and price-intensity term of the loss is compared as surfaces at
+each sample's simulated points relative to the total
+(`LossConfig.ch_space='surface'`, fixed `w_ch = 3` chosen on out-of-fold
+channel / price-sensitivity fidelity; `--v2-channel-loss`), the net
+electricity intensity is ≥ 0 by construction where electricity is not a
+coproduct (`ModelConfig.power_gate`, `--no-power-gate`), the feedstock-channel
+targets of TAL, whose decomposition carries the spiked acetate's sugar
+substitution (data defect D8), are masked in the loss
+(`experiments.DEFECTIVE_TARGETS`, `--no-target-mask`), the exact
+final-product stoichiometric ratio is never clipped by the input clipping
+(`ModelConfig.clip_exempt`, `--no-clip-exempt`; the cause of the v2 run's
+leave-one-product-out failure for HP). The hyperparameter search keeps the
+v2 criterion (leave-configurations-out only; `--hpo-lopo-weight w` mixes in
+leave-one-product-out folds, not adopted). `--v2-model` restores the v2 model
+settings. The library defaults are unchanged. The v3 run trains on the
+corrected data (D15, H1; DESIGN.md §1) with these settings.
 
 ## 3. Installation
 
@@ -356,16 +381,25 @@ price-explicit channels, `int__<fs|el|ng>__<k>` are the intensities and
 `ch__feedstock__k = feedstock_price · int__fs__k`, so the predictions are
 exactly linear in the feedstock, electricity and natural-gas prices. The
 price SENSITIVITY is only as accurate as the predicted intensity, which is
-learned and biased for some configurations even in-sample (release model,
-REPORT.md section 8 (ii-b), error of the MPSP response to a 100 % price
-change in % of MPSP): the feedstock sensitivity dMPSP/dp_fs is 19-24 % too
-low for every corn configuration (the corn intensity is shared through the
-feedstock-only sub-network and is plausibly distorted by TAL's
-substrate-basis defect D8), and
-the isobutanol electricity / natural-gas responses are off by -42 / -23 %
-of MPSP (corn ethanol electricity -25 %). Individual channels are less
-accurate than their sum (the channels offset each other). The channel
-names are in `P.ensemble.channel_names()`.
+learned. In the v2 checkpoint it is biased for some configurations even
+in-sample (release model, v2 REPORT.md section 8 (ii-b), error of the MPSP
+response to a 100 % price change in % of MPSP): the feedstock sensitivity
+dMPSP/dp_fs is 19-24 % too low for every corn configuration, and the
+isobutanol electricity / natural-gas responses are off by -42 / -23 % of
+MPSP (corn ethanol electricity -25 %); out of fold, v2 predicts power
+export (a negative electricity sensitivity) for 85-100 % of the held-out
+samples of corn ethanol and lactic acid, which have no turbogenerator.
+Round 5 traced this to the channel term of the loss, compared coefficient
+by coefficient and so blind to a channel's economic size; the v3 pipeline
+compares channels and intensities as surfaces at the sample's points,
+never lets a plant without power generation export electricity (power
+gate) and keeps TAL's defective feedstock decomposition (D8) out of the
+shared feedstock head (DESIGN.md §6, round 5, development set, out of
+fold: LOCO corn feedstock bias −32 … −16 % → −1 … +9 %, wrong-sign
+electricity 85 % → 0 %). The v3 report tabulates the
+out-of-fold channel and price-sensitivity errors per configuration (section
+5). Individual channels are less accurate than their sum (the channels
+offset each other). The channel names are in `P.ensemble.channel_names()`.
 
 ```python
 names = P.ensemble.channel_names()
@@ -498,10 +532,10 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   (`HP_corn`, `TAL_sugarcane`, `succinic_glucose`,
   `lactic_neutral_SSCF_cornstover`; *test_ood*) and 10 % of the samples of
   the other configurations (*test_id*). No test sample is used to fit, tune,
-  select or calibrate anything. The v1 test results did, however, direct
-  which failure modes round 4 investigated, so in the v2 report the test
-  split is a re-used hold-out and its numbers are likely optimistic (see
-  *Two runs* below).
+  select or calibrate anything. The test results of the earlier runs were,
+  however, seen before the next run was designed, so from the v2 report on
+  the test split is a re-used hold-out and its numbers are likely
+  optimistic (see *Three runs* below).
 * **One training procedure everywhere.** Every network fit (hyperparameter
   search, every CV scheme, `final_dev`, release) trains on all its samples,
   each ensemble member early-stopping on its own random 15 % sample-level
@@ -560,21 +594,31 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
 * **Release model** (`models/release`). It is trained on all data and has no
   independent test. The CV and final-test estimates (`models/final_dev`)
   measure its accuracy.
-* **Two runs.** The first full run (v1, commit fd3f386; report and headline
-  tables in [`results/v1/`](results/v1/README.md)) was the first use of the
-  test split. Its results led to the round-4 changes (training protocol,
-  interval calibration, recovery inputs, productivity structure,
-  extrapolation safeguards), which were chosen on the development set only
-  (DESIGN.md §6, round 4). The current report (v2) uses the same frozen test
-  split a second time and shows v1 and v2 side by side. Because the v1 test
-  failures set the round-4 agenda, the v2 test numbers (and the v1 → v2
-  test improvement) are likely optimistic and are not an independent
-  confirmation; the development CV is the primary evidence, and it too is
-  optimistic for the leave-one-feedstock-out and leave-one-product-out
-  schemes, whose folds were used to design the changes (4 and 7 folds; at
-  the fold level those gains are not statistically established, DESIGN.md
-  round 4f). v2 was fixed before its test evaluation and is released
-  whatever the v1 / v2 test comparison shows.
+* **Three runs.** The first full run (v1, commit fd3f386; report and
+  headline tables in [`results/v1/`](results/v1/README.md)) was the first
+  use of the test split. Its results led to the round-4 changes (training
+  protocol, interval calibration, recovery inputs, productivity structure,
+  extrapolation safeguards), chosen on the development set only (DESIGN.md
+  §6, round 4). The second run (v2, commit 725ae11, report regenerated in
+  b7b0f53; [`results/v2/`](results/v2/README.md)) used the same frozen test
+  split a second time. A review of v2 then found data defects (DESIGN.md §1:
+  D15, the succinic neutral configurations without salt formation and
+  acidulation; H1, TAL_SA samples lost to a failed simulator reset), which
+  were fixed by regenerating those data, and round 5 changed the model on
+  development evidence (DESIGN.md §6, round 5: channel loss, power gate,
+  masked TAL feedstock targets (D8), no clipping of the stoichiometric
+  ratio). The v3 run uses the test split a third time and its report shows
+  v1, v2 and v3 side by side. Because the earlier test results were seen
+  before each next round was designed, the v2 and v3 test numbers (and the
+  changes between the runs) are likely optimistic and are not an
+  independent confirmation; the v2 -> v3 test changes also mix in the
+  corrected test rows of the regenerated configurations. The development CV
+  is the primary evidence, and it too is optimistic for the
+  leave-one-feedstock-out and leave-one-product-out schemes, whose folds
+  were used to design the changes (4 and 7 folds; at the fold level the
+  v1 -> v2 gains are not statistically established, DESIGN.md round 4f).
+  Each run was fixed before its test evaluation and is released whatever
+  the comparison with the earlier runs shows.
 
 ## 7. Known limitations
 
@@ -584,7 +628,7 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   of the Bioindustrial-Park modules. Yields are covered up to
   each configuration's inflection yield, and titers and productivities over
   the simulated ranges.
-* **New-product extrapolation is poor.** In leave-one-product-out CV (v2)
+* **New-product extrapolation is poor.** In leave-one-product-out CV (v2 run)
   the PI-NN's MPSP error is 57 % (fold mean, 7 products; 41-78 % per
   product: HP 78, isobutanol 66, succinic 60, ethanol 59, lactic 54, TAL
   42, oxalic 41 %), not better than a nearest-configuration lookup (kNN
@@ -598,12 +642,15 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   configuration has (coproduct credits of isobutanol and corn ethanol, corn
   ethanol's missing boiler; DESIGN.md §6). The v2 HP fold (78 %, against
   21 % for the plain MLP, ridge and gradient boosting) is a regression of
-  the re-selected PI-NN hyperparameters (DESIGN.md §6, "v2 run vs. the
-  round-4 estimates"). Use predictions for a new product as rough first
+  the re-selected PI-NN hyperparameters: their input clipping mapped the
+  held-out HP's final-product stoichiometric ratio (0.80) onto that of the
+  products without a conversion (1.00); the v3 pipeline never clips that
+  ratio (development LOPO for HP 82 → 15 %, the other folds unchanged;
+  DESIGN.md §6, round 5, 5d). Use predictions for a new product as rough first
   guesses, check `in_domain`/`ad_ratio`, and supply a known recovery
   (section 4.7) where possible.
 * **New feedstocks** are better but still far from new configurations:
-  leave-one-feedstock-out MPSP error 23.9 % (fold mean, 4 folds), interval
+  leave-one-feedstock-out MPSP error 23.9 % (v2 run; fold mean, 4 folds), interval
   coverage of the shipped quantiles 0.75 (MPSP) and 0.66 (g).
 * **Per-configuration bias.** The remaining error is mostly a systematic
   bias per configuration, not noise. The ensemble spread does not capture
@@ -646,12 +693,12 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     | id | configurations | defect | effect |
     |---|---|---|---|
     | D5 | HP low-pH | cation-exchange regeneration H2SO4 not in `acid_cost` | its cost sits in materials_other, not neutralization; channel labels only |
-    | D8 | TAL, TAL_SA | y is the module's yield on all substrates (the spiked acetate counts 1.5 g glucose-eq. per g), but `F_sugar_fed` counts the sugars only | TAL's feedstock channel carries the acetate's sugar substitution (negative c′, positive d′), which plausibly also biases the shared corn feedstock intensity of other products; y kept (a carbon-basis yield is derivable but leaves the unifying form), mitigation left to the model study |
+    | D8 | TAL, TAL_SA | y is the module's yield on all substrates (the spiked acetate counts 1.5 g glucose-eq. per g), but `F_sugar_fed` counts the sugars only | TAL's feedstock channel carries the acetate's sugar substitution (negative c′, positive d′), kept out of the shared feedstock head since v3 (the v3 pipeline masks TAL's feedstock-channel targets in the loss); y kept (a carbon-basis yield is derivable but leaves the unifying form) |
     | D9 | lactic | sampled hydrolysis conversion never applied | one sampled `bp_*` has no effect |
     | D10 | isobutanol | starch-content setter depends on history | sampled and actual starch differ (corr. 0.87); moisture drifts 13-17 % |
     | D13 | oxalic | reagent costs in facilities | channel labels only |
     | D14 | oxalic | fermentation reaction creates mass; no aeration | physically invalid fermentation balance; `aerobic=True` misleading |
-    | D15 | succinic_neutral | v2 data: no salt formation simulated (module default `base_neutralizes_product=False`) | in the v2 models the downstream table claims acidulation and gypsum that the data lack; fixed by regeneration (adapter v3: MPSP +0.22 USD/kg vs. low pH), models need retraining |
+    | D15 | succinic_neutral | v2 data: no salt formation simulated (module default `base_neutralizes_product=False`) | in the v2 models the downstream table claims acidulation and gypsum that the data lack; fixed by regeneration (adapter v3: MPSP +0.22 USD/kg vs. low pH); the v3 models train on the corrected data |
     | H1 | TAL_SA_glucose, TAL_SA_sugarcane | v2 data: samples after a failed reset recorded without points | fixed by regeneration (harness reload/`retry`, robust evaporator root search in the TAL adapter) |
 
   - TAL's final-product purity varies with titer.

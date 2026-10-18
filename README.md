@@ -36,10 +36,12 @@ physical constraints, uncertainty intervals and an applicability domain) trained
 Bioindustrial-Park biorefineries (41 configurations). Its intervals are split-conformal, calibrated on the
 leave-one-configuration-out cross-validation of the development data (so they target new configurations; coverage is
 marginal over the samples of new configurations, not guaranteed for each configuration; the recovery intervals
-under-cover). Accuracy is good for new configurations of known feedstocks and products (leave-one-configuration-out MPSP
-error 9 %), weaker for a new feedstock (24 %), and poor for a new product family (57 %, no better than a
-nearest-configuration lookup); for an unseen feedstock or product the intervals are not calibrated (about 0.75 and 0.56
-coverage of a nominal 0.90), and such predictions are flagged. It is independent of the publication-reproduction steps above; see
+under-cover). In the cross-validation of the shipped (v2) model, accuracy is good for new configurations of known
+feedstocks and products (leave-one-configuration-out MPSP error 9 %), weaker for a new feedstock (24 %), and poor for a
+new product family (57 %, no better than a nearest-configuration lookup); for an unseen feedstock or product the
+intervals are not calibrated (about 0.75 and 0.56 coverage of a nominal 0.90), and such predictions are flagged. These
+figures are from the v2 run; the v3 pipeline (corrected training data and round-5 model changes, see its DESIGN.md) is
+to be re-run, and its report will supersede them. It is independent of the publication-reproduction steps above; see
 its [README](fermentation_insights/coeff_predictor/README.md) for installation, a quickstart, validation and the
 reproduction of its training data, and [DESIGN.md](fermentation_insights/coeff_predictor/DESIGN.md) for the design.
 
