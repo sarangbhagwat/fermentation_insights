@@ -36,12 +36,13 @@ physical constraints, uncertainty intervals and an applicability domain) trained
 Bioindustrial-Park biorefineries (41 configurations). Its intervals are split-conformal, calibrated on the
 leave-one-configuration-out cross-validation of the development data (so they target new configurations; coverage is
 marginal over the samples of new configurations, not guaranteed for each configuration; the recovery intervals
-under-cover). In the cross-validation of the shipped (v2) model, accuracy is good for new configurations of known
-feedstocks and products (leave-one-configuration-out MPSP error 9 %), weaker for a new feedstock (24 %), and poor for a
-new product family (57 %, no better than a nearest-configuration lookup); for an unseen feedstock or product the
-intervals are not calibrated (about 0.75 and 0.56 coverage of a nominal 0.90), and such predictions are flagged. These
-figures are from the v2 run; the v3 pipeline (corrected training data and round-5 model changes, see its DESIGN.md) is
-to be re-run, and its report will supersede them. It is independent of the publication-reproduction steps above; see
+under-cover for some product families). In the cross-validation of the shipped (v3) model, accuracy is good for new
+configurations of known feedstocks and products (leave-one-configuration-out MPSP error 8.5 %), but for a new
+feedstock (37.0 %) or a new product family (44.8 %) the model is not better than a nearest-configuration lookup at the
+fold level; for an unseen feedstock or product the intervals are not calibrated (0.71 MPSP coverage of a nominal 0.90
+for both), and such predictions are flagged. The numbers are those of its
+[validation report](fermentation_insights/coeff_predictor/results/REPORT.md) (v3 run; the v1 and v2 reports are kept
+as history). It is independent of the publication-reproduction steps above; see
 its [README](fermentation_insights/coeff_predictor/README.md) for installation, a quickstart, validation and the
 reproduction of its training data, and [DESIGN.md](fermentation_insights/coeff_predictor/DESIGN.md) for the design.
 

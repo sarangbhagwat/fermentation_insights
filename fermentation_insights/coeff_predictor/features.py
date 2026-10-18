@@ -918,8 +918,14 @@ def apply_spec_registry(spec, reg, info=None):
        baseline values of every spec input (names, composition, capacity,
        product properties, regime and contextual ``p_*``); fields that were
        NaN in its training rows (not applicable) are kept NaN, so the query
-       encodes as the training rows. Ignored (``info['conflict']``) when the
-       spec names another feedstock / product. Then the downstream fields of
+       encodes as the training rows; also its baseline titer and
+       electricity / natural-gas prices (``reg['baseline']``, prices only
+       where no price or alias is given). Ignored (``info['conflict']``)
+       when the spec names another feedstock / product. Without a feedstock
+       name but with a composition / type that differs from the
+       configuration's, the feedstock is new (``info['custom_feedstock']``):
+       its name, composition, capacity and feedstock-dependent parameters
+       are not filled from the configuration. Then the downstream fields of
        ``downstream.TABLE`` for a known ``config_id``.
     2. the (product pair, feedstock) combination (``reg['pair_feedstock']``):
        the same, with regime fields filled only where unique for the

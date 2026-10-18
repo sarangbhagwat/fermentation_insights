@@ -61,10 +61,16 @@ from the registry when unique for the product pair in training, from
 Known feedstocks/products can be given by name: omitted fields (feedstock
 composition and baseline capacity, theoretical/inflection yields,
 stoichiometric mass ratio, chemical IDs, the fermentation regime when it is
-unique, baseline contextual ``p_*`` parameters, ...) are filled from the
+unique, baseline contextual ``p_*`` parameters, the baseline electricity
+and natural-gas prices of a known configuration, ...) are filled from the
 training data's registry (``filled_from_registry``; precedence: a known
 ``config_id``, then the (product pair, feedstock) combination, then the
 pair / feedstock / product entries -- ``features.apply_spec_registry``).
+A ``config_id`` with a feedstock composition or type of its own and no
+feedstock name describes a NEW feedstock in that configuration's process:
+nothing of the configuration's feedstock is filled. A missing
+``neutralizing_agent`` without neutralization (or acid group) is 'none', as
+in training; boolean fields accept True/False, yes/no and 1/0.
 Parameters not applicable to the matched training configuration stay NaN
 as in training (``not_applicable``; ``features.NOT_APPLICABLE`` = 'n/a'
 marks one explicitly), so a by-name query of a training configuration

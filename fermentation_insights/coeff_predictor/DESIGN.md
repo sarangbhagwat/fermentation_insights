@@ -100,7 +100,7 @@ and every number quoted here was recomputed on development rows only.
 | D10 | isobutanol | the starch-content setter rescales the current composition, so the result depends on history | sampled and actual dry starch differ (sampled 0.59-0.85, actual 0.67-0.76, corr. 0.87), moisture drifts 13.4-17.1 % (baseline 15 %); the model sees the actual `fs_w_*`, so the inputs are right, but the starch range covered is narrow | open |
 | D13 | oxalic | the module's unit groups put lime, H2SO4 and CSL/MgCl2/DAP storage in facilities (99.6 % of the non-feedstock material cost) | channel labels only (facilities instead of fermentation / separation materials); totals unaffected | open |
 | D14 | oxalic | the reaction `Glucose -> 2 OxalicAcid + 2 AceticAcid + O2` creates mass and carbon: (OA + AcOH + cells + CO2)/sugar = 1.61-1.70, air feed 5-8 kg/h for 133 t/h sugar, acetic acid 0.667 g/g OA | physically invalid fermentation balance; `aerobic=True` is misleading (no aeration cost), and the oxalic yields are not comparable with the other products' | open (kept for fidelity to the module; patch the reaction and regenerate for physical consistency) |
-| D15 | succinic_neutral (4 configurations, 72 samples) | succinic adapter v2 set only `spec.neutralization` (as the publication's TRY script); the reactor kept `base_neutralizes_product=False`, which removes the purchased lime from the broth and bypasses R401 / R401_P / S405 (acidulation, gypsum filtration) | the v2 data equal succinic (low pH) except the base cost (acid, gypsum and acidulation costs 0), but `downstream.TABLE` describes acidulation + gypsum filtration (neutralization degree 1, H2SO4): the acid / gypsum features claimed costs the targets lacked (v2 models). Regenerated data: MPSP +0.22 USD/kg vs. succinic (low pH) at identical TY points and baseline parameters (+0.10 vs. the v2 rows): lime 1 mol/mol SA (+0.5 mol/mol acetic acid) instead of 0.21 (+0.13 USD/kg), 0.89-0.90 kg H2SO4 (93 wt%) per kg SA (+0.09 USD/kg), 1.44-1.45 kg wet gypsum (20 % moisture) per kg SA (0 USD/kg at baseline, sampled −0.029 to +0.008), R401 + S405 +1.0-1.6 M USD installed, while the fermenters are 304 instead of 316 stainless steel (−5 to −9 M USD, in v2 already); recovery unchanged (the module loses no acid in R401 / S405) | fixed by regeneration: adapter v3 (`base_neutralizes_product=True` for the neutral configurations), old files in `raw_archive/succinic_neutral_v2`, v2 rows rejected (`unpatchable_D15`); models must be retrained |
+| D15 | succinic_neutral (4 configurations, 72 samples) | succinic adapter v2 set only `spec.neutralization` (as the publication's TRY script); the reactor kept `base_neutralizes_product=False`, which removes the purchased lime from the broth and bypasses R401 / R401_P / S405 (acidulation, gypsum filtration) | the v2 data equal succinic (low pH) except the base cost (acid, gypsum and acidulation costs 0), but `downstream.TABLE` describes acidulation + gypsum filtration (neutralization degree 1, H2SO4): the acid / gypsum features claimed costs the targets lacked (v2 models). Regenerated data: MPSP +0.22 USD/kg vs. succinic (low pH) at identical TY points and baseline parameters (+0.10 vs. the v2 rows): lime 1 mol/mol SA (+0.5 mol/mol acetic acid) instead of 0.21 (+0.13 USD/kg), 0.89-0.90 kg H2SO4 (93 wt%) per kg SA (+0.09 USD/kg), 1.44-1.45 kg wet gypsum (20 % moisture) per kg SA (0 USD/kg at baseline, sampled −0.029 to +0.008), R401 + S405 +1.0-1.6 M USD installed, while the fermenters are 304 instead of 316 stainless steel (−5 to −9 M USD, in v2 already); recovery unchanged (the module loses no acid in R401 / S405) | fixed by regeneration: adapter v3 (`base_neutralizes_product=True` for the neutral configurations), old files in `raw_archive/succinic_neutral_v2`, v2 rows rejected (`unpatchable_D15`); the v3 models (shipped) were retrained on the corrected data |
 | H1 | TAL_SA_glucose, TAL_SA_sugarcane | after a convergence failure whose `reset()` also failed, the old harness wrote the later samples as complete with no simulated point (27 and 19 samples; TAL_SA_glucose's sample 1 was cut after 3 points). Cause: the IPA evaporator F407 of the KSA systems ("Failed to extrapolate enthalpy of vaporization ... at T=1207 K"): BioSTEAM's root search for the first-effect evaporation tried fractions at which an effect evaporates all the IPA left and superheats its vapor; once the search started from the bounds (reset() clears its guess), it failed every time | TAL_SA_glucose kept only its baseline sample, TAL_SA_sugarcane 10 of 29 (v2 models) | fixed: harness reloads after a failed reset and writes `retry` records (resume re-runs them); TAL adapter returns the exact overall fraction 1 in that region (`_robust_V_overall`; re-simulated recorded points change by < 1e-4); the empty and the cut attempts were removed (originals in `raw_archive/TAL_SA_v2`) and re-run: 29 / 29 samples each; F407 failed once more without the mitigation (after 13 re-run samples), never with it; remaining failures 9 of 700 re-run points of TAL_SA_glucose (1.3 %; wastewater recycle M503 not converged at the maximum-titer edge; TAL_glucose 1.0 % in the original campaign), 0 of the 150 points of TAL_SA_sugarcane re-run with the mitigation |
 
 #### D8 analysis (2026-10-17; development rows only)
@@ -165,12 +165,60 @@ negative free acid in the module; ≤ 0.3 % on the coefficients; the
 concentrations above the module's own 600 g/L limit at 12-19 % of the points
 of the non-corn-stover configurations (the module's check is never called;
 refitting without them changes MPSP on the feasible points by a median of
-0.1-0.9 %); 13 retained samples with an isolated interior MPSP spike of more
-than 10 % along titer (TAL_glucose 7, TAL_corn 2, lactic 3, HP_neutral_corn
-1; likely convergence or sizing artefacts, kept); the lactic SSCF random
+0.1-0.9 %); the same for the TAL glucose configurations, whose module skips
+its sugar-concentration check for glucose
+(`system_TAL_solubility_exploit_ethanol_glucose.py`: `check_sugar_concentration`
+only `if not feedstock_ID == 'Glucose'`): sugar per broth volume above
+600 g/L at 201 / 656 TAL_glucose and 189 / 650 TAL_SA_glucose points (max
+about 1220 g/L; corn and sugarcane ≤ 660 g/L), and at the low-yield /
+high-titer corner (y 0.07-0.09, t 83-100 g/L) the recovery collapses 15-30 %
+below the sample median and MPSP is 12-24 % above the 4-coefficient fit
+(e.g. TAL|TAL_SA_glucose|s1|6 at y 0.088, t 100: g 0.470 vs 0.679 at t 71,
+MPSP 14.1 vs fit 11.1; samples TAL_SA_glucose s1|6, 7, 16, 21, 28 and
+TAL_glucose s1|14, 25, 26; dropping the corner point changes the fitted MPSP
+on the other points of these samples by 1-3 %, max 7 %; module behaviour,
+as in the publication, kept); 13 retained samples (counted before the H1
+regeneration of TAL_SA_glucose, whose new samples add the corner anomalies
+above) with an isolated interior MPSP spike of more than 10 % along titer
+(TAL_glucose 7, TAL_corn 2, lactic 3, HP_neutral_corn 1; likely convergence
+or sizing artefacts, kept); fixed module reagent prices not recorded as
+inputs: succinic_neutral's H2SO4 (0.0948 USD/kg at every point; the
+neutralization channel is 12-14 % of its MPSP) and TAL's NaOH (5-11 % of
+MPSP) leave `p_acid_price` / `p_base_price` NaN (imputed, missing indicator
+set) while HP, lactic and oxalic sample them -- to be recorded by the
+adapters at the next data rebuild; the sampled gypsum price puts the gypsum
+value (−1.1 to +3.7 % of MPSP) in the coproducts channel although
+`downstream.TABLE` lists only electricity as a coproduct of every
+gypsum-producing configuration (the `ds_cop__gypsum` term is 0 for every
+training row; the convention is the same for all of them); the lactic SSCF random
 samples rejected for too few feasible points are the low-carbohydrate ones
 (retained median carbohydrate content 0.54, rejected 0.25-0.59), so the
 retained data are censored toward carbohydrate-rich feedstock.
+
+### Comparison with the publication
+
+REPORT.md section 8 (i) compares the baseline coefficients with the
+publication's (`results/data/<config>_coefficients.npy`): b′, c′, d′ and g
+agree within a few per cent for most configurations, a′ is higher (median
+ratio 1.215). Two causes are known. Succinic acid at neutral pH differs by
+design (D15: the regenerated data simulate the salt formation and
+acidulation; a′ ratio 1.24-1.34 against 1.02-1.15 at low pH). HP's a′ is
+1.08-1.63 x the publication's, mostly fermentation capital (a median 48 %
+of the HP baseline a′, `ch__capex_fermentation__a`), which scales with 1/r:
+a review comparison with the publication's productivity coefficient sets
+(`results/data/<cfg>_0.2bp_*` and `_5.0bp_*`, at the median y and t of each
+baseline sample, release model) found the MPSP increase at 0.2 x the
+baseline productivity 1.24-1.64 x the publication's for the 16 HP
+configurations (HP_corn +1.148 vs. +0.825 USD/kg) and the decrease at 5 x
+1.22-1.63 x, while TAL and succinic agree within 0.89-1.11; the data show
+the same (HP_corn random sample at r = 0.057: a′ 0.82 vs. the publication's
+0.2bp a′ 0.596). The patches change no process value
+(`data_generation/bip_patches/README.md`), so the difference comes from the
+module or BioSTEAM version; a candidate, not verified, is the fermenter
+design / costing of `BatchBioreactor` in BioSTEAM 2.54, whose vessel-size
+argument the HP patch adapts to (`V` → `V_max`). The specific change has
+not been identified. HP's productivity response therefore carries this
+uncertainty.
 
 ### Data set (after the regeneration of 2026-10-17)
 
@@ -885,7 +933,11 @@ price, so prices outside the training range are reported separately.
   v1 → v2 test change are likely optimistic, not an independent
   confirmation (the development CV is the primary evidence; v2 was fixed
   before its test evaluation and is released whatever that comparison
-  shows). It is **frozen** in
+  shows). The v3 run (2060257) is its third use: the review that found the
+  v2 → v3 data defects and set the round-5 agenda had read the v2 report,
+  test results included, so the v3 test numbers are likewise optimistic;
+  the data corrections also replaced the test rows of the regenerated
+  configurations (REPORT.md notice). It is **frozen** in
   `results/split.json` (committed 2026-10-16, before any modelling) from the
   41 *planned* configurations (`experiments.PLANNED_CONFIGS`, = the adapters'
   `configurations()`) and the seed 2026 only, never from the data that
@@ -929,13 +981,16 @@ price, so prices outside the training range are reported separately.
     balanced): *spec-determined* samples (`sample_kind` baseline /
     productivity: every biorefinery-specific `bp_*` parameter at baseline,
     so the inputs determine the target) vs *random* samples (unobserved
-    `bp_*` draws: irreducible noise for any model);
+    `bp_*` draws, which the inputs do not describe);
   - `evaluate.noise_floor`: within each configuration (≥ 10 random
     samples), a 5-fold ridge on the observable inputs (`p_*`, prices, log r,
-    1/r) predicts a held-out random sample's coefficient vector; its surface
-    MAPE estimates the error the unobserved `bp_*` cause for a model that
-    knows the configuration exactly (also reported: + `bp_*` inputs, and the
-    configuration mean);
+    1/r) predicts a held-out random sample's coefficient vector (also
+    reported: + `bp_*` inputs, and the configuration mean). It was meant as
+    an estimate of the error the unobserved `bp_*` cause, but it is NOT a
+    noise floor: it is the model-form error of a linear model on 20-60
+    samples per configuration (v3: 6.3 % configuration geo-mean, while the
+    PI-NN predicts random samples at 3.3 % in random CV, and adding the
+    `bp_*` draws makes the ridge worse, 7.2 %; REPORT.md section 1);
   - `coef_gram_rel`: conditioning-aware coefficient error, the numerator
     error vector e in the norm of the sample's own design, √(eᵀGe) with
     G = ΦᵀΦ/n over its points (= RMS error of the numerator surface),
@@ -2223,6 +2278,45 @@ boiler structure have no product neighbour), isobutanol's electricity (net
 zero in the data), the recovery-shaped part of the feedstock intensity
 (lactic, a product-specific recovery surface would be needed), succinic's g
 under LOPO, and the D8 normalisation / acetate co-feed input.
+
+**Final review of the v3 run (2026-10-18).** Fixed without a refit (serving
+path, report wording and report-only statistics; the report regenerated
+from the cached fits): the user guides describe the v3 checkpoint; the CV
+summary carries the paired fold-level comparison with the baselines (for a
+new product kNN − PI-NN +7.9 ± 9.7 pp, PI-NN better on 4 / 7 folds; for a
+new feedstock −1.8 ± 10.1 pp, 2 / 4: no advantage over a
+nearest-configuration lookup is established); the g-interval coverage per
+family (shipped quantile on the LOCO out-of-fold scores: TAL 0.45, lactic
+0.62, the other families 1.00); undefined relative price errors masked
+below a 2 % share; the user API encodes a missing agent without
+neutralization as 'none', accepts boolean strings (pandas-3 'str' columns),
+treats a config_id with a composition of its own as a new feedstock, uses a
+configuration's baseline titer and prices by name, and warns for
+configurations the inputs cannot distinguish (lactic SHF vs. SSCF).
+Open, each needs a re-run (a further use of the test split), not adopted
+here:
+
+1. *Feedstock intensity of a new composition.* The product-blind feedstock
+   head also carries the lactic corn-stover recovery shape (feedstock d′
+   43-51, 5b). For the README's wheat straw in the HP_neutral_cornstover
+   process it predicts int__fs (a, b, c, d) = (0.247, 1.617, −3.80, 20.06)
+   against (0.191, 2.097, 0.920, 1.149) for corn stover: b′ 23 % lower
+   although the straw has 5.5 % more sugar, d′ 17 times larger. Proposed:
+   keep b′ of the feedstock intensity product-blind (sugar availability)
+   and predict its a′, c′, d′ (the recovery shape, F_feedstock / F_sugar is
+   constant within a sample) from a product / recovery-side sub-network, or
+   use the pure-b′ intensity (`--fs-b-only`) for compositions outside the
+   training range; to be judged on LOFO channel fidelity and LOPO, since
+   the pure-b′ variant cost LOPO channel error +4 points (5c).
+2. *Saccharification regime.* SHF and SSCF lactic configurations differ in
+   the data (low pH b′ 0.265 vs. 0.118, baseline MPSP 1.425 vs. 1.308) but
+   not in the inputs; a `saccharification` regime field (the lactic module
+   records it) needs an adapter field and a data rebuild.
+3. *g interval calibration by family.* Pooled g coverage is at nominal, but
+   per family it is 0.45-1.00; a group-weighted or family-stratified
+   conformal quantile would be an option (it changes the shipped quantiles).
+4. *Fixed reagent prices* (succinic_neutral H2SO4, TAL NaOH) recorded as
+   `p_acid_price` / `p_base_price` at the next data rebuild (§1, minor items).
 
 ## 7. Processed-data interface (contract between `dataset.py` and the model)
 

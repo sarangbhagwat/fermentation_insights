@@ -21,8 +21,9 @@ Metrics (natural units)
   ``*_spec`` = spec-determined samples (``sample_kind`` baseline or
   productivity: every biorefinery-specific ``bp_*`` parameter at its
   baseline, so the features determine the target), ``*_random`` = random
-  samples (unobserved ``bp_*`` draws add noise no model can remove; see
-  :func:`noise_floor`);
+  samples (unobserved ``bp_*`` draws, which the inputs do not describe;
+  :func:`noise_floor` is a within-configuration linear baseline, not a
+  noise floor);
 * conditioning-aware coefficient error (``coef_gram_rel``): the error vector
   e = theta_hat - theta of the numerator coefficients (a', b', c', d') in
   the norm of the sample's own design, sqrt(e' G e) with G = Phi' Phi / n
@@ -612,9 +613,10 @@ def noise_floor(samples, points, k=5, seed=0, min_random=10, alphas=np.logspace(
     and, for comparison, additionally from the ``bp_*`` draws
     (``with_bp_mape``: how much of that error the unobserved parameters
     explain) and from nothing (``const_mape``: the configuration mean). The
-    surface MAPE is evaluated on the sample's own points. ``floor_mape`` is
-    an estimate (an upper bound up to model-form error) of the irreducible
-    error of any model that knows the configuration exactly. Returns
+    surface MAPE is evaluated on the sample's own points. Despite its name,
+    ``floor_mape`` is NOT a noise floor: it includes the model-form error
+    of a linear model on 20-60 samples per configuration, and networks
+    predict random samples better (REPORT.md section 1). Returns
     (per-configuration DataFrame, summary dict with configuration means and
     geometric means)."""
     from sklearn.linear_model import RidgeCV

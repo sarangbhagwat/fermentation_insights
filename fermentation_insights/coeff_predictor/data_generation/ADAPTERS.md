@@ -191,3 +191,15 @@ facilities`); map a group to `None` only if it would double count.
 3. Sum over areas of `installed_cost` ≈ TEA `installed_cost`.
 4. Typical seconds per TY point and failure rate.
 5. A smoke campaign (`--sample-limit 2`) completes and the JSONL looks right.
+
+Status of item 1: the baseline coefficients of the 32 configurations of the
+publication are compared with the publication's in REPORT.md section 8 (i)
+(known causes of the differences: DESIGN.md section 1, "Comparison with the
+publication"); a table of every configuration's baseline MPSP against the
+module-documented values (README / TRY scripts) has not been recorded yet.
+For items 2-4, every point records the measured flows (`F_ferm_product`,
+`F_sugar_fed`, `V_broth`, `F_final_product`) and the recovery, `dataset.py`
+rejects samples whose cost-channel decomposition does not close
+(`closure_rel`, `high_closure`), and the failure and rejection counts are in
+`report.json` and REPORT.md section 1; an explicit per-point check of y and
+t against the measured flows is not part of the pipeline.
