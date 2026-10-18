@@ -4,6 +4,8 @@
 # biogas double count (known data defect D17: BioSTEAM's original method, the
 # current harness's state and the corrected method) and, with
 # CHECKS=duplicate_inlets, units that receive the same stream twice (D16),
+# with CHECKS=unit_bounds, design results outside the unit classes' own
+# bounds and the tray-cost sensitivity of columns wider than 24 ft (D18),
 # for every configuration of every biorefinery, each configuration in its
 # own Python process (the HP systems are module-level singletons), N_WORKERS
 # at a time. Systems are simulated in the current harness's state (its
@@ -17,6 +19,7 @@
 #         N_WORKERS=3 bash run_sim_checks.sh                  # capacity + ic_biogas
 #         N_WORKERS=3 CHECKS=duplicate_inlets RAW=/home/user/work/data/sim_checks_dup bash run_sim_checks.sh
 #         ADAPTERS="HP TAL" CHECKS="ic_biogas" bash run_sim_checks.sh
+#         N_WORKERS=3 CHECKS=unit_bounds RAW=/home/user/work/data/sim_checks_bounds bash run_sim_checks.sh
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FI=${FI:-$(cd "$HERE/../../../.." && pwd)}

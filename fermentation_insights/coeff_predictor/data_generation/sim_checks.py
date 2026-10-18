@@ -13,7 +13,7 @@ baseline productivity is used. The system is loaded and simulated as the
 campaigns of the current harness do: the BioSTEAM corrections of
 ``harness.apply_biosteam_fixes`` are applied first (harness v4: D17; recorded
 as ``harness_version`` / ``harness_fixes``); the ``ic_biogas`` check toggles
-them itself. Three checks:
+them itself. Four checks:
 
 ``capacity``
     MPSP at the baseline yield and titer with ``p_feedstock_capacity``
@@ -40,12 +40,28 @@ them itself. Three checks:
     creates mass). Where found, the same grid is simulated as in the
     campaigns and again with the duplicate references removed (in memory).
 
+``unit_bounds``
+    Known data defect D18: design results outside the unit class's own
+    ``_bounds`` at the baseline point (BioSTEAM does not warn; e.g. its
+    distillation columns are bounded at 3-24 ft diameter and 27-170 ft
+    height), with the unit's installed cost. Where a column is wider than
+    :data:`TRAY_D_MAX`, its trays are priced by Seider's exponential
+    correlation ``412.7 exp(0.1482 D)`` per tray (``biosteam.units.design_tools
+    .column_design``, fitted to about 2-16 ft) far beyond its range, so the
+    same grid is simulated as in the campaigns (``as_is``) and with such a
+    column's trays priced as N = ceil((D / 24 ft)^2) parallel tray stacks of
+    the same total area (``fixed``, in memory: a sensitivity, not BioSTEAM's
+    method), and the capacity response at the baseline yield and titer
+    (:data:`COLUMN_CAPACITY_MULTS`) in both modes.
+
 ``--collect DIR`` (no BioSTEAM needed) merges the per-configuration JSON
 files into ``capacity_response.csv``, ``ic_biogas_points.csv`` /
-``ic_biogas_bias.csv`` and ``duplicate_inlets_points.csv`` /
+``ic_biogas_bias.csv``, ``duplicate_inlets_points.csv`` /
 ``duplicate_inlets_bias.csv`` (per configuration: MPSP change at the
 baseline and at the lowest-yield grid point, and the change of the refitted
-coefficients, at the same recovery) in ``--csv-dir``.
+coefficients, at the same recovery), ``unit_bounds.csv`` and
+``column_trays_points.csv`` / ``column_trays_bias.csv`` /
+``column_trays_capacity.csv`` in ``--csv-dir``.
 ``scripts/run_sim_checks.sh`` runs every configuration.
 """
 from __future__ import annotations
@@ -62,6 +78,11 @@ import warnings
 
 FRACS = (0.15, 0.5, 0.85)
 CAPACITY_MULTS = (0.5, 0.85, 1.0, 1.15, 2.0, 3.0)
+#: [ft] upper diameter bound of BioSTEAM's distillation columns
+#: (``Distillation._bounds['Diameter']``); check ``unit_bounds``
+TRAY_D_MAX = 24.
+#: capacity multipliers of the ``unit_bounds`` check's tray-cost sensitivity
+COLUMN_CAPACITY_MULTS = (0.85, 1.0, 1.15, 2.0)
 
 
 def _grid(adapter, dom):
@@ -109,6 +130,103 @@ def _remove_duplicate_inlets(found):
             s = u.ins[i]
             u.ins._streams.pop(i)
             s._sink = u          # still the unit's inlet (the first reference)
+
+
+def _out_of_bounds(system, total_installed):
+    """Design results outside the unit class's ``_bounds`` (a bound named
+    'Diameter' also covers 'Rectifier diameter' / 'Stripper diameter'):
+    [dict(unit, unit_class, key, value, lo, hi, installed_cost,
+    installed_share)]."""
+    rows = []
+    for u in system.units:
+        b = getattr(u, '_bounds', None) or {}
+        dr = getattr(u, 'design_results', None) or {}
+        for name, lim in b.items():
+            try:
+                lo, hi = (float(v) for v in lim)
+            except (TypeError, ValueError):
+                continue
+            for k, v in dr.items():
+                if not isinstance(v, (int, float)) or not (k == name or k.lower().endswith(' ' + name.lower())):
+                    continue
+                if v > hi * (1 + 1e-4) or v < lo * (1 - 1e-4):
+                    ic = float(getattr(u, 'installed_cost', float('nan')))
+                    rows.append(dict(unit=u.ID, unit_class=type(u).__name__, key=k, value=float(v), lo=lo, hi=hi,
+                                     side='above' if v > hi else 'below', installed_cost=ic,
+                                     installed_share=ic / total_installed if total_installed else float('nan')))
+    return rows
+
+
+def _wide_columns(system, dmax=TRAY_D_MAX):
+    """{unit ID: max tray diameter [ft]} of the units with tray costs whose
+    (rectifier / stripper) diameter exceeds ``dmax``."""
+    out = {}
+    for u in system.units:
+        cost = getattr(u, 'baseline_purchase_costs', None) or {}
+        if not any(k.endswith('rays') for k in cost):        # 'Trays', 'Rectifier trays', 'Stripper trays'
+            continue
+        dr = getattr(u, 'design_results', None) or {}
+        d = [float(v) for k, v in dr.items() if isinstance(v, (int, float)) and k.lower().endswith('diameter')]
+        if d and max(d) > dmax:
+            out[u.ID] = max(d)
+    return out
+
+
+def _parallel_trays(orig, dmax=TRAY_D_MAX):
+    """Tray cost of a column wider than ``dmax`` as N = ceil((D / dmax)^2)
+    parallel stacks of diameter D / sqrt(N) (same total area)."""
+    import math
+
+    def cost(N_T, Di):
+        if Di <= dmax:
+            return orig(N_T, Di)
+        n = math.ceil((Di / dmax) ** 2)
+        return n * orig(N_T, Di / math.sqrt(n))
+    return cost
+
+
+def _unit_bounds(adapter, dom, params, y0, t0, r0, capacity_mults=COLUMN_CAPACITY_MULTS):
+    from biosteam.units import design_tools
+    base = _simulate(adapter, y0, t0, r0)
+    rec = dict(baseline=base)
+    if base.get('status') != 'ok':
+        rec['skipped'] = f"baseline point not simulated ({base.get('status')})"
+        return rec
+    tot = float(getattr(adapter.tea, 'installed_equipment_cost', float('nan')))
+    rec['installed_equipment_cost'] = tot
+    rec['out_of_bounds'] = _out_of_bounds(adapter.system, tot)
+    wide = _wide_columns(adapter.system)
+    rec['wide_columns'] = wide
+    if not wide:
+        rec['skipped'] = f'no column wider than {TRAY_D_MAX:g} ft'
+        return rec
+    orig = design_tools.compute_purchase_cost_of_trays
+    cap = [p for p in params if p.name == 'p_feedstock_capacity']
+    rec['units'] = [[u, f'D {d:.1f} ft'] for u, d in wide.items()]
+    rec['capacity'] = []
+    try:
+        for mode in ('as_is', 'fixed'):
+            design_tools.compute_purchase_cost_of_trays = orig if mode == 'as_is' else _parallel_trays(orig)
+            rows = []
+            for name, y, t in _grid(adapter, dom):
+                row = _simulate(adapter, y, t, r0)
+                row['point'] = name
+                rows.append(row)
+                print('unit_bounds', mode, name, row.get('MPSP'), row['status'], flush=True)
+            rec[mode] = rows
+            if cap:
+                for m in capacity_mults:
+                    cap[0].setter(cap[0].baseline * m)
+                    row = _simulate(adapter, y0, t0, r0)
+                    row.update(mode=mode, mult=float(m))
+                    rec['capacity'].append(row)
+                    print('unit_bounds capacity', mode, m, row.get('MPSP'), row['status'], flush=True)
+                cap[0].setter(cap[0].baseline)
+    finally:
+        design_tools.compute_purchase_cost_of_trays = orig
+        if cap:
+            cap[0].setter(cap[0].baseline)
+    return rec
 
 
 def _simulate(adapter, y, t, r, ics=()):
@@ -224,6 +342,8 @@ def run_config(adapter_name, config_id, checks, capacity_mults=CAPACITY_MULTS):
                     print('duplicate_inlets', mode, config_id, name, row.get('MPSP'), row['status'], flush=True)
                 rec_d[mode] = rows
         rec['duplicate_inlets'] = rec_d
+    if 'unit_bounds' in checks:
+        rec['unit_bounds'] = _unit_bounds(A, dom, params, y0, t0, r0)
     return rec
 
 
@@ -235,6 +355,7 @@ def collect(raw_dir, csv_dir):
     from fermentation_insights.coeff_predictor import physics
     recs = [json.load(open(f)) for f in sorted(glob.glob(os.path.join(raw_dir, '*.json')))]
     cap_rows, ic_pts, ic_bias, dup_pts, dup_bias = [], [], [], [], []
+    ub_rows, col_pts, col_bias, col_cap = [], [], [], []
     for rec in recs:
         cid = rec['config_id']
         c = rec.get('capacity') or {}
@@ -247,11 +368,33 @@ def collect(raw_dir, csv_dir):
                                         ('duplicate_inlets', dup_pts, dup_bias, ('F_sugar_fed',))):
             if key in rec:
                 _paired_effect(rec[key], cid, pts_, bias_, extra)
+        ub = rec.get('unit_bounds')
+        if ub is not None:
+            for row in ub.get('out_of_bounds', ()):
+                ub_rows.append(dict(config_id=cid, harness_version=rec.get('harness_version'), **row))
+            if not ub.get('out_of_bounds'):
+                ok = (ub.get('baseline') or {}).get('status') == 'ok'
+                ub_rows.append(dict(config_id=cid, harness_version=rec.get('harness_version'), unit='', key='',
+                                    note='no design result outside the unit bounds' if ok
+                                    else ub.get('skipped', 'not checked')))
+            _paired_effect(ub, cid, col_pts, col_bias, ('FCI',))
+            for row in ub.get('capacity', ()):
+                col_cap.append(dict(config_id=cid, **{k: row.get(k) for k in ('mode', 'mult', 'y', 't', 'r', 'status',
+                                                                              'MPSP', 'FCI')}))
+    if col_cap:
+        cc = pd.DataFrame(col_cap)
+        ref = cc[cc['mult'] == 1.].set_index(['config_id', 'mode'])
+        key = list(zip(cc['config_id'], cc['mode']))
+        cc['MPSP_rel_to_1x'] = cc['MPSP'].to_numpy() / ref['MPSP'].reindex(key).to_numpy()
+        cc['FCI_rel_to_1x'] = cc['FCI'].to_numpy() / ref['FCI'].reindex(key).to_numpy()
+        col_cap = cc.to_dict('records')
     os.makedirs(csv_dir, exist_ok=True)
     written = []
     for name, rows in (('capacity_response.csv', cap_rows), ('ic_biogas_points.csv', ic_pts),
                        ('ic_biogas_bias.csv', ic_bias), ('duplicate_inlets_points.csv', dup_pts),
-                       ('duplicate_inlets_bias.csv', dup_bias)):
+                       ('duplicate_inlets_bias.csv', dup_bias), ('unit_bounds.csv', ub_rows),
+                       ('column_trays_points.csv', col_pts), ('column_trays_bias.csv', col_bias),
+                       ('column_trays_capacity.csv', col_cap)):
         if rows:
             path = os.path.join(csv_dir, name)
             pd.DataFrame(rows).to_csv(path, index=False, float_format='%.6g')

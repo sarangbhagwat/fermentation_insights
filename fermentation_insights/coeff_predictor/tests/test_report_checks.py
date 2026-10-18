@@ -139,3 +139,47 @@ def test_sim_checks_collect_pairs_as_is_and_corrected_runs(tmp_path):
     assert sorted(p['mode'].unique()) == ['as_is', 'fixed', 'harness']
     c = pd.read_csv(tmp_path / 'csv' / 'capacity_response.csv')
     assert list(c['mult']) == [1., 2.]
+
+
+def test_sim_checks_unit_bounds_collect_and_parallel_trays(tmp_path):
+    import json
+    from fermentation_insights.coeff_predictor.data_generation import sim_checks as SC
+    # tray cost of a column wider than 24 ft as parallel stacks of the same area
+    orig = lambda N, D: N * 412.7 * np.exp(0.1482 * D)
+    f = SC._parallel_trays(orig)
+    assert f(10, 20.) == orig(10, 20.)
+    assert f(10, 36.) == pytest.approx(3 * orig(10, 36. / np.sqrt(3)))     # ceil((36/24)^2) = 3
+    assert f(10, 36.) < orig(10, 36.)
+
+    def pts(scale):
+        out = [dict(point='baseline', y=0.7, t=60., status='ok', MPSP=2. * scale, recovery=0.6, FCI=1e9 * scale)]
+        for i, y in enumerate((0.2, 0.4, 0.6)):
+            for j, t in enumerate((20., 40., 60.)):
+                m = 0.5 + 0.2 / y + 5. / t + 1. / (y * t)
+                out.append(dict(point=f'grid_{i}{j}', y=y, t=t, status='ok', recovery=0.6, FCI=1e9,
+                                MPSP=m * (scale if y > 0.5 else 1.)))
+        return out
+    cap = [dict(mode=mo, mult=m, y=0.7, t=60., r=0.3, status='ok', MPSP=v, FCI=1e9 * m ** e)
+           for mo, e, vals in (('as_is', 1.2, (2.0, 2.04)), ('fixed', 0.8, (1.9, 1.8))) for m, v in zip((1., 2.), vals)]
+    rec = dict(config_id='X', harness_version=4, unit_bounds=dict(
+        baseline=dict(status='ok'), installed_equipment_cost=5e8,
+        out_of_bounds=[dict(unit='D1', unit_class='BinaryDistillation', key='Stripper diameter', value=36., lo=3.,
+                            hi=24., side='above', installed_cost=5e7, installed_share=0.1)],
+        wide_columns={'D1': 36.}, units=[['D1', 'D 36.0 ft']], as_is=pts(1.), fixed=pts(0.95), capacity=cap))
+    json.dump(rec, open(tmp_path / 'X.json', 'w'))
+    json.dump(dict(config_id='Y', harness_version=4, unit_bounds=dict(
+        baseline=dict(status='ok'), out_of_bounds=[], wide_columns={}, skipped='no column wider than 24 ft')),
+        open(tmp_path / 'Y.json', 'w'))
+    written = sorted(p.split('/')[-1] for p in SC.collect(str(tmp_path), str(tmp_path / 'csv')))
+    assert written == ['column_trays_bias.csv', 'column_trays_capacity.csv', 'column_trays_points.csv',
+                       'unit_bounds.csv']
+    u = pd.read_csv(tmp_path / 'csv' / 'unit_bounds.csv')
+    assert u.loc[u['config_id'] == 'X', 'value'].iloc[0] == 36.
+    assert u.loc[u['config_id'] == 'Y', 'note'].iloc[0] == 'no design result outside the unit bounds'
+    b = pd.read_csv(tmp_path / 'csv' / 'column_trays_bias.csv').set_index('config_id')
+    assert b.loc['X', 'dMPSP_baseline_pct'] == pytest.approx(-5.)
+    assert b.loc['X', 'dMPSP_low_yield_pct'] == pytest.approx(0., abs=1e-9)
+    assert not b.loc['Y', 'affected']
+    c = pd.read_csv(tmp_path / 'csv' / 'column_trays_capacity.csv').set_index(['mode', 'mult'])
+    assert c.loc[('as_is', 2.), 'MPSP_rel_to_1x'] == pytest.approx(1.02)
+    assert c.loc[('fixed', 2.), 'FCI_rel_to_1x'] == pytest.approx(2 ** 0.8)

@@ -1,0 +1,83 @@
+config_id,harness_version,unit,unit_class,key,value,lo,hi,side,installed_cost,installed_share,note
+HP_corn,4,D408,ShortcutColumn,Stripper diameter,27.5072,3,24,above,1.50096e+07,0.0460482,
+HP_corn,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,6.85147e+06,0.0210197,
+HP_cornstover,4,D408,ShortcutColumn,Stripper diameter,27.5049,3,24,above,1.5007e+07,0.0367577,
+HP_cornstover,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,6.85091e+06,0.0167804,
+HP_glucose,4,D408,ShortcutColumn,Stripper diameter,30.1302,3,24,above,1.89514e+07,0.0541486,
+HP_glucose,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,7.91363e+06,0.0226111,
+HP_hexanol_corn,4,D401,BinaryDistillation,Rectifier diameter,29.3368,3,24,above,1.58545e+07,0.0507888,
+HP_hexanol_corn,4,D401,BinaryDistillation,Stripper diameter,28.2413,3,24,above,1.58545e+07,0.0507888,
+HP_hexanol_corn,4,D408,ShortcutColumn,Stripper diameter,29.1332,3,24,above,1.57158e+07,0.0503448,
+HP_hexanol_corn,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,6.47979e+06,0.0207576,
+HP_hexanol_cornstover,4,D401,BinaryDistillation,Rectifier diameter,30.0621,3,24,above,1.67373e+07,0.0428824,
+HP_hexanol_cornstover,4,D401,BinaryDistillation,Stripper diameter,28.934,3,24,above,1.67373e+07,0.0428824,
+HP_hexanol_cornstover,4,D408,ShortcutColumn,Stripper diameter,29.2964,3,24,above,1.5907e+07,0.0407552,
+HP_hexanol_cornstover,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,6.51755e+06,0.0166985,
+HP_hexanol_glucose,4,D401,BinaryDistillation,Rectifier diameter,31.9765,3,24,above,2.03974e+07,0.0596472,
+HP_hexanol_glucose,4,D401,BinaryDistillation,Stripper diameter,30.7837,3,24,above,2.03974e+07,0.0596472,
+HP_hexanol_glucose,4,D408,ShortcutColumn,Stripper diameter,31.8666,3,24,above,1.9296e+07,0.0564264,
+HP_hexanol_glucose,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,7.49403e+06,0.0219145,
+HP_hexanol_sugarcane,4,D401,BinaryDistillation,Rectifier diameter,39.5288,3,24,above,4.81764e+07,0.0864774,
+HP_hexanol_sugarcane,4,D401,BinaryDistillation,Stripper diameter,38.0542,3,24,above,4.81764e+07,0.0864774,
+HP_hexanol_sugarcane,4,D408,ShortcutColumn,Rectifier diameter,28.8352,3,24,above,3.75318e+07,0.0673703,
+HP_hexanol_sugarcane,4,D408,ShortcutColumn,Stripper diameter,39.3892,3,24,above,3.75318e+07,0.0673703,
+HP_hexanol_sugarcane,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,1.04352e+07,0.0187314,
+HP_neutral_corn,4,D408,ShortcutColumn,Stripper diameter,28.035,3,24,above,1.62482e+07,0.0482346,
+HP_neutral_corn,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,6.98219e+06,0.0207274,
+HP_neutral_cornstover,4,D408,ShortcutColumn,Stripper diameter,28.0324,3,24,above,1.62452e+07,0.0387526,
+HP_neutral_cornstover,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,6.98157e+06,0.0166544,
+HP_neutral_glucose,4,D408,ShortcutColumn,Stripper diameter,30.7085,3,24,above,1.97904e+07,0.0545851,
+HP_neutral_glucose,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,8.07176e+06,0.0222632,
+HP_neutral_hexanol_corn,4,D401,BinaryDistillation,Rectifier diameter,29.7992,3,24,above,1.65479e+07,0.0519626,
+HP_neutral_hexanol_corn,4,D401,BinaryDistillation,Stripper diameter,28.6875,3,24,above,1.65479e+07,0.0519626,
+HP_neutral_hexanol_corn,4,D408,ShortcutColumn,Stripper diameter,29.6848,3,24,above,1.63688e+07,0.0514002,
+HP_neutral_hexanol_corn,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,6.60627e+06,0.0207446,
+HP_neutral_hexanol_cornstover,4,D401,BinaryDistillation,Rectifier diameter,30.2429,3,24,above,1.72482e+07,0.0434609,
+HP_neutral_hexanol_cornstover,4,D401,BinaryDistillation,Stripper diameter,29.1112,3,24,above,1.72482e+07,0.0434609,
+HP_neutral_hexanol_cornstover,4,D408,ShortcutColumn,Stripper diameter,29.7898,3,24,above,1.64976e+07,0.0415695,
+HP_neutral_hexanol_cornstover,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,6.63084e+06,0.016708,
+HP_neutral_hexanol_glucose,4,D401,BinaryDistillation,Rectifier diameter,32.5674,3,24,above,2.16376e+07,0.0615809,
+HP_neutral_hexanol_glucose,4,D401,BinaryDistillation,Stripper diameter,31.3529,3,24,above,2.16376e+07,0.0615809,
+HP_neutral_hexanol_glucose,4,D408,ShortcutColumn,Stripper diameter,32.4906,3,24,above,2.09034e+07,0.0594915,
+HP_neutral_hexanol_glucose,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,7.65267e+06,0.0217796,
+HP_neutral_hexanol_sugarcane,4,D401,BinaryDistillation,Rectifier diameter,40.2591,3,24,above,5.24762e+07,0.0900921,
+HP_neutral_hexanol_sugarcane,4,D401,BinaryDistillation,Stripper diameter,38.7576,3,24,above,5.24762e+07,0.0900921,
+HP_neutral_hexanol_sugarcane,4,D408,ShortcutColumn,Rectifier diameter,29.3998,3,24,above,4.09481e+07,0.0703004,
+HP_neutral_hexanol_sugarcane,4,D408,ShortcutColumn,Stripper diameter,40.1604,3,24,above,4.09481e+07,0.0703004,
+HP_neutral_hexanol_sugarcane,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,1.06872e+07,0.0183479,
+HP_neutral_sugarcane,4,D408,ShortcutColumn,Rectifier diameter,27.7671,3,24,above,3.71997e+07,0.0634135,
+HP_neutral_sugarcane,4,D408,ShortcutColumn,Stripper diameter,37.9566,3,24,above,3.71997e+07,0.0634135,
+HP_neutral_sugarcane,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,1.11771e+07,0.0190534,
+HP_sugarcane,4,D408,ShortcutColumn,Rectifier diameter,27.2442,3,24,above,3.50516e+07,0.0616629,
+HP_sugarcane,4,D408,ShortcutColumn,Stripper diameter,37.2418,3,24,above,3.50516e+07,0.0616629,
+HP_sugarcane,4,D409,ShortcutColumn,Rectifier height,350.524,27,170,above,1.09299e+07,0.0192278,
+IBO_EtOH_corn,4,D203,BinaryDistillation,Weight,6899.07,9000,2.5e+06,below,810229,0.00592277,
+IBO_EtOH_corn,4,D204,BinaryDistillation,Weight,8832,9000,2.5e+06,below,777574,0.00568407,
+TAL_SA_corn,4,,,,,,,,,,no design result outside the unit bounds
+TAL_SA_cornstover,4,,,,,,,,,,no design result outside the unit bounds
+TAL_SA_glucose,4,,,,,,,,,,no design result outside the unit bounds
+TAL_SA_sugarcane,4,,,,,,,,,,no design result outside the unit bounds
+TAL_corn,4,,,,,,,,,,no design result outside the unit bounds
+TAL_cornstover,4,,,,,,,,,,no design result outside the unit bounds
+TAL_glucose,4,,,,,,,,,,no design result outside the unit bounds
+TAL_sugarcane,4,,,,,,,,,,no design result outside the unit bounds
+ethanol_corn,4,T503_T507,BinaryDistillation,Stripper weight,6407.99,9000,2.5e+06,below,1.44123e+06,0.0219558,
+ethanol_cornstover,4,D403,BinaryDistillation,Stripper weight,7704.22,9000,2.5e+06,below,1.50717e+06,0.00720841,
+ethanol_sugarcane,4,D302,BinaryDistillation,Stripper weight,7824.6,9000,2.5e+06,below,1.86231e+06,0.012129,
+lactic_lowpH_SHF_cornstover,4,D401,BinaryDistillation,Rectifier height,15.4724,27,170,below,1.12181e+06,0.00398781,
+lactic_lowpH_SHF_cornstover,4,D401,BinaryDistillation,Rectifier weight,4400.97,9000,2.5e+06,below,1.12181e+06,0.00398781,
+lactic_lowpH_SSCF_cornstover,4,D401,BinaryDistillation,Rectifier height,15.4724,27,170,below,1.14549e+06,0.00402356,
+lactic_lowpH_SSCF_cornstover,4,D401,BinaryDistillation,Rectifier weight,4532.55,9000,2.5e+06,below,1.14549e+06,0.00402356,
+lactic_neutral_SHF_cornstover,4,D401,BinaryDistillation,Rectifier height,15.4724,27,170,below,1.09504e+06,0.00385855,
+lactic_neutral_SHF_cornstover,4,D401,BinaryDistillation,Rectifier weight,4286.05,9000,2.5e+06,below,1.09504e+06,0.00385855,
+lactic_neutral_SSCF_cornstover,4,D401,BinaryDistillation,Rectifier height,15.4724,27,170,below,1.1193e+06,0.00390252,
+lactic_neutral_SSCF_cornstover,4,D401,BinaryDistillation,Rectifier weight,4414.31,9000,2.5e+06,below,1.1193e+06,0.00390252,
+oxalic_neutral_sugarcane,4,,,,,,,,,,no design result outside the unit bounds
+succinic_corn,4,,,,,,,,,,no design result outside the unit bounds
+succinic_cornstover,4,,,,,,,,,,no design result outside the unit bounds
+succinic_glucose,4,,,,,,,,,,no design result outside the unit bounds
+succinic_neutral_corn,4,,,,,,,,,,no design result outside the unit bounds
+succinic_neutral_cornstover,4,,,,,,,,,,no design result outside the unit bounds
+succinic_neutral_glucose,4,,,,,,,,,,no design result outside the unit bounds
+succinic_neutral_sugarcane,4,,,,,,,,,,no design result outside the unit bounds
+succinic_sugarcane,4,,,,,,,,,,no design result outside the unit bounds
