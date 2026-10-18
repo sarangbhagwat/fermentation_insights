@@ -60,7 +60,15 @@ AREA_QUANTITIES = (
 #: unpriced material feed (review defect D3; v2 rows are corrected by
 #: ``coeff_predictor/data_patches.py``). Adapter-level fixes are versioned by
 #: the 'adapter_version' field of the configuration (config record).
-HARNESS_VERSION = 3
+#: v4: the harness applies the BioSTEAM runtime corrections of
+#: ``biosteam_fixes`` named in ``harness.BIOSTEAM_FIXES`` (``'ic_biogas'``:
+#: ``InternalCirculationRx`` 'lumped' no longer counts its biogas twice,
+#: review defect D17) in every campaign process before any system is loaded,
+#: and records the active ones in the ``config`` and every ``sample_start``
+#: record (field ``biosteam_fixes``, ';'-joined). Rows of harness < 4 of the
+#: configurations with such a reactor cannot be patched and are rejected
+#: (``coeff_predictor/data_patches.py``, ``unpatchable_D17``).
+HARNESS_VERSION = 4
 
 #: Specification / design-decision columns (constant within a sample).
 SPEC_COLUMNS = (

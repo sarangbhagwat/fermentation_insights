@@ -9,7 +9,11 @@ PYTHONPATH as the campaigns (Bioindustrial-Park worktree + this repository)::
         --adapter HP --config HP_glucose --out checks_raw/HP_glucose.json
 
 All uncertain parameters are at their baselines and the configuration's
-baseline productivity is used. Two checks:
+baseline productivity is used. The system is loaded and simulated as the
+campaigns of the current harness do: the BioSTEAM corrections of
+``harness.apply_biosteam_fixes`` are applied first (harness v4: D17; recorded
+as ``harness_version`` / ``harness_fixes``); the ``ic_biogas`` check toggles
+them itself. Three checks:
 
 ``capacity``
     MPSP at the baseline yield and titer with ``p_feedstock_capacity``
@@ -21,9 +25,14 @@ baseline productivity is used. Two checks:
     Known data defect D17 (``biosteam_fixes``): every point of a 3 x 3
     titer-yield grid (15/50/85 % of the yield range; 15/50/85 % of the
     titer range below the configuration's maximum titer) plus the baseline
-    point, simulated as in the campaigns and again with the corrected
-    ``InternalCirculationRx._run``. Skipped (recorded as such) when the
-    system has no InternalCirculationRx with the lumped method.
+    point, simulated three times: ``as_is`` (BioSTEAM's original method, as
+    the campaigns of harness <= 3), ``harness`` (the BioSTEAM corrections
+    the current harness applies, ``harness.apply_biosteam_fixes``, as its
+    campaigns simulate; recorded with ``harness_version`` and
+    ``harness_fixes``) and ``fixed`` (the corrected
+    ``InternalCirculationRx._run``). Since harness v4 ``harness`` equals
+    ``fixed``: no double count in the campaigns. Skipped (recorded as such)
+    when the system has no InternalCirculationRx with the lumped method.
 
 ``duplicate_inlets``
     Known data defect D16: units whose inlet list holds the same stream
@@ -142,6 +151,9 @@ def run_config(adapter_name, config_id, checks, capacity_mults=CAPACITY_MULTS):
         f'fermentation_insights.coeff_predictor.data_generation.adapters.{adapter_name}')
     A = mod.Adapter()
     cfg = [c for c in A.configurations() if c['config_id'] == config_id][0]
+    from . import harness
+    from .schema import HARNESS_VERSION
+    fixes = harness.apply_biosteam_fixes(getattr(A, 'biosteam_fixes', harness.BIOSTEAM_FIXES))
     A.load(cfg)
     params = A.parameters()
     for p in params:
@@ -150,7 +162,7 @@ def run_config(adapter_name, config_id, checks, capacity_mults=CAPACITY_MULTS):
     y0, t0, r0 = dom['baseline_yield'], dom['baseline_titer'], dom['baseline_productivity']
     rec = dict(adapter=adapter_name, config_id=config_id, domain={k: float(v) for k, v in dom.items()
                                                                 if isinstance(v, (int, float))},
-               versions=A.versions())
+               versions=A.versions(), harness_version=HARNESS_VERSION, harness_fixes=fixes)
     if 'capacity' in checks:
         cap = [p for p in params if p.name == 'p_feedstock_capacity']
         if not cap:
@@ -175,8 +187,14 @@ def run_config(adapter_name, config_id, checks, capacity_mults=CAPACITY_MULTS):
         else:
             from . import biosteam_fixes
             pts = _grid(A, dom)
-            for mode in ('as_is', 'fixed'):
-                if mode == 'fixed':
+            for mode in ('as_is', 'harness', 'fixed'):
+                if mode == 'as_is':
+                    biosteam_fixes.remove()
+                elif mode == 'harness':
+                    biosteam_fixes.remove()
+                    rec_ic['harness_version'] = HARNESS_VERSION
+                    rec_ic['harness_fixes'] = harness.apply_biosteam_fixes()
+                else:
                     biosteam_fixes.apply('ic_biogas')
                 rows = []
                 for name, y, t in pts:
@@ -185,7 +203,8 @@ def run_config(adapter_name, config_id, checks, capacity_mults=CAPACITY_MULTS):
                     rows.append(row)
                     print('ic_biogas', mode, config_id, name, row.get('MPSP'), row['status'], flush=True)
                 rec_ic[mode] = rows
-            biosteam_fixes.remove('ic_biogas')
+            biosteam_fixes.remove()
+            harness.apply_biosteam_fixes(fixes.split(';') if fixes else ())   # back to the campaign state
         rec['ic_biogas'] = rec_ic
     if 'duplicate_inlets' in checks:
         found = _duplicate_inlets(A.system)
@@ -220,7 +239,8 @@ def collect(raw_dir, csv_dir):
         cid = rec['config_id']
         c = rec.get('capacity') or {}
         for row in c.get('points', ()):
-            cap_rows.append(dict(config_id=cid, capacity_baseline=c['baseline'],
+            cap_rows.append(dict(config_id=cid, harness_version=rec.get('harness_version', 3),
+                                 capacity_baseline=c['baseline'],
                                  **{k: row.get(k) for k in ('mult', 'p_feedstock_capacity', 'y', 't', 'r',
                                                             'status', 'MPSP', 'recovery', 'FCI')}))
         for key, pts_, bias_, extra in (('ic_biogas', ic_pts, ic_bias, ('biogas_kg_h', 'ic_mass_gain_kg_h')),
@@ -257,6 +277,10 @@ def _paired_effect(ic, cid, ic_pts, ic_bias, extra):
     ok = (a['status'] == 'ok') & (f['status'] == 'ok')
     rel = (f['MPSP'] / a['MPSP'] - 1)[ok]
     out = dict(config_id=cid, units=units, affected=True, n_points_ok=int(ok.sum()))
+    h = pd.DataFrame(ic['harness']).set_index('point') if ic.get('harness') else None
+    if h is not None:
+        for p, row in h.iterrows():
+            ic_pts.append(dict(config_id=cid, mode='harness', point=p, **row.to_dict()))
     if ok.get('baseline', False):
         out.update(y_baseline=a.loc['baseline', 'y'], t_baseline=a.loc['baseline', 't'],
                    MPSP_baseline_as_is=a.loc['baseline', 'MPSP'],
@@ -265,6 +289,17 @@ def _paired_effect(ic, cid, ic_pts, ic_bias, extra):
             if c in a and c in f:
                 out[f'{c}_as_is'] = a.loc['baseline', c]
                 out[f'{c}_fixed'] = f.loc['baseline', c]
+            if h is not None and c in h and 'baseline' in h.index:
+                out[f'{c}_harness'] = h.loc['baseline', c]
+    if h is not None:
+        # the current harness's campaign state vs. the corrected method
+        okh = ok & (h['status'] == 'ok').reindex(ok.index, fill_value=False)
+        out.update(harness_version=ic.get('harness_version'), harness_fixes=ic.get('harness_fixes', ''),
+                   n_points_ok_harness=int(okh.sum()),
+                   dMPSP_harness_vs_fixed_max_abs_pct=100 * float(
+                       (h['MPSP'].reindex(ok.index) / f['MPSP'] - 1)[okh].abs().max()) if okh.any() else np.nan,
+                   dMPSP_harness_vs_as_is_baseline_pct=100 * float(h.loc['baseline', 'MPSP'] / a.loc['baseline', 'MPSP'] - 1)
+                   if okh.get('baseline', False) else np.nan)
     grid = [p for p in rel.index if p.startswith('grid_')]
     if grid:
         ylo = min(a.loc[grid, 'y'])

@@ -1,15 +1,11 @@
 {
  "stats": {
   "files": 41,
-  "restarted_attempts": 15,
+  "restarted_attempts": 8,
   "config_records": 41,
   "samples_seen": 1623,
   "points_seen": 38613,
-  "config_conflicts": 2,
-  "config_conflict_keys": [
-   "TAL|TAL_SA_glucose",
-   "TAL|TAL_SA_sugarcane"
-  ]
+  "config_conflicts": 0
  },
  "rejections": {
   "incomplete": 1,
@@ -36,16 +32,8 @@
  "patches": true,
  "data_patches": {
   "M1": {
-   "config_records": 26,
+   "config_records": 10,
    "configs": [
-    "TAL|TAL_SA_corn",
-    "TAL|TAL_SA_cornstover",
-    "TAL|TAL_SA_glucose",
-    "TAL|TAL_SA_sugarcane",
-    "TAL|TAL_corn",
-    "TAL|TAL_cornstover",
-    "TAL|TAL_glucose",
-    "TAL|TAL_sugarcane",
     "succinic|succinic_corn",
     "succinic|succinic_cornstover",
     "succinic|succinic_glucose",
@@ -53,43 +41,19 @@
    ]
   },
   "M3": {
-   "config_records": 16,
-   "configs": [
-    "TAL|TAL_SA_corn",
-    "TAL|TAL_SA_cornstover",
-    "TAL|TAL_SA_glucose",
-    "TAL|TAL_SA_sugarcane",
-    "TAL|TAL_corn",
-    "TAL|TAL_cornstover",
-    "TAL|TAL_glucose",
-    "TAL|TAL_sugarcane"
-   ],
-   "samples": 185
+   "config_records": 0,
+   "configs": []
   },
   "M12": {
-   "config_records": 16,
-   "configs": [
-    "TAL|TAL_SA_corn",
-    "TAL|TAL_SA_cornstover",
-    "TAL|TAL_SA_glucose",
-    "TAL|TAL_SA_sugarcane",
-    "TAL|TAL_corn",
-    "TAL|TAL_cornstover",
-    "TAL|TAL_glucose",
-    "TAL|TAL_sugarcane"
-   ]
+   "config_records": 0,
+   "configs": []
   },
   "M23": {
-   "config_records": 10,
-   "configs": [
-    "HP|HP_corn",
-    "HP|HP_cornstover",
-    "HP|HP_glucose",
-    "HP|HP_sugarcane"
-   ]
+   "config_records": 0,
+   "configs": []
   },
   "S1": {
-   "config_records": 97,
+   "config_records": 88,
    "configs": [
     "HP|HP_corn",
     "HP|HP_cornstover",
@@ -142,78 +106,48 @@
   "D15": {
    "samples_unpatchable": 0
   },
+  "D16": {
+   "samples_unpatchable": 0
+  },
+  "D17": {
+   "samples_unpatchable": 0,
+   "by_config": {},
+   "samples_corrected": 1125
+  },
   "D3": {
-   "points": 23944,
-   "samples": 998,
+   "points": 3855,
+   "samples": 181,
    "by_config": {
-    "HP|HP_corn": 722,
-    "HP|HP_cornstover": 725,
-    "HP|HP_glucose": 718,
-    "HP|HP_neutral_corn": 721,
-    "HP|HP_neutral_glucose": 718,
-    "HP|HP_neutral_sugarcane": 721,
-    "HP|HP_sugarcane": 721,
-    "TAL|TAL_SA_corn": 721,
-    "TAL|TAL_SA_cornstover": 604,
-    "TAL|TAL_SA_glucose": 25,
-    "TAL|TAL_SA_sugarcane": 250,
-    "TAL|TAL_corn": 722,
-    "TAL|TAL_cornstover": 604,
-    "TAL|TAL_glucose": 716,
-    "TAL|TAL_sugarcane": 722,
     "ethanol|ethanol_cornstover": 2720,
-    "ethanol|ethanol_sugarcane": 2725,
-    "isobutanol|IBO_EtOH_corn": 2712,
-    "oxalic|oxalic_neutral_sugarcane": 5242,
     "succinic|succinic_corn": 287,
     "succinic|succinic_cornstover": 280,
     "succinic|succinic_glucose": 288,
     "succinic|succinic_sugarcane": 280
    },
    "points_skipped": 0,
-   "moved_kg_per_h_total": 103962427.80258939
+   "moved_kg_per_h_total": 23979702.12540827
   },
   "D4": {
-   "points": 2725,
-   "samples": 109,
-   "by_config": {
-    "ethanol|ethanol_sugarcane": 2725
-   },
-   "credit_USD_per_kg_product_stream": 0.2593232650720395,
-   "credit_rel_spread": 1.4128065140029907e-14
+   "points": 0,
+   "samples": 0,
+   "by_config": {}
   },
   "D6": {
-   "points": 5046,
-   "samples": 203,
-   "by_config": {
-    "HP|HP_corn": 722,
-    "HP|HP_cornstover": 725,
-    "HP|HP_glucose": 718,
-    "HP|HP_neutral_corn": 721,
-    "HP|HP_neutral_glucose": 718,
-    "HP|HP_neutral_sugarcane": 721,
-    "HP|HP_sugarcane": 721
-   }
+   "points": 0,
+   "samples": 0,
+   "by_config": {}
   },
   "D7": {
-   "points": 5075,
-   "samples": 203,
-   "by_config": {
-    "HP|HP_corn": 725,
-    "HP|HP_cornstover": 725,
-    "HP|HP_glucose": 725,
-    "HP|HP_neutral_corn": 725,
-    "HP|HP_neutral_glucose": 725,
-    "HP|HP_neutral_sugarcane": 725,
-    "HP|HP_sugarcane": 725
-   },
+   "points": 0,
+   "samples": 0,
+   "by_config": {},
    "points_skipped": 0,
-   "points_above_inflection": 420
+   "points_above_inflection": 0
   }
  },
- "median_R2": 0.9996548988636187,
- "median_fit_mape": 0.013227139917375726,
- "median_closure_rel": 0.0011861310249284165,
+ "median_R2": 0.9996908840822409,
+ "median_fit_mape": 0.012379724806559826,
+ "median_closure_rel": 0.0010986340616949274,
  "max_sum_check": 1.68082681661321e-14,
  "phi_flags": {
   "ok": 1600
@@ -227,11 +161,11 @@
   "FCI": 1600
  },
  "channels_ok": 1600,
- "median_phi": 0.1441218199116128,
+ "median_phi": 0.14446913885326773,
  "median_area_coverage": 1.0,
- "median_el_area_mismatch": 1.2861059116193884e-16,
- "min_materials_other_rel": 0.002630990465367159,
- "min_utilities_other_rel": 5.654282668998112e-06,
+ "median_el_area_mismatch": 1.251954613616363e-16,
+ "min_materials_other_rel": 0.0024493050372057703,
+ "min_utilities_other_rel": 5.64835966818382e-06,
  "imputed": {},
  "per_config": {
   "HP|HP_corn": 29,
@@ -288,14 +222,14 @@
   "HP": {
    "n_kept": 464,
    "rejected": {},
-   "R2": 0.9998494952989035,
-   "fit_mape": 0.014438225368861567,
-   "closure_rel": 0.0014102610301812897,
-   "closure_rel_max": 0.0035646810912464463,
-   "phi": 0.1450247735176009,
-   "phi_min": 0.12428745719953635,
-   "phi_max": 0.16896064738424854,
-   "phi_cv_productivity": 0.006352324026665918,
+   "R2": 0.9998981381277131,
+   "fit_mape": 0.011827183800175126,
+   "closure_rel": 0.0013823179980040358,
+   "closure_rel_max": 0.0035426212494518152,
+   "phi": 0.14521756594224625,
+   "phi_min": 0.12470349627484341,
+   "phi_max": 0.1689965776927332,
+   "phi_cv_productivity": 0.006207153886585469,
    "F_fixed": 4676460.386373577,
    "fixed_over_labor": 1.9,
    "F_negative": 0,
@@ -321,20 +255,20 @@
    "foc_alloc": {
     "isbl": 464
    },
-   "sum_check_max": 9.604723859140423e-16,
-   "ng_kg_per_kg": 0.0
+   "sum_check_max": 1.174399318446983e-15,
+   "ng_kg_per_kg": 0.10643436253938546
   },
   "TAL": {
    "n_kept": 232,
    "rejected": {},
-   "R2": 0.9996493754273352,
-   "fit_mape": 0.0124540676258157,
-   "closure_rel": 0.0010234750338970092,
-   "closure_rel_max": 0.0032750564026795474,
-   "phi": 0.14525685171141658,
-   "phi_min": 0.12275608029933985,
-   "phi_max": 0.1673204535030873,
-   "phi_cv_productivity": 0.01058234963934783,
+   "R2": 0.9996666593855661,
+   "fit_mape": 0.011477523551584459,
+   "closure_rel": 0.0010176845308086367,
+   "closure_rel_max": 0.0032514543322195643,
+   "phi": 0.14548983348095093,
+   "phi_min": 0.12379447689195924,
+   "phi_max": 0.16741476986336415,
+   "phi_cv_productivity": 0.010250375775767623,
    "F_fixed": 1396120.8520896132,
    "fixed_over_labor": 1.9,
    "F_negative": 0,
@@ -360,18 +294,18 @@
    "foc_alloc": {
     "isbl": 232
    },
-   "sum_check_max": 2.0883168230080873e-15,
-   "ng_kg_per_kg": 0.7096221400230639
+   "sum_check_max": 2.514296297825959e-15,
+   "ng_kg_per_kg": 0.7691261299321991
   },
   "ethanol": {
    "n_kept": 327,
    "rejected": {},
    "R2": 0.9996865720004455,
-   "fit_mape": 0.00891261026784008,
-   "closure_rel": 0.00180473300894507,
-   "closure_rel_max": 0.003097990230399108,
-   "phi": 0.15459311524298677,
-   "phi_min": 0.13557658689615187,
+   "fit_mape": 0.00859070443528249,
+   "closure_rel": 0.0011586421399852871,
+   "closure_rel_max": 0.002466042367624638,
+   "phi": 0.15501433519919436,
+   "phi_min": 0.13594922728282624,
    "phi_max": 0.24524208733371783,
    "phi_cv_productivity": 0.0005551700092237903,
    "F_fixed": 4750000.0,
@@ -402,20 +336,20 @@
     "weights": 109,
     "isbl": 218
    },
-   "sum_check_max": 2.613740601082933e-15,
+   "sum_check_max": 1.9975208550904074e-15,
    "ng_kg_per_kg": 0.0
   },
   "isobutanol": {
    "n_kept": 109,
    "rejected": {},
-   "R2": 0.9950072697505771,
-   "fit_mape": 0.03314428628915473,
-   "closure_rel": 1.4508849631161359e-05,
-   "closure_rel_max": 2.1191792778004503e-05,
-   "phi": 0.21858581827166296,
-   "phi_min": 0.21174385803882523,
-   "phi_max": 0.2279635484163028,
-   "phi_cv_productivity": 6.809763452605423e-06,
+   "R2": 0.9950086542576014,
+   "fit_mape": 0.03255175282982272,
+   "closure_rel": 1.4445181794065028e-05,
+   "closure_rel_max": 2.0829216195200333e-05,
+   "phi": 0.21858581087388027,
+   "phi_min": 0.21174387389626387,
+   "phi_max": 0.22796355348842068,
+   "phi_cv_productivity": 6.803785415298243e-06,
    "F_fixed": 3679999.9999999995,
    "fixed_over_labor": 1.5999999999999999,
    "F_negative": 0,
@@ -434,15 +368,15 @@
    "ng_mixed_pool": {
     "": 109
    },
-   "ng_unpriced_flow_share": 1.1102230246251565e-16,
+   "ng_unpriced_flow_share": 2.220446049250313e-16,
    "capex_weights": {
     "installed": 109
    },
    "foc_alloc": {
     "weights": 109
    },
-   "sum_check_max": 9.215190898121162e-16,
-   "ng_kg_per_kg": 1.5703024274815132
+   "sum_check_max": 7.826769254341128e-16,
+   "ng_kg_per_kg": 1.6064323405052827
   },
   "lactic": {
    "n_kept": 113,
@@ -491,14 +425,14 @@
   "oxalic": {
    "n_kept": 211,
    "rejected": {},
-   "R2": 0.9975956949424767,
-   "fit_mape": 0.018001336277899606,
-   "closure_rel": 0.001587039098175295,
-   "closure_rel_max": 0.0035413929052039816,
-   "phi": 0.14465965147978524,
-   "phi_min": 0.12440235965841295,
-   "phi_max": 0.16695340491874494,
-   "phi_cv_productivity": 0.008462285689980741,
+   "R2": 0.9975957961344654,
+   "fit_mape": 0.0180011197371953,
+   "closure_rel": 0.0015871158984158192,
+   "closure_rel_max": 0.0035414464168188114,
+   "phi": 0.14465971034278144,
+   "phi_min": 0.12440243564403085,
+   "phi_max": 0.16695345532525407,
+   "phi_cv_productivity": 0.008462087109892625,
    "F_fixed": 12175903.700380653,
    "fixed_over_labor": 1.9,
    "F_negative": 0,
@@ -524,7 +458,7 @@
    "foc_alloc": {
     "isbl": 211
    },
-   "sum_check_max": 1.1014374489826501e-15,
+   "sum_check_max": 8.542431077341533e-16,
    "ng_kg_per_kg": 0.0
   },
   "succinic": {

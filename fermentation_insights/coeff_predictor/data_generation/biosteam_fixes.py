@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 Runtime corrections of BioSTEAM defects found while checking the training
-data. Nothing here is applied by the campaigns that built the shipped data
-(harness v3): the corrections are opt-in, for the simulation checks in
-:mod:`.sim_checks` and for the next data rebuild. BioSTEAM itself is not
-modified; the corrections replace a method in memory, in the process that
-calls :func:`apply`, until :func:`remove` is called.
+data. Since harness v4 every campaign applies the corrections named in
+``harness.BIOSTEAM_FIXES`` (:func:`harness.apply_biosteam_fixes`, called by
+``run_campaign`` before any system is loaded) and records them in its
+``config`` and ``sample_start`` records (``biosteam_fixes``); data of
+harness <= 3 were simulated without them. :mod:`.sim_checks` applies and
+removes them explicitly to compare both. BioSTEAM itself is not modified;
+the corrections replace a method in memory, in the process that calls
+:func:`apply`, until :func:`remove` is called.
 
 ``ic_biogas`` (known data defect D17, DESIGN.md section 1)
     ``biosteam.wastewater.high_rate.InternalCirculationRx._run`` (biosteam

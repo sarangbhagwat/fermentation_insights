@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Simulation checks (report-only; data_generation/sim_checks.py): the
 # capacity response at the baseline TRY point, the InternalCirculationRx
-# biogas double count (known data defect D17) and, with
+# biogas double count (known data defect D17: BioSTEAM's original method, the
+# current harness's state and the corrected method) and, with
 # CHECKS=duplicate_inlets, units that receive the same stream twice (D16),
 # for every configuration of every biorefinery, each configuration in its
 # own Python process (the HP systems are module-level singletons), N_WORKERS
-# at a time. A configuration whose JSON already exists in RAW is skipped, so
-# give each set of checks its own RAW. Then merges the per-configuration JSON
-# files into CSV_DIR (default: data_generation/checks, the tables quoted in
-# DESIGN.md D16 / D17 and README section 7; capacity_response.csv is read by
-# report_checks.capacity_response for REPORT.md section 8).
+# at a time. Systems are simulated in the current harness's state (its
+# BioSTEAM corrections applied, as in the campaigns). A configuration whose
+# JSON already exists in RAW is skipped, so give each set of checks its own
+# RAW. Then merges the per-configuration JSON files into CSV_DIR (default:
+# data_generation/checks, see checks/README.md; capacity_response.csv is read
+# by report_checks.capacity_response for REPORT.md section 8).
 #
-# Usage:  N_WORKERS=3 bash run_sim_checks.sh                  # capacity + ic_biogas
+# Usage:  N_WORKERS=3 CHECKS="capacity ic_biogas duplicate_inlets" RAW=/home/user/work/data/sim_checks_v4 bash run_sim_checks.sh
+#         N_WORKERS=3 bash run_sim_checks.sh                  # capacity + ic_biogas
 #         N_WORKERS=3 CHECKS=duplicate_inlets RAW=/home/user/work/data/sim_checks_dup bash run_sim_checks.sh
 #         ADAPTERS="HP TAL" CHECKS="ic_biogas" bash run_sim_checks.sh
 set -uo pipefail

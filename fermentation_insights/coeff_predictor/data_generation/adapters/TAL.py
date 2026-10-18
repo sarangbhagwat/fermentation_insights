@@ -42,6 +42,14 @@ is not neutralized; ``base_cost`` is this NaOH); ``product_water_solubility``
 5.41 g/L. Rows of earlier versions are corrected by
 ``coeff_predictor/data_patches.py``.
 
+adapter_version 3 (TAL_SA_sugarcane only; the other configurations stay v2):
+the Bioindustrial-Park system feeds the juice recycle ``M201-0`` to the
+crushing mill ``U201`` once (fi-TAL; upstream appended it a second time, so
+the mill created mass and sugar: DESIGN.md D16), and the configuration's
+max-titer line was recalibrated on the corrected system. Earlier
+TAL_SA_sugarcane rows cannot be patched and are rejected
+(``unpatchable_D16``).
+
 Robust multi-effect evaporators (data regeneration of 2026-10-17, H1; no
 change of recorded semantics, so no version bump): the IPA evaporator F407 of
 the KSA systems failed at some points ("Failed to extrapolate enthalpy of
@@ -146,10 +154,18 @@ _T_MIN, _T_MAX = 10., 100.  # g/L, TRY_analysis_*_FGI.py
 # feasibility frontier at baseline parameters (y = 5.3, 13 and 25% of
 # theoretical; frontier is linear in y); max_titer stays 0.5% below it.
 # (For cornstover the frontier at y_min is below t_min = 10 g/L.)
+# TAL_SA_sugarcane was recalibrated on the corrected system (adapter v3, D16;
+# 2026-10-18): frontier 16.07 / 39.94 / 78.44 g/L at 5.3 / 13 / 25 % of
+# theoretical, least-squares slope 679 g/L per g/g with the intercept lowered
+# to the most constraining point (-1.3), so the line stays at or below the
+# frontier; within 0.3 g/L of the TAL_sugarcane line (same juicing and
+# fermentation feed). The defective system (the juice recycle fed to the mill
+# twice) had 614 y - 0.6. The same bisection reproduces the TAL_SA_glucose
+# line within -0.4 / -0.1 / -4.4 g/L (29.43 / 74.06 / 148.36 g/L).
 _MAX_TITER_LINE = {
     'TAL_glucose': (1250., -1.9), 'TAL_SA_glucose': (1250., -1.9),
     'TAL_corn': (656., -0.1), 'TAL_SA_corn': (656., -0.1),
-    'TAL_sugarcane': (678., -1.4), 'TAL_SA_sugarcane': (614., -0.6),
+    'TAL_sugarcane': (678., -1.4), 'TAL_SA_sugarcane': (679., -1.3),
     'TAL_cornstover': (421., -1.1), 'TAL_SA_cornstover': (421., -1.1),
 }
 
@@ -235,7 +251,8 @@ class Adapter(BiorefineryAdapter):
                     final_product='KSA' if upgrading else 'TAL',
                     ferm_product_chemical='TAL',
                     final_product_chemical='PotassiumSorbate' if upgrading else 'TAL',
-                    adapter_version=2,
+                    # v3 (TAL_SA_sugarcane only): the juice recycle enters the mill once (D16)
+                    adapter_version=3 if (product, feedstock) == ('TAL_SA', 'sugarcane') else 2,
                     neutralization=False,  # TAL is not neutralized
                     # base dosed in fermentation (pH control; base_cost = its cost)
                     neutralizing_agent='NaOH',

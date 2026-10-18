@@ -7,10 +7,13 @@ were already recorded. Those whose correct value follows from recorded
 columns are corrected here, when :func:`dataset.build` loads the raw JSONL
 (``build(..., patches=True)``, the default). Forward fixes are versioned:
 
-* harness fixes by ``harness_version`` (``sample_start`` record; v3 fixes D3);
+* harness fixes by ``harness_version`` (``sample_start`` record; v3 fixes D3,
+  v4 fixes D17: the BioSTEAM correction ``ic_biogas``, named in the
+  ``sample_start`` field ``biosteam_fixes``);
 * adapter fixes by ``adapter_version`` (configuration dict, written into the
   ``config`` record; v2 fixes D2/D4/D6/D7/D11/D12/M1/M3/M12/M23, succinic v3
-  fixes D15 in the neutral configurations). A sample's
+  fixes D15 in the neutral configurations, TAL v3 fixes D16 in
+  TAL_SA_sugarcane). A sample's
   configuration is the latest ``config`` record preceding its
   ``sample_start`` in its own file (:func:`dataset.read_raw`), so resumed files
   that mix versions are patched row by row.
@@ -74,6 +77,30 @@ D15 (succinic_neutral, adapter < 3): the lime was removed from the broth
     capital were never simulated) -- samples are flagged ``_unpatchable =
     'D15'`` and rejected (``unpatchable_D15``); the four configurations were
     regenerated with adapter v3 (old files in ``raw_archive/succinic_neutral_v2``).
+D16 (TAL_SA_sugarcane, adapter < 3): the juice recycle ``M201-0`` entered the
+    crushing mill ``U201`` twice (Bioindustrial-Park
+    ``system_SA_solubility_exploit_ethanol_sugarcane.py``; fixed on fi-TAL),
+    so the mill created mass and sugar (sugar fed / cane sugar 1.088 instead
+    of 0.946); not patchable (every stream after the mill changes) --
+    samples are flagged ``_unpatchable = 'D16'`` and rejected
+    (``unpatchable_D16``); the configuration was regenerated with TAL adapter
+    v3 (old files in ``raw_archive/D16_D17_v3``).
+D17 (the configurations of :data:`D17_CONFIGS`, without the BioSTEAM
+    correction ``ic_biogas``): BioSTEAM's ``InternalCirculationRx`` (default
+    ``method='lumped'``) counted its biogas twice (the boiler burned methane
+    that was never produced); not patchable (the steam, power, natural gas
+    and boiler capital follow from the biogas) -- samples are flagged
+    ``_unpatchable = 'D17'`` and rejected (``unpatchable_D17``). The
+    criterion is by configuration: :data:`D17_CONFIGS` are the 27
+    configurations whose system holds an ``InternalCirculationRx`` with the
+    lumped method (``affected`` in ``data_generation/checks/ic_biogas_bias.csv``,
+    ``sim_checks.py`` check ``ic_biogas``); a sample has the correction if
+    its ``sample_start`` names ``ic_biogas`` in ``biosteam_fixes`` (written
+    by harness v4, never by harness <= 3). The other 14 configurations
+    (lactic, succinic, ethanol_corn, ethanol_cornstover) have no such unit
+    and keep their harness-v3 rows. The 27 were regenerated with harness v4
+    (old files in ``raw_archive/D16_D17_v3``). A sample flagged by both D16
+    and D17 is rejected as ``D16``; both counts include it.
 M1  config: TAL ``neutralizing_agent = 'NaOH'`` (pH-control base; its cost is
     ``base_cost``), succinic low-pH ``neutralizing_agent = 'Ca(OH)2'`` (partial
     pH control); ``neutralization`` unchanged (False).
@@ -112,7 +139,8 @@ import pandas as pd
 
 from . import downstream
 
-__all__ = ('MARK', 'FIXED_HARNESS_VERSION', 'FIXED_ADAPTER_VERSION', 'D15_FIXED_ADAPTER_VERSION', 'apply',
+__all__ = ('MARK', 'FIXED_HARNESS_VERSION', 'FIXED_ADAPTER_VERSION', 'D15_FIXED_ADAPTER_VERSION',
+           'D16_FIXED_ADAPTER_VERSION', 'D17_FIXED_HARNESS_VERSION', 'D17_CONFIGS', 'D17_FIX', 'apply',
            'sample_versions', 'POINT_PATCHES', 'CONFIG_PATCHES', 'SPEC_PATCHES')
 
 #: field holding the ';'-joined ids of the patches applied to a row/record
@@ -124,6 +152,23 @@ FIXED_ADAPTER_VERSION = 2
 #: succinic adapter version whose neutral configurations form the salt and
 #: acidulate it (D15); older succinic_neutral samples are rejected
 D15_FIXED_ADAPTER_VERSION = 3
+#: TAL adapter version whose TAL_SA_sugarcane system feeds the juice recycle
+#: to the mill once (D16, fi-TAL); older TAL_SA_sugarcane samples are rejected
+D16_FIXED_ADAPTER_VERSION = 3
+#: harness version that applies the BioSTEAM correction D17_FIX
+D17_FIXED_HARNESS_VERSION = 4
+#: name of the D17 correction in the ``biosteam_fixes`` field of ``sample_start``
+D17_FIX = 'ic_biogas'
+#: (biorefinery, config_id) of the configurations whose system holds BioSTEAM's
+#: ``InternalCirculationRx`` with the lumped method (D17; ``affected`` in
+#: data_generation/checks/ic_biogas_bias.csv): all HP and TAL, ethanol_sugarcane,
+#: IBO_EtOH_corn and oxalic_neutral_sugarcane
+D17_CONFIGS = frozenset(
+    [('HP', f'HP_{v}{f}') for v in ('', 'neutral_', 'hexanol_', 'neutral_hexanol_')
+     for f in ('glucose', 'corn', 'sugarcane', 'cornstover')]
+    + [('TAL', f'{p}_{f}') for p in ('TAL', 'TAL_SA') for f in ('glucose', 'corn', 'sugarcane', 'cornstover')]
+    + [('ethanol', 'ethanol_sugarcane'), ('isobutanol', 'IBO_EtOH_corn'),
+       ('oxalic', 'oxalic_neutral_sugarcane')])
 
 POINT_PATCHES = ('D3', 'D4', 'D6', 'D7')
 CONFIG_PATCHES = ('M1', 'M3', 'M12', 'M23')
@@ -469,10 +514,21 @@ def apply(cfg, starts, points):
         ver['config_id'].astype(str).str.startswith('succinic_neutral_') & \
         (ver['adapter_version'] < D15_FIXED_ADAPTER_VERSION)
     up15 = set(ver.index[d15.to_numpy()])
-    starts['_unpatchable'] = ['D2' if sid in up else 'D15' if sid in up15 else ''
-                              for sid in starts['sample_id']]
+    d16 = (ver['biorefinery'] == 'TAL') & (ver['config_id'] == 'TAL_SA_sugarcane') & \
+        (ver['adapter_version'] < D16_FIXED_ADAPTER_VERSION)
+    up16 = set(ver.index[d16.to_numpy()])
+    fixes = dict(zip(starts['sample_id'], starts['biosteam_fixes'])) if 'biosteam_fixes' in starts.columns \
+        else {}
+    up17 = {sid for sid, b, c in zip(ver.index, ver['biorefinery'], ver['config_id'])
+            if (b, c) in D17_CONFIGS and D17_FIX not in _marks(fixes.get(sid))}
+    starts['_unpatchable'] = ['D2' if sid in up else 'D15' if sid in up15 else 'D16' if sid in up16
+                              else 'D17' if sid in up17 else '' for sid in starts['sample_id']]
     counts['D2'] = {'samples_unpatchable': len(up)}
     counts['D15'] = {'samples_unpatchable': len(up15)}
+    counts['D16'] = {'samples_unpatchable': len(up16)}
+    by17 = Counter(f'{ver.at[sid, "biorefinery"]}|{ver.at[sid, "config_id"]}' for sid in up17)
+    counts['D17'] = {'samples_unpatchable': len(up17), 'by_config': dict(sorted(by17.items())),
+                     'samples_corrected': int(sum(D17_FIX in _marks(v) for v in fixes.values()))}
     # point-level fields
     if len(points):
         points = points.reset_index(drop=True)

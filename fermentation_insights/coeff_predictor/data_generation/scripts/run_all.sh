@@ -7,6 +7,8 @@
 # one titer-yield (TY) point (median seconds/point on a 4-core machine):
 #   oxalic 0.2 s, ethanol 0.3 s, TAL ~1-3 s, HP 0.5-3 s, isobutanol 2-4 s,
 #   lactic ~8 s, succinic ~14 s.
+# run_queue.sh runs a list of configurations with these settings, N_WORKERS
+# at a time (the regeneration of 2026-10-18, harness v4: D16 / D17).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SEED=${SEED:-1}

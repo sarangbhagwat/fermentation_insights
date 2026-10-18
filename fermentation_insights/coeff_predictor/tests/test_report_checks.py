@@ -119,7 +119,8 @@ def test_sim_checks_collect_pairs_as_is_and_corrected_runs(tmp_path):
     rec = dict(config_id='X', capacity=dict(baseline=100., points=[
         dict(mult=m, p_feedstock_capacity=100. * m, y=0.5, t=50., r=1., status='ok', MPSP=2. / m ** 0.1,
              recovery=0.9, FCI=1.) for m in (1., 2.)]),
-        ic_biogas=dict(units=[['U1', 'lumped']], as_is=pts(1.), fixed=pts(1.1)))
+        ic_biogas=dict(units=[['U1', 'lumped']], as_is=pts(1.), harness=pts(1.1), fixed=pts(1.1),
+                       harness_version=4, harness_fixes='ic_biogas'))
     json.dump(rec, open(tmp_path / 'X.json', 'w'))
     json.dump(dict(config_id='Y', ic_biogas=dict(units=[], skipped='none')), open(tmp_path / 'Y.json', 'w'))
     written = SC.collect(str(tmp_path), str(tmp_path / 'csv'))
@@ -130,5 +131,11 @@ def test_sim_checks_collect_pairs_as_is_and_corrected_runs(tmp_path):
     assert b.loc['X', 'dMPSP_low_yield_pct'] == pytest.approx(10.)
     assert b.loc['X', 'dMPSP_grid_min_pct'] == pytest.approx(0., abs=1e-9)
     assert not b.loc['Y', 'affected']
+    # the current harness's campaign state (harness v4) equals the corrected method
+    assert b.loc['X', 'dMPSP_harness_vs_fixed_max_abs_pct'] == pytest.approx(0., abs=1e-9)
+    assert b.loc['X', 'dMPSP_harness_vs_as_is_baseline_pct'] == pytest.approx(10.)
+    assert b.loc['X', 'harness_fixes'] == 'ic_biogas' and b.loc['X', 'biogas_kg_h_harness'] == 10.
+    p = pd.read_csv(tmp_path / 'csv' / 'ic_biogas_points.csv')
+    assert sorted(p['mode'].unique()) == ['as_is', 'fixed', 'harness']
     c = pd.read_csv(tmp_path / 'csv' / 'capacity_response.csv')
     assert list(c['mult']) == [1., 2.]

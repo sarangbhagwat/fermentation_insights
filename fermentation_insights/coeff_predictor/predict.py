@@ -218,7 +218,7 @@ _PASS_FIELDS = frozenset((
     'sample_id', 'biorefinery', 'sample_kind', 'seed', 'sample_index', 'source_file', 'separation_variant',
     'y_min', 'y_max', 't_min', 't_max', 'baseline_productivity', 'baseline_yield', 'baseline_titer',
     'downstream_spec_version', 'inflection_yield_config', 'n_points_raw', 'n_ok_raw', 'n_infeasible', 'n_failed',
-    'r_mult', 'harness_version', 'adapter_version', 'data_patches', 'R2', 'n_points', 'fit_mape', 'fit_rmse',
+    'r_mult', 'harness_version', 'adapter_version', 'biosteam_fixes', 'data_patches', 'R2', 'n_points', 'fit_mape', 'fit_rmse',
     'fit_cond', 'phi', 'F_fixed', 'closure_rel', 'sum_check', 'A_mpsp', 'B_mpsp', 'C_mpsp', 'D_mpsp',
     'channels_ok', 'theoretical_yield', 'inflection_yield', 'fs_F_mass', 'fs_price'))
 

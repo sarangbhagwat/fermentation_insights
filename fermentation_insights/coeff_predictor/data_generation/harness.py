@@ -14,6 +14,12 @@ defined in :mod:`schema`.
 Coefficient fitting and all machine learning happen downstream, outside the
 simulation environments.
 
+Since harness v4 (:data:`schema.HARNESS_VERSION`), :func:`run_campaign`
+applies the BioSTEAM runtime corrections :data:`BIOSTEAM_FIXES` of
+:mod:`biosteam_fixes` (D17: the ``InternalCirculationRx`` biogas double
+count) in its process before loading any system, and records them in the
+``config`` and ``sample_start`` records (``biosteam_fixes``).
+
 Usage (from a biorefinery env)::
 
     python -m fermentation_insights.coeff_predictor.data_generation.run \
@@ -40,7 +46,49 @@ __all__ = (
     'InfeasibleSpecification', 'Parameter', 'BiorefineryAdapter',
     'run_campaign', 'collect_area_metrics', 'collect_tea_metrics',
     'describe_chemical', 'describe_feedstock', 'latin_hypercube',
+    'BIOSTEAM_FIXES', 'apply_biosteam_fixes', 'active_biosteam_fixes',
 )
+
+#: BioSTEAM runtime corrections (:mod:`.biosteam_fixes`) that every campaign
+#: applies, in its own process, before the first system is loaded (harness
+#: v4; D17). BioSTEAM itself is not modified.
+BIOSTEAM_FIXES = ('ic_biogas',)
+
+
+def apply_biosteam_fixes(names=BIOSTEAM_FIXES):
+    """Apply the named :mod:`.biosteam_fixes` corrections (default
+    :data:`BIOSTEAM_FIXES`) in this process (idempotent) and return the
+    ';'-joined names of the active corrections (``biosteam_fixes`` field of
+    the ``config`` and ``sample_start`` records). ``run_campaign`` passes
+    the adapter's ``biosteam_fixes`` (:class:`BiorefineryAdapter` default:
+    :data:`BIOSTEAM_FIXES`; the synthetic test adapters, which simulate no
+    BioSTEAM units, pass none)."""
+    names = tuple(names or ())
+    if names:
+        from . import biosteam_fixes
+        biosteam_fixes.apply(*names)
+    active = active_biosteam_fixes()
+    missing = set(names) - set(active.split(';'))
+    if missing:
+        raise RuntimeError(f'BioSTEAM corrections not active: {sorted(missing)}')
+    return active
+
+
+def active_biosteam_fixes():
+    """';'-joined names of the :mod:`.biosteam_fixes` corrections active in
+    this process ('' if none, or if BioSTEAM is not loaded)."""
+    import sys
+    if 'biosteam' not in sys.modules:
+        return ''
+    from . import biosteam_fixes
+    active = []
+    for n in sorted(biosteam_fixes.FIXES):
+        try:
+            if biosteam_fixes.applied(n):
+                active.append(n)
+        except (AttributeError, ImportError):  # no such BioSTEAM class (stand-in module)
+            pass
+    return ';'.join(active)
 
 
 class InfeasibleSpecification(Exception):
@@ -129,6 +177,9 @@ class BiorefineryAdapter:
     name: str = None
     #: Maps UnitGroup names (as in the biorefinery) to CANONICAL_AREAS.
     area_map: dict = {}
+    #: BioSTEAM runtime corrections the campaign applies (harness v4); every
+    #: BioSTEAM adapter keeps the default
+    biosteam_fixes: tuple = BIOSTEAM_FIXES
 
     system = None
     tea = None
@@ -624,10 +675,16 @@ def run_campaign(adapter: BiorefineryAdapter, out_dir: str, *,
 
     Writes ``{out_dir}/{adapter.name}{tag}.jsonl`` containing records:
     'config' (descriptors), 'sample_start', 'point', 'sample_end'.
+    Applies the adapter's ``biosteam_fixes`` (:data:`BIOSTEAM_FIXES`)
+    first (harness v4), so every adapter process simulates with them; the
+    ``config`` and ``sample_start`` records name the active corrections
+    (``biosteam_fixes``).
     """
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f'{adapter.name}{tag}.jsonl')
     done = _completed_samples(path)
+    # harness v4: BioSTEAM runtime corrections, before any system is built
+    fixes = apply_biosteam_fixes(getattr(adapter, 'biosteam_fixes', BIOSTEAM_FIXES))
     configs = adapter.configurations()
     if config_ids:
         configs = [c for c in configs if c['config_id'] in config_ids]
@@ -660,6 +717,7 @@ def run_campaign(adapter: BiorefineryAdapter, out_dir: str, *,
                             'config_id': cid, **config, **dom, **desc,
                             'parameters': json.dumps([(p.name, p.baseline, p.description) for p in params]),
                             'versions': json.dumps(versions),
+                            'biosteam_fixes': fixes,
                             'load_seconds': time.time() - t0})
             for p in pending:
                 if sample_limit is not None and n_run >= sample_limit:
@@ -711,6 +769,7 @@ def _run_sample(adapter, fh, sid, config, dom, params, plan_item,
     _write_row(fh, {'record': 'sample_start', 'sample_id': sid, **values,
                     'r': r, 'sample_kind': plan_item['kind'],
                     'harness_version': HARNESS_VERSION,
+                    'biosteam_fixes': active_biosteam_fixes(),
                     'param_error': param_error, **fs_desc})
     n_ok = 0
     design = try_design(dom, n_y, n_t, rng, plan_item['kind'] != 'baseline',

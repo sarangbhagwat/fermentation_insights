@@ -280,3 +280,45 @@ def test_build_applies_patches_and_drops_flagged_points(tmp_path):
                  and r['sample_id'].startswith('ethanol|ethanol_corn|'))
     assert data2.report['rejections'].get('unpatchable_D2') == n_corn > 0
     assert not (data2.samples['config_id'] == 'ethanol_corn').any()
+
+
+def test_unpatchable_D16_D17_by_configuration():
+    """D17: a configuration with an InternalCirculationRx (D17_CONFIGS) is
+    rejected unless its sample_start names the 'ic_biogas' correction
+    (harness v4); configurations without one keep their harness-v3 rows.
+    D16: TAL_SA_sugarcane before TAL adapter v3."""
+    v4 = {'biosteam_fixes': 'ic_biogas'}
+    cfg, starts, points = _tables([
+        ('HP', 'HP_glucose', 3, {'adapter_version': 2}, {}, [dict(y=0.2, t=20.)]),          # 0: D17
+        ('HP', 'HP_glucose', 4, {'adapter_version': 2}, v4, [dict(y=0.2, t=21.)]),          # 1: ok
+        ('TAL', 'TAL_SA_sugarcane', 3, {'adapter_version': 2}, {}, [dict(y=0.2, t=20.)]),   # 2: D16 (+D17)
+        ('TAL', 'TAL_SA_sugarcane', 4, {'adapter_version': 2}, v4, [dict(y=0.2, t=21.)]),   # 3: D16
+        ('TAL', 'TAL_SA_sugarcane', 4, {'adapter_version': 3}, v4, [dict(y=0.2, t=22.)]),   # 4: ok
+        ('TAL', 'TAL_SA_glucose', 4, {'adapter_version': 2}, v4, [dict(y=0.2, t=22.)]),     # 5: ok (no D16)
+        ('ethanol', 'ethanol_sugarcane', 3, {'adapter_version': 2}, {}, [dict(y=0.2, t=20.)]),  # 6: D17
+        ('ethanol', 'ethanol_cornstover', 3, {'adapter_version': 2}, {}, [dict(y=0.2, t=20.)]),  # 7: no IC
+        ('isobutanol', 'IBO_EtOH_corn', 4, {}, {'biosteam_fixes': ''}, [dict(y=0.2, t=20.)]),  # 8: D17
+        ('oxalic', 'oxalic_neutral_sugarcane', 3, {}, {}, [dict(y=0.2, t=20.)]),            # 9: D17
+        ('succinic', 'succinic_glucose', 3, {'adapter_version': 2}, {}, [dict(y=0.2, t=20.)]),  # 10: no IC
+        ('lactic', 'lactic_neutral_SHF_cornstover', 3, {}, {}, [dict(y=0.2, t=20.)]),       # 11: no IC
+    ])
+    _, s, _, n = dp.apply(cfg, starts, points)
+    got = s.set_index('sample_id')['_unpatchable']
+    want = ['D17', '', 'D16', 'D16', '', '', 'D17', '', 'D17', 'D17', '', '']
+    assert [got[sid] for sid in starts['sample_id']] == want
+    assert n['D16']['samples_unpatchable'] == 2
+    assert n['D17']['samples_unpatchable'] == 5          # the D16 sample 2 counts in both
+    assert n['D17']['by_config'] == {'HP|HP_glucose': 1, 'TAL|TAL_SA_sugarcane': 1, 'ethanol|ethanol_sugarcane': 1,
+                                     'isobutanol|IBO_EtOH_corn': 1, 'oxalic|oxalic_neutral_sugarcane': 1}
+    assert n['D17']['samples_corrected'] == 4
+
+
+def test_D17_configs_are_the_simulated_ic_check():
+    """D17_CONFIGS = the configurations whose system holds an
+    InternalCirculationRx with the lumped method (sim_checks check ic_biogas)."""
+    import os
+    path = os.path.join(os.path.dirname(dp.__file__), 'data_generation', 'checks', 'ic_biogas_bias.csv')
+    b = pd.read_csv(path)
+    assert len(b) == 41
+    affected = set(b.loc[b['affected'].astype(bool), 'config_id'])
+    assert affected == {c for _, c in dp.D17_CONFIGS} and len(dp.D17_CONFIGS) == 27

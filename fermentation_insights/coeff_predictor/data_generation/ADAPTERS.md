@@ -90,6 +90,19 @@ Changes so far:
   utility 'Fuel') and any inlet utility of >= 50 wt% CH4 are now natural gas
   in the utility pool (`ng_*_utility`). v2 booked the boiler gas as unpriced
   material (D3).
+* harness v4: every campaign applies the BioSTEAM runtime corrections of
+  `harness.BIOSTEAM_FIXES` (`biosteam_fixes.py`; so far `'ic_biogas'`:
+  BioSTEAM's `InternalCirculationRx` with the default `method='lumped'` no
+  longer counts its biogas twice, D17) in its own process before any system
+  is loaded, and writes the active ones into the `config` record and every
+  `sample_start` (`biosteam_fixes`, ';'-joined). An adapter inherits them
+  (`BiorefineryAdapter.biosteam_fixes`); only an adapter without BioSTEAM
+  units may set it to `()` (the synthetic test adapters). Rows of the 27
+  configurations with such a reactor that do not name `ic_biogas` (harness
+  <= 3) cannot be patched and are rejected (`unpatchable_D17`); the
+  configurations were regenerated (2026-10-18). The other 14 (lactic,
+  succinic, ethanol_corn, ethanol_cornstover) have no such reactor
+  (`sim_checks.py` check `ic_biogas`) and keep their harness-v3 rows.
 * HP v2: `base_cost` is the purchased `lime_fresh` at the sampled
   `p_base_price`. There is now a per-point `x_inflection_yield` = (1 − sampled
   cell-mass conversion − succinic − xylitol conversions) × theoretical, plus
@@ -112,6 +125,13 @@ Changes so far:
   v2 only set `spec.neutralization`, so the purchased lime was discarded and
   R401 / R401_P / S405 were bypassed (DESIGN.md D15): such rows are rejected
   (`unpatchable_D15`), and the four configurations were regenerated.
+* TAL v3 (TAL_SA_sugarcane only; the other TAL configurations stay v2):
+  Bioindustrial-Park fi-TAL feeds the juice recycle `M201-0` to the crushing
+  mill `U201` once (the upstream system appended it a second time: D16), and
+  the configuration's max-titer line is recalibrated on the corrected
+  system (679 y − 1.3 g/L instead of 614 y − 0.6; TAL_sugarcane: 678 y −
+  1.4). Older TAL_SA_sugarcane rows cannot be patched and are rejected
+  (`unpatchable_D16`); the configuration was regenerated (2026-10-18).
 * TAL, no version change (recorded semantics unchanged): the root search of
   every MultiEffectEvaporator is robust (`TAL._robust_V_overall`). The KSA
   systems' IPA evaporator F407 used to fail ("Failed to extrapolate enthalpy
@@ -216,35 +236,39 @@ F_ferm_product / V_broth / t, min / median / max per configuration) is
 reported in REPORT.md section 1 (`report_checks.yt_definition_check`,
 `results/tables/yt_definition_check.csv`; report only, it rejects nothing).
 
-## Known module and BioSTEAM defects in the shipped data
+## Module and BioSTEAM defects corrected by the regeneration of 2026-10-18
 
 Found in the final data review (2026-10-18) and documented in DESIGN.md
-section 1, "Known data defects"; both are in the training data of the
-shipped models and need a data regeneration (and a pipeline re-run) to
-correct. `sim_checks.py` (`scripts/run_sim_checks.sh`) re-simulates the
-affected configurations with and without the correction and writes the
-effect to `checks/`.
+section 1, "Known data defects"; both were in the training data of the v3
+models and are corrected in the current data (harness v4, TAL adapter v3;
+the 27 affected configurations were regenerated, old raw files in
+`raw_archive/D16_D17_v3`). `sim_checks.py` (`scripts/run_sim_checks.sh`)
+re-simulates the configurations with and without the corrections and
+writes the effect to `checks/` (`checks/README.md`).
 
 * **D16, TAL_SA_sugarcane.** Bioindustrial-Park
   `TAL/systems/system_SA_solubility_exploit_ethanol_sugarcane.py:116`
-  (upstream, not a change of the fi-TAL port) appends the juice recycle
+  (upstream, not a change of the fi-TAL port) appended the juice recycle
   `M201-0` to the crushing mill `U201`, which BioSTEAM 2.54's juicing system
-  already connects, so the recycle enters the mill twice and the
-  fermentation receives 15 % more sugar per kg cane than the other
-  sugarcane configurations (more than the cane holds). Fix at the next
-  rebuild: comment the line out on the fi-TAL branch (as the other six TAL
-  systems do), bump the TAL `adapter_version`, recalibrate the
-  configuration's max-titer line and regenerate its samples.
-  (`sim_checks.py` check `duplicate_inlets`, which finds no other unit with
-  a repeated inlet in the 41 configurations; `checks/duplicate_inlets_*.csv`.)
+  already connects, so the recycle entered the mill twice and the
+  fermentation received 15 % more sugar per kg cane than the other
+  sugarcane configurations (more than the cane holds). Fixed on fi-TAL (the
+  line is commented out, as in the other six TAL systems; the unused
+  `system_SA_THF_Ethanol_solubility_exploit_ethanol_sugarcane.py` keeps the
+  upstream line), TAL `adapter_version` 3 for the configuration, max-titer
+  line recalibrated. `sim_checks.py` check `duplicate_inlets` finds no unit
+  with a repeated inlet in the 41 configurations any more
+  (`checks/duplicate_inlets_bias.csv`; the finding before the fix:
+  `checks/duplicate_inlets_v3_*.csv`).
 * **D17, every system with an `InternalCirculationRx`** (all HP and TAL,
   ethanol_sugarcane, IBO_EtOH_corn, oxalic_neutral_sugarcane). BioSTEAM's
   lumped IC reactor model (`biosteam/wastewater/high_rate/internal_circulation_rx.py`,
   `_run`) degasses both the reacted helper copy of the influent and the
-  reacted outlets into the biogas, so the biogas, and the boiler fuel, is
-  counted twice. `biosteam_fixes.py` holds an opt-in runtime correction
-  (only the helper copy's gas is discarded; BioSTEAM itself is untouched);
-  enable it in the harness with a `harness_version` bump at the next
-  rebuild, regenerate HP, TAL, ethanol_sugarcane and IBO_EtOH_corn, and
-  report the defect upstream. (`sim_checks.py` check `ic_biogas`;
-  `checks/ic_biogas_*.csv`.)
+  reacted outlets into the biogas, so the biogas, and the boiler fuel, was
+  counted twice. The runtime correction `biosteam_fixes.py` ('ic_biogas':
+  only the helper copy's gas is discarded; BioSTEAM itself is untouched) is
+  applied by the harness since v4. `sim_checks.py` check `ic_biogas`
+  simulates each affected configuration as harness <= 3 did (`as_is`), as
+  the current harness does (`harness`) and with the correction (`fixed`):
+  `harness` = `fixed` (`checks/ic_biogas_*.csv`). The defect should be
+  reported to BioSTEAM.

@@ -342,6 +342,8 @@ _UNMAPPED = 'storage'   # not in area_map -> harness puts it in 'facilities'
 class SyntheticAdapter(BiorefineryAdapter):
     """Fake adapter for one synthetic biorefinery."""
 
+    biosteam_fixes = ()   # no BioSTEAM units to correct (stand-in biosteam module)
+
     def __init__(self, name, kappa=0., fail_every=0, drop_columns=None):
         self.name = name
         self.bio = SYNTHETIC_BIOREFINERIES[name]
@@ -556,7 +558,8 @@ def _is_v2_key(k):
 def strip_v2(path):
     """Rewrite a JSONL file as a legacy (v1) harness file: drop the v2 point
     columns (natural gas per pool, labor, OSBL installed cost, per-point
-    ``fs_*``) and ``harness_version`` / ``fs_*`` of ``sample_start``."""
+    ``fs_*``), ``harness_version`` / ``fs_*`` of ``sample_start`` and the
+    ``biosteam_fixes`` field (harness v4) of every record."""
     with open(path) as fh:
         lines = fh.readlines()
     out = []
@@ -568,6 +571,7 @@ def strip_v2(path):
             continue
         if rec.get('record') in ('point', 'sample_start'):
             rec = {k: v for k, v in rec.items() if k != 'harness_version' and not _is_v2_key(k)}
+        rec.pop('biosteam_fixes', None)
         out.append(json.dumps(rec) + '\n')
     with open(path, 'w') as fh:
         fh.writelines(out)

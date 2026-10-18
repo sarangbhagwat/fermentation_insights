@@ -44,9 +44,13 @@ Raw reading
 Data corrections (:mod:`data_patches`, ``build(..., patches=True)``): recorded
 rows of harness/adapter versions that predate a fix are corrected right after
 reading (counts in ``report['data_patches']``; samples carry
-``harness_version``, ``adapter_version`` and the applied patch ids
-``data_patches``); samples that cannot be corrected (ethanol_corn adapter v1,
-D2) are rejected (``unpatchable_D2``).
+``harness_version``, ``adapter_version``, the BioSTEAM runtime corrections
+active in their simulation ``biosteam_fixes`` (harness >= 4) and the applied
+patch ids ``data_patches``); samples that cannot be corrected are rejected
+(``unpatchable_<id>``: ethanol_corn adapter v1, D2; succinic_neutral adapter
+< 3, D15; TAL_SA_sugarcane adapter < 3, D16; the configurations with an
+``InternalCirculationRx`` simulated without the ``ic_biogas`` correction,
+D17).
 
 Feasible points: ``status == 'ok'``, finite positive y, t, MPSP, recovery,
 and ``y <= inflection_yield`` (fitted domain of the publication) with the
@@ -593,6 +597,8 @@ def build(raw_dirs=DEFAULT_RAW_DIR, out_dir=None, filters: QualityFilters = None
             if k.startswith(('p_', 'bp_')):
                 out[k] = v
         out['harness_version'] = srow.get('harness_version', np.nan)
+        bf = srow.get('biosteam_fixes')
+        out['biosteam_fixes'] = bf if isinstance(bf, str) else ''
         out['adapter_version'] = srow.get('adapter_version', np.nan)
         out['data_patches'] = srow.get('data_patches', '') or ''
         out.update(row)

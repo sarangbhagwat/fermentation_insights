@@ -52,11 +52,13 @@ intervals under-cover every TAL configuration, known or new, and new lactic
 configurations, the d′ intervals the lactic ones, and the others are
 over-covered (section 4.5). The model does not reproduce the economy of
 scale: it gives about half of the simulated MPSP change for a 2-3x larger
-plant (section 7). The training data of the HP and TAL plants (and,
-slightly, of sugarcane ethanol and isobutanol) understate their MPSP by
-about 1-13 % at the baseline point, because BioSTEAM's anaerobic
-wastewater reactor counts its biogas twice (data defect D17, section 7);
-the model inherits that bias. For a new feedstock or a new product family the PI-NN
+plant (section 7). The training data of the shipped (v3) checkpoints
+understate the MPSP of the HP and TAL plants (and, slightly, of sugarcane
+ethanol and isobutanol) by about 1-13 % at the baseline point, because
+BioSTEAM's anaerobic wastewater reactor counts its biogas twice (data
+defect D17, section 7), and the checkpoints inherit that bias; the
+processed tables in git hold the data regenerated with the correction
+(2026-10-18), on which the next pipeline run trains. For a new feedstock or a new product family the PI-NN
 is **not better than a nearest-configuration lookup** at the fold level,
 and its intervals are not calibrated (sections 4.2, 4.3, 7).
 
@@ -521,8 +523,9 @@ over configurations is 0.3 % for the feedstock, 0.7 % for electricity and
 are masked in the loss (data defect D8), so its feedstock sensitivity comes
 from the product-blind feedstock head (relative error +22.4 % for TAL_corn
 on the test set). The largest in-sample error, +19.5 % for
-TAL_SA_sugarcane, is mostly a defect of that configuration's data (D16,
-section 7): its simulated cane mill receives the juice recycle twice, so
+TAL_SA_sugarcane, is mostly a defect of that configuration's training data
+(D16, section 7; corrected in the regenerated data): its simulated cane mill
+received the juice recycle twice, so
 its fermentation gets about 15 % more sugar per kg cane than the other
 sugarcane configurations (more than the cane holds) and its simulated
 feedstock demand is too low, while the product-blind head predicts about
@@ -961,12 +964,16 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     sugarcane RIN credit, D6 HP lime price, D7 HP inflection yield, M1/M3/
     M12/M23 metadata, S1 downstream fields). The D2 corn-ethanol samples
     were regenerated, and so were (after the v2 models) the D15
-    succinic_neutral and the H1 TAL_SA samples.
+    succinic_neutral and the H1 TAL_SA samples, and (after the v3 models)
+    the 27 configurations of D16 / D17 (harness v4, TAL adapter v3; older
+    rows of these configurations are rejected as `unpatchable_D16` /
+    `unpatchable_D17`).
   - Known data defects not corrected by the patches (definitions, affected
     configurations, effect on the coefficients and status: DESIGN.md §1,
     "Known data defects"; D15 and H1 were fixed by regeneration after the v2
-    models; D16 and D17, found in the final data review, are in the data of
-    the shipped models):
+    models; D16 and D17, found in the final data review, are in the training
+    data of the shipped v3 checkpoints and were fixed by regeneration on
+    2026-10-18, so the processed tables in git no longer carry them):
 
     | id | configurations | defect | effect |
     |---|---|---|---|
@@ -978,8 +985,8 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
     | D14 | oxalic | fermentation reaction creates mass; no aeration | physically invalid fermentation balance; `aerobic=True` misleading |
     | D15 | succinic_neutral | v2 data: no salt formation simulated (module default `base_neutralizes_product=False`) | in the v2 models the downstream table claims acidulation and gypsum that the data lack; fixed by regeneration (adapter v3: MPSP +0.22 USD/kg vs. low pH); the v3 models train on the corrected data |
     | H1 | TAL_SA_glucose, TAL_SA_sugarcane | v2 data: samples after a failed reset recorded without points | fixed by regeneration (harness reload/`retry`, robust evaporator root search in the TAL adapter) |
-    | D16 | TAL_SA_sugarcane | the Bioindustrial-Park system appends the juice recycle to the cane mill a second time, so its fermentation gets 15 % more sugar per kg cane than the other sugarcane configurations (more than the cane holds) | feedstock demand understated: MPSP about 1-6 % low (median ~3 %), b′ 9-12 % low; most of the +19.5 % in-sample feedstock-sensitivity error (section 4.6); not corrected (needs regeneration and a re-run) |
-    | D17 | all HP and TAL, ethanol_sugarcane, IBO_EtOH_corn (the systems with BioSTEAM's `InternalCirculationRx`; oxalic_neutral_sugarcane has one too, with no effect) | the anaerobic IC reactor of the wastewater treatment counts its biogas twice (BioSTEAM, `method='lumped'`), and the boiler burns the phantom methane | MPSP too low at the baseline by 1-5 % (HP; corn stover 4-5 %), 1-13 % (TAL; corn stover 7-13 %), 0.9 % (ethanol_sugarcane; up to 10 % at low yield) and 0.6 % (IBO); the bias depends on the yield, so b′ (up to 20 % low for corn and corn stover) and the electricity / natural-gas intensities are biased; not corrected (needs regeneration and a re-run; `data_generation/biosteam_fixes.py` prepares the correction) |
+    | D16 | TAL_SA_sugarcane | the Bioindustrial-Park system appends the juice recycle to the cane mill a second time, so its fermentation gets 15 % more sugar per kg cane than the other sugarcane configurations (more than the cane holds) | in the v3 training data: feedstock demand understated, MPSP about 1-6 % low (median ~3 %), b′ 9-12 % low; most of the +19.5 % in-sample feedstock-sensitivity error of the v3 checkpoints (section 4.6). Fixed by regeneration (2026-10-18; fi-TAL fix, TAL adapter v3): sugar fed / cane sugar 0.946 as in the other sugarcane configurations; with D17, MPSP +4 % and b′ +12 % vs. the v3 rows |
+    | D17 | all HP and TAL, ethanol_sugarcane, IBO_EtOH_corn (the systems with BioSTEAM's `InternalCirculationRx`; oxalic_neutral_sugarcane has one too, with no effect) | the anaerobic IC reactor of the wastewater treatment counts its biogas twice (BioSTEAM, `method='lumped'`), and the boiler burns the phantom methane | in the v3 training data: MPSP too low at the baseline by 1-5 % (HP; corn stover 4-5 %), 1-13 % (TAL; corn stover 7-13 %), 0.9 % (ethanol_sugarcane; up to 10 % at low yield) and 0.6 % (IBO); the bias depends on the yield, so b′ (up to 20 % low for corn and corn stover) and the electricity / natural-gas intensities are biased. Fixed by regeneration (2026-10-18): harness v4 applies the runtime correction `data_generation/biosteam_fixes.py`; the regenerated rows are 0.6-12 % higher than the v3 rows at the same TY points (median per configuration; oxalic unchanged; up to 21 % at low yields on corn stover), b′ 9-22 % higher on corn and corn stover |
 
   - TAL's final-product purity varies with titer.
   - Some cost-allocation conventions differ between modules and cannot be
@@ -994,17 +1001,21 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
 | data | in git | size | needed for |
 |---|---|---|---|
 | checkpoints `models/release`, `models/final_dev` | yes | 5 MB | predictions (the API needs nothing else) |
-| processed tables `data/processed/{samples,points,configs}.csv.gz` (+ `report.json`, `experiments_fingerprint.json`: build statistics and the raw files they were built from) | yes | 11 MB | retraining, re-running `experiments.py` (every REPORT.md number derives from them; data hash `c345efda41c4fdca`, logged by `experiments.py` and checked by `tests/test_shipped_data.py`), the checkpoint-verification tests (`tests/test_serving_consistency.py`, `tests/test_user_api_robustness.py`) |
+| processed tables `data/processed/{samples,points,configs}.csv.gz` (+ `report.json`, `experiments_fingerprint.json`: build statistics and the raw files they were built from) | yes | 11 MB | retraining, re-running `experiments.py` (data hash `ae69af98b3ba4561`: the data regenerated on 2026-10-18 with D16 / D17 corrected, logged by `experiments.py` and checked by `tests/test_shipped_data.py`; the v3 run in `results/v3` and the current checkpoints were trained on the tables before it, data hash `c345efda41c4fdca`, in git history up to commit 85ec2b4), the checkpoint-verification tests (`tests/test_serving_consistency.py`, `tests/test_user_api_robustness.py`) |
 | frozen split, plan, report tables `results/{split,split_applied,plan}.json`, `results/tables/` | yes | – | the test split and the reported numbers |
 | raw simulation records (`<raw>/<biorefinery>/*.jsonl`, one JSON-lines file per configuration) | **no** | 231 MB (27 MB as `.tar.xz`) | rebuilding the processed tables (step 4) and the raw sample-coverage table (`tables/data_coverage.csv`, shipped) |
 | fit cache `results/cache/` | no | – | nothing (an empty cache re-fits every job: about 1.5 h on 4 CPUs) |
 
 The raw records are regenerated by the campaigns of steps 1-3 (7 conda
 environments, ~30 CPU-hours); for example, a re-run of the oxalic baseline
-sample (same seed and Bioindustrial-Park commit, current harness) reproduced
+sample (same seed and Bioindustrial-Park commit, harness v3) reproduced
 the stored MPSP at all 25 points to a relative difference of 3e-15 (only
 the natural-gas fields differ: harness v3 books the boiler gas as a utility,
-which data patch D3 does for the stored v2 records). When no
+which data patch D3 does for the stored v2 records), and the regeneration
+of 2026-10-18 (harness v4, `data_generation/scripts/run_queue.sh`, 2 h 50 min
+on 4 CPUs for the 27 configurations with an `InternalCirculationRx`)
+reproduced the oxalic configuration's 5242 stored MPSPs to 3.5e-5 (its IC
+correction is negligible). When no
 raw file is found, `experiments.py` uses the shipped processed tables (it
 logs this) and keeps the shipped sample-coverage table.
 
@@ -1061,7 +1072,12 @@ script):
    ethanol 0.3 s, HP 0.5–3 s, TAL 1–3 s, isobutanol 2–4 s, lactic ~8 s,
    succinic ~14 s per titer-yield point, ~25 points per sample, with
    run_all.sh's sample counts): roughly 30 CPU-hours in total, run
-   concurrently.
+   concurrently. `run_queue.sh JOBS_FILE` runs a list of `<adapter>
+   <config_id>` lines with the same settings and output files,
+   `N_WORKERS` configurations at a time (used for the regeneration of
+   2026-10-18). Since harness v4 every campaign applies the BioSTEAM runtime
+   corrections of `data_generation/biosteam_fixes.py` (D17) and names them
+   in its records.
 4. **Dataset** (optional; the experiments build it themselves). This step
    reads the raw files, applies the data patches, fits the coefficients and
    channels, and filters (minutes):
