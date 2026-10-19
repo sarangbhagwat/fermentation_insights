@@ -4060,8 +4060,8 @@ def contextual_response_text(t):
             'regime inputs do not separate a configuration that buys base from one that does not), so their '
             'slopes are learned from the within-configuration spread of samples in which every parameter varies '
             'at once. Do not run sweeps of these parameters with the model; `predict()` / `mpsp()` warn when one '
-            'of the unreliable ones (or the unchecked cell-mass yield) is given '
-            '(`predict.CONTEXT_RESPONSE_UNRELIABLE`, README section 7).\n')
+            'of the unreliable ones, the enzyme loading (whose response is too small) or the unchecked cell-mass '
+            'yield is given (`predict.CONTEXT_RESPONSE_UNRELIABLE`, README section 7).\n')
 
 
 def loco_structure_section(checks):

@@ -295,11 +295,11 @@ _INFLECTION_R2_MIN = 0.9
 #: the wrong sign, or is spurious or missed, for some configurations (acid and
 #: base price, boiler and turbogenerator efficiency, income tax), is about 40 %
 #: low (enzyme loading), or was not checked (cell-mass yield). A given value
-#: warns (``ApplicabilityWarning``); IRR and operating days have the right sign
-#: in every configuration and are not listed
+#: warns (``ApplicabilityWarning``); IRR, operating days and the
+#: saccharification yield have the right sign in every configuration checked
+#: and are not listed
 CONTEXT_RESPONSE_UNRELIABLE = ('p_income_tax', 'p_boiler_efficiency', 'p_turbogenerator_efficiency',
-                               'p_base_price', 'p_acid_price', 'p_enzyme_loading', 'p_saccharification_yield',
-                               'p_cell_mass_yield')
+                               'p_base_price', 'p_acid_price', 'p_enzyme_loading', 'p_cell_mass_yield')
 #: coverage schemes of ``meta['coverage_by_family']`` and their labels
 _COVERAGE_SCHEMES = {'known_configuration': 'known configuration: min of random CV and productivity tails',
                      'new_configuration': 'new configuration: leave-one-configuration-out CV'}
@@ -1204,7 +1204,7 @@ class CoefficientPredictor:
                           + ' -- the model applies the given value relative to the imputed one, not to the '
                           'configuration\'s own value, so the prediction is biased by the model\'s response between '
                           'the two (e.g. ethanol_corn, IRR 0.15, with p_IRR=0.10: +0.3 % MPSP, where BioSTEAM gives '
-                          '-6.6 %); omit the parameter to predict the configuration at its own value (column '
+                          '-6.5 %, data_generation/checks/tea_basis.csv); omit the parameter to predict the configuration at its own value (column '
                           'tea_fixed; README section 5)', ApplicabilityWarning, stacklevel=4)
         return changed
 

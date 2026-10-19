@@ -47,7 +47,9 @@ configuration without an input-identical twin in training, and 16-47 % for ethan
 or a new product family (47.0 %) the model is not better than a nearest-configuration lookup at the fold level; for
 an unseen feedstock or product the intervals are not calibrated (MPSP coverage 0.76 and 0.70 of a nominal 0.90), and
 such predictions are flagged. It reproduces only about two thirds of the simulated economy of scale, so scale-up
-effects should not be read from it. The numbers are those of its
+effects should not be read from it, and its response to the reagent prices, the boiler and turbogenerator efficiencies
+and the income tax has the wrong sign for some configurations, so sweeps of these parameters should not be run with it
+either (both checked against BioSTEAM). The numbers are those of its
 [validation report](fermentation_insights/coeff_predictor/results/REPORT.md) (v4 run, trained on the data with the
 D16 / D17 simulation corrections; the v1, v2 and v3 reports are kept as history). It is independent of the
 publication-reproduction steps above; see its [README](fermentation_insights/coeff_predictor/README.md) for
