@@ -476,3 +476,67 @@ def test_yields_below_the_training_range_warn(with_y_domain, shipped):
     assert any('y below the training yield range' in m for m in msgs), msgs
     _, msgs = _caught(P.mpsp, q, y=2 * ymin, t=60.)
     assert not any('y below the training yield range' in m for m in msgs), msgs
+
+
+def test_training_rows_encode_as_their_configuration(with_family_coverage, shipped):
+    """Training rows vary in the sample's own inflection yield and (lactic,
+    isobutanol) the feedstock composition; they still encode as their
+    configuration (the known-configuration coverage is measured on such
+    rows), while an inflection yield outside the configuration's training
+    spread makes a new configuration."""
+    s, _ = shipped
+    P = with_family_coverage
+    rows = s[s['sample_kind'] == 'random'].groupby('config_id').head(3).reset_index(drop=True)
+    _, _, det = _quiet(P._batch, rows, None, False)
+    assert all(c in d['training_configs'] for c, d in zip(rows['config_id'], det))
+    tal = s[(s['config_id'] == 'TAL_glucose') & (s['sample_kind'] == 'random')].head(2).reset_index(drop=True)
+    out = _quiet(P.predict, tal)
+    assert out['intervals_undercovered'].tolist() == ['c 0.76, g 0.44'] * 2
+    far = tal.assign(inflection_yield=0.5 * tal['inflection_yield'])
+    assert _quiet(P.predict, far)['intervals_undercovered'].tolist() == ['g 0.43'] * 2
+
+
+def test_cell_mass_yield_sets_the_inflection_yield(shipped):
+    """A given p_cell_mass_yield of a known configuration sets its inflection
+    yield by the configuration's training relation (HP: exactly
+    (1 - p_cell_mass_yield) x theoretical yield), unless inflection_yield is
+    given; mpsp()'s fitted-domain check uses the derived value."""
+    _, P = shipped
+    q = dict(config_id='HP_cornstover', r=0.28, feedstock_price=0.06)
+    df, _, det = _quiet(P._batch, dict(q, p_cell_mass_yield=0.2), None, False)
+    assert df['inflection_yield'][0] == pytest.approx(0.8 * df['theoretical_yield'][0], rel=1e-3)
+    assert det[0]['inflection_derived'][2] == 'HP_cornstover'
+    out, msgs = _caught(P.predict, dict(q, p_cell_mass_yield=0.2))
+    assert 'inflection_yield (from p_cell_mass_yield)' in out['filled_from_registry'][0].split(', ')
+    assert any('derived from the given p_cell_mass_yield' in m for m in msgs), msgs
+    # given inflection yield: kept; no cell-mass yield: registry baseline
+    df2, _, _ = _quiet(P._batch, dict(q, p_cell_mass_yield=0.2, inflection_yield=0.7), None, False)
+    assert df2['inflection_yield'][0] == 0.7
+    df3, _, det3 = _quiet(P._batch, q, None, False)
+    assert 'inflection_derived' not in det3[0]
+    # TAL_glucose at the high end of its cell-mass range: the derived
+    # inflection yield is below the registry one, and mpsp() warns above it
+    tal = dict(config_id='TAL_glucose', r=0.2, feedstock_price=0.4)
+    infl0 = float(_quiet(P._batch, tal, None, False)[0]['inflection_yield'][0])
+    dft = _quiet(P._batch, dict(tal, p_cell_mass_yield=0.405), None, False)[0]
+    infl = float(dft['inflection_yield'][0])
+    assert infl < infl0
+    y = 0.5 * (infl + infl0)
+    _, msgs = _caught(P.mpsp, dict(tal, p_cell_mass_yield=0.405), y=y, t=30.)
+    assert any('y above the inflection yield' in m for m in msgs), msgs
+    _, msgs = _caught(P.mpsp, tal, y=y, t=30.)
+    assert not any('y above the inflection yield' in m for m in msgs), msgs
+
+
+def test_given_contextual_parameters_with_unreliable_response_warn(shipped):
+    _, P = shipped
+    q = dict(config_id='lactic_lowpH_SHF_cornstover', r=0.9, feedstock_price=0.06)
+    for extra, want in ((dict(p_acid_price=0.1), True), (dict(p_turbogenerator_efficiency=0.85), True),
+                        (dict(p_IRR=0.11), False), (dict(p_operating_days=330.), False),
+                        (dict(p_acid_price='n/a'), False), ({}, False)):
+        for f, kw in ((P.predict, {}), (P.mpsp, dict(y=0.5, t=80.))):
+            _, msgs = _caught(f, dict(q, **extra), **kw)
+            got = any('not reliable' in m and 'REPORT.md section 8 (ii-d)' in m for m in msgs)
+            assert got == want, (extra, msgs)
+    from fermentation_insights.coeff_predictor.predict import CONTEXT_RESPONSE_UNRELIABLE
+    assert set(CONTEXT_RESPONSE_UNRELIABLE).isdisjoint({'p_IRR', 'p_operating_days'})

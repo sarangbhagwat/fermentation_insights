@@ -272,6 +272,34 @@ TEA_SETTINGS_PATH = os.path.join(os.path.dirname(__file__), 'registry', 'tea_set
 #: relative tolerance for a given contextual TEA parameter to equal the
 #: configuration's fixed value
 _TEA_RTOL = 1e-6
+#: identity columns (:meth:`CoefficientPredictor._identity_index`) that vary
+#: within a training configuration: the sample's own inflection yield (it
+#: follows the sampled cell-mass and byproduct yields) and, in the lactic and
+#: isobutanol configurations, the sampled feedstock composition. A row
+#: matches a configuration on these within the range of the configuration's
+#: training rows (from the applicability-domain matrix, i.e. the training
+#: rows' encodings), on the other identity columns exactly
+_WITHIN_CONFIG_COLUMNS = ('inflection_yield', 'phys_inflection_over_theoretical', 'phys_fs_nonsugar_solids')
+_WITHIN_CONFIG_PREFIXES = ('fs_w_',)
+#: [standardized units] tolerance of the training-row assignment (the AD
+#: matrix is stored in float32) and of the within-range match
+_ENC_ATOL = 1e-4
+#: minimum R^2 of a configuration's training relation inflection_yield ~
+#: p_cell_mass_yield for deriving a query's inflection yield from its
+#: cell-mass yield (:meth:`CoefficientPredictor._derive_inflection`)
+_INFLECTION_R2_MIN = 0.9
+#: contextual and technological parameters whose MPSP response the model does
+#: not reproduce reliably: in the simulation check ``sim_checks.py``
+#: ``contextual`` / ``report_checks.contextual_response`` (REPORT.md section 8
+#: (ii-d)) the predicted response over each configuration's 10-90 % range has
+#: the wrong sign, or is spurious or missed, for some configurations (acid and
+#: base price, boiler and turbogenerator efficiency, income tax), is about 40 %
+#: low (enzyme loading), or was not checked (cell-mass yield). A given value
+#: warns (``ApplicabilityWarning``); IRR and operating days have the right sign
+#: in every configuration and are not listed
+CONTEXT_RESPONSE_UNRELIABLE = ('p_income_tax', 'p_boiler_efficiency', 'p_turbogenerator_efficiency',
+                               'p_base_price', 'p_acid_price', 'p_enzyme_loading', 'p_saccharification_yield',
+                               'p_cell_mass_yield')
 #: coverage schemes of ``meta['coverage_by_family']`` and their labels
 _COVERAGE_SCHEMES = {'known_configuration': 'known configuration: min of random CV and productivity tails',
                      'new_configuration': 'new configuration: leave-one-configuration-out CV'}
@@ -378,6 +406,8 @@ class CoefficientPredictor:
             cap_user = self._check_capacity(rec)     # positive number where given (else ValueError)
             self._check_numeric(rec)                 # numbers where given (else ValueError)
             self._drop_unknown_composition(rec)      # an fs_w_* key the checkpoint does not know: ignored
+            given_ctx = [c for c in CONTEXT_RESPONSE_UNRELIABLE if c in rec and not is_not_applicable(rec[c])
+                         and not _bad(rec[c])]
             rec, f = apply_spec_registry(rec, reg, info)
             # no neutralization (or nothing to neutralize) and no agent given:
             # 'none', as the training rows encode a missing agent
@@ -433,7 +463,7 @@ class CoefficientPredictor:
                             custom_feedstock=list(info.get('custom_feedstock', [])),
                             unseen_levels=unseen, alias_conflict=alias,
                             config_id=None if _bad_name(rec.get('config_id')) else str(rec['config_id']),
-                            context_ref=ref, context_outside=outside,
+                            context_ref=ref, context_outside=outside, context_given=given_ctx,
                             calibrated=bool(fs_known and fp_known and pair in reg.get('pair', {})) if reg else True))
         out = pd.DataFrame(rows)
         return (out, det) if details else (out, [d['filled'] for d in det])
@@ -762,6 +792,19 @@ class CoefficientPredictor:
         batch = self.spec.transform(df, descriptors=descriptors, strict=True, missing_categorical='other')
         for d, m in zip(det, self._training_configs(batch.X)):
             d['training_configs'] = m
+        if self._derive_inflection(df, det):
+            # the inflection yield of a given cell-mass yield (training relation)
+            batch = self.spec.transform(df, descriptors=descriptors, strict=True, missing_categorical='other')
+            for d, m in zip(det, self._training_configs(batch.X)):
+                d['training_configs'] = m
+            der = [(i, d['inflection_derived']) for i, d in enumerate(det) if d.get('inflection_derived')]
+            if warn and der:
+                warnings.warn('; '.join(f'row {i}: inflection_yield={v:.4g} (registry baseline {o:.4g})'
+                                        for i, (v, o, c) in der[:6])
+                              + ' -- derived from the given p_cell_mass_yield by the training relation of the '
+                              'configuration (' + ', '.join(sorted({c for _, (_, _, c) in der})) + '), as in its '
+                              'training samples; give inflection_yield to override (column filled_from_registry; '
+                              'README section 5)', UserWarning, stacklevel=3)
         if self._apply_tea_fixed(df, det, warn):
             # a given TEA parameter equal to the configuration's fixed value:
             # encoded as missing, as in its training rows
@@ -813,6 +856,20 @@ class CoefficientPredictor:
                          ' -- the response to these parameters is extrapolated')
                       + '; in_domain does not include this check (column contextual_outside_range)',
                       ApplicabilityWarning, stacklevel=stacklevel)
+
+    @staticmethod
+    def _warn_context_response(det, stacklevel=4):
+        rows = [(i, d['context_given']) for i, d in enumerate(det) if d.get('context_given')]
+        if not rows:
+            return
+        names = sorted({c for _, g in rows for c in g})
+        warnings.warn('given contextual parameter(s) ' + ', '.join(names) + f' (rows {[i for i, _ in rows][:10]}): '
+                      'the model\'s MPSP response to these is not reliable -- in the BioSTEAM check of the response '
+                      'over each configuration\'s 10-90 % range (REPORT.md section 8 (ii-d)) it has the wrong sign, '
+                      'or a spurious or missed response, for some configurations (acid and base price, boiler and '
+                      'turbogenerator efficiency, income tax), is about 40 % low for the enzyme loading and was not '
+                      'checked for the cell-mass yield; do not run sweeps of these parameters with the model '
+                      '(README section 7)', ApplicabilityWarning, stacklevel=stacklevel)
 
     def _warn_uncalibrated(self, det, stacklevel=4):
         bad = [i for i, d in enumerate(det) if not d['calibrated']]
@@ -936,20 +993,149 @@ class CoefficientPredictor:
                  and not (cols[i].startswith('missing__') and cols[i][len('missing__'):] in params)], int)
         return idx
 
+    def _identity_split(self):
+        """(exact, ranged): the columns of :meth:`_identity_index` matched
+        exactly / within the configuration's training range
+        (:data:`_WITHIN_CONFIG_COLUMNS`, :data:`_WITHIN_CONFIG_PREFIXES`)."""
+        sp = getattr(self, '_ident_split', None)
+        if sp is None:
+            cols = self.spec.columns
+            idx = self._identity_index()
+
+            def ranged(c):
+                c = c[len('missing__'):] if c.startswith('missing__') else c
+                return c in _WITHIN_CONFIG_COLUMNS or c.startswith(_WITHIN_CONFIG_PREFIXES)
+            sp = self._ident_split = (np.asarray([i for i in idx if not ranged(cols[i])], int),
+                                      np.asarray([i for i in idx if ranged(cols[i])], int))
+        return sp
+
+    def _training_rows(self):
+        """{config_id: (row indices, lo, hi)}: the training rows of each
+        training configuration in the applicability-domain matrix (the
+        training rows' encodings ``ensemble.ad.Z``; rows whose exact identity
+        columns equal the configuration's baseline encoding, so input twins
+        share them) and the range of the ranged identity columns over these
+        rows and the baseline encoding; {} without an AD matrix (then every
+        identity column is matched exactly)."""
+        tr = getattr(self, '_trows', None)
+        if tr is not None:
+            return tr
+        tr = {}
+        cids, XC = self._config_encodings()
+        ad = self.ensemble.ad
+        Z = getattr(ad, 'Z', None) if ad is not None else None
+        nf = len(self.spec.columns)
+        ex, rg = self._identity_split()
+        if XC is not None and Z is not None and np.ndim(Z) == 2 and Z.shape[1] >= nf and len(rg):
+            Zx = np.asarray(Z, float)[:, :nf]
+            for j, c in enumerate(cids):
+                rows = np.flatnonzero(np.abs(Zx[:, ex] - XC[j, ex]).max(1) <= _ENC_ATOL) if len(ex) \
+                    else np.arange(len(Zx))
+                V = np.vstack([Zx[np.ix_(rows, rg)], XC[j, rg][None]])
+                tr[c] = (rows, V.min(0), V.max(0))
+        self._trows = tr
+        return tr
+
     def _training_configs(self, X):
-        """Per row of X: the training configurations whose baseline
-        encoding equals the row's on :meth:`_identity_index` (several for
-        input twins; [] for a new configuration). A query by ``config_id`` or
-        by names that resolve to one configuration matches it; one whose
-        regime, downstream, product or feedstock fields differ does not."""
+        """Per row of X: the training configurations it encodes as (several
+        for input twins; [] for a new configuration): equal to the
+        configuration's baseline encoding on the exact identity columns
+        (:meth:`_identity_split`) and, on the ranged ones (the sample's own
+        inflection yield and feedstock composition, which vary within a
+        configuration in training), within the range of its training rows.
+        A query by ``config_id`` or by names that resolve to one configuration
+        matches it, and so do its training rows; one whose regime,
+        downstream, product or feedstock fields differ, or whose inflection
+        yield or composition is outside the configuration's training spread,
+        does not."""
         cids, XC = self._config_encodings()
         if XC is None or not len(X):
             return [[] for _ in range(len(X))]
-        idx = self._identity_index()
+        X = np.asarray(X, float)
+        tr = self._training_rows()
+        idx = self._identity_index() if not tr else self._identity_split()[0]
+        rg = self._identity_split()[1]
         lut = {}
         for c, k in zip(cids, self._row_keys(XC[:, idx])):
             lut.setdefault(k, []).append(c)
-        return [list(lut.get(k, [])) for k in self._row_keys(np.asarray(X)[:, idx])]
+        out = []
+        for x, k in zip(X, self._row_keys(X[:, idx])):
+            m = list(lut.get(k, []))
+            if tr:
+                m = [c for c in m if c in tr and np.all(x[rg] >= tr[c][1] - _ENC_ATOL)
+                     and np.all(x[rg] <= tr[c][2] + _ENC_ATOL)]
+            out.append(m)
+        return out
+
+    def _inflection_relation(self, cid):
+        """(slope, intercept, R^2) of the training relation inflection_yield
+        = slope * p_cell_mass_yield + intercept [g/g] over the training rows
+        of ``cid`` (:meth:`_training_rows`; in training the sample's own
+        inflection yield follows its sampled cell-mass yield, for HP exactly
+        (1 - p_cell_mass_yield) x theoretical yield), or None (no AD matrix,
+        cell-mass yield not sampled for the configuration, R^2 below
+        :data:`_INFLECTION_R2_MIN`)."""
+        cache = self.__dict__.setdefault('_infl_rel', {})
+        if cid in cache:
+            return cache[cid]
+        rel = None
+        tr = self._training_rows().get(cid)
+        cols = self.spec.columns
+        num = {d['name']: d for d in self.spec.numeric}
+        if tr is not None and {'inflection_yield', 'p_cell_mass_yield'} <= set(cols) \
+                and {'inflection_yield', 'p_cell_mass_yield'} <= set(num):
+            Z = np.asarray(self.ensemble.ad.Z, float)[tr[0]]
+
+            def raw(c):
+                d = num[c]
+                v = Z[:, cols.index(c)] * d['std'] + d['mean']
+                return 10 ** v if d['log'] else v
+            ok = np.ones(len(Z), bool)
+            if 'missing__p_cell_mass_yield' in cols:
+                ok = Z[:, cols.index('missing__p_cell_mass_yield')] < 0.5
+            x, yv = raw('p_cell_mass_yield')[ok], raw('inflection_yield')[ok]
+            if len(x) >= 5 and np.std(x) > 1e-9 and np.std(yv) > 1e-12:
+                slope, icpt = np.polyfit(x, yv, 1)
+                r2 = 1 - np.var(yv - (slope * x + icpt)) / np.var(yv)
+                if r2 >= _INFLECTION_R2_MIN:
+                    rel = (float(slope), float(icpt), float(r2))
+        cache[cid] = rel
+        return rel
+
+    def _derive_inflection(self, df, det):
+        """Rows with a given ``p_cell_mass_yield`` and an inflection yield
+        filled from the registry (not given) that encode as a training
+        configuration (else that of their ``config_id``): the inflection
+        yield from the configuration's training relation
+        (:meth:`_inflection_relation`), so that the input stays on the
+        training manifold and the fitted-domain check of :meth:`mpsp` uses
+        it. Records ``d['inflection_derived']`` = (value, registry value,
+        config_id); True if any row was changed."""
+        changed = False
+        if 'p_cell_mass_yield' not in df or 'inflection_yield' not in df:
+            return changed
+        for i, d in enumerate(det):
+            if 'inflection_yield' not in d['filled'] or 'p_cell_mass_yield' in d['filled'] \
+                    or 'p_cell_mass_yield' in d['contextual'] or _bad(df.at[i, 'p_cell_mass_yield']):
+                continue
+            cids = list(d.get('training_configs') or [])
+            if not cids and d.get('config_id') and not d['conflict'] and not d['custom_feedstock']:
+                cids = [d['config_id']]
+            rel = self._inflection_relation(cids[0]) if cids else None
+            if rel is None:
+                continue
+            v = rel[0] * float(df.at[i, 'p_cell_mass_yield']) + rel[1]
+            ty = pd.to_numeric(pd.Series([df.at[i, 'theoretical_yield'] if 'theoretical_yield' in df else np.nan]),
+                               errors='coerce').iloc[0]
+            if not (v > 0) or (np.isfinite(ty) and v > ty):
+                continue
+            old = float(df.at[i, 'inflection_yield'])
+            df.at[i, 'inflection_yield'] = v
+            d['inflection_derived'] = (v, old, cids[0])
+            d['filled'] = [c if c != 'inflection_yield' else 'inflection_yield (from p_cell_mass_yield)'
+                           for c in d['filled']]
+            changed = True
+        return changed
 
     def _tea_settings(self):
         """{config_id: TEA settings} of :data:`TEA_SETTINGS_PATH` ({} if absent)."""
@@ -1167,6 +1353,7 @@ class CoefficientPredictor:
         if warn:
             self._warn_imputed(batch, det)
             self._warn_context_outside(det)
+            self._warn_context_response(det)
         if isinstance(spec, pd.DataFrame):
             out.index = spec.index                    # rows in the spec's order
         return out
@@ -1236,6 +1423,7 @@ class CoefficientPredictor:
         if warn:
             self._warn_imputed(batch, det)
             self._warn_context_outside(det, stacklevel=3)
+            self._warn_context_response(det, stacklevel=3)
         impossible = self._check_yt(df, y, t, warn)
         outs = ens.member_outputs(batch)
         n = len(batch)
