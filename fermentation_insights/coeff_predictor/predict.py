@@ -129,11 +129,13 @@ development CV, with the measured coverage, e.g. ``'c 0.76, g 0.40'`` for a
 known TAL configuration; '' otherwise; see "Interval calibration" below),
 ``imputed`` (per row), ``contextual_defaults`` (contextual parameters not
 given by the user; their origin in ``contextual_source``), ``not_applicable``
-(contextual parameters kept NaN), ``contextual_outside_range`` (contextual
+(contextual parameters kept NaN, i.e. encoded as missing as in training), ``contextual_outside_range`` (contextual
 parameters, incl. ``feedstock_capacity``, outside the training range of the
 row's configuration or (pair, feedstock) combination, or never defined for
 it; with an ApplicabilityWarning; not part of ``in_domain``, whose range
-check is global) and ``filled_from_registry``. A given feedstock capacity
+check is global), ``filled_from_registry`` and ``tea_fixed`` (contextual
+TEA parameters fixed by the row's configuration, "TEA settings fixed by a
+configuration" below). A given feedstock capacity
 (``p_feedstock_capacity``, alias ``fs_F_mass``) must be a positive number
 (ValueError otherwise). Without per-channel heads (``channels=False``) the
 breakdown has a ``ch__rest__<k>`` channel. Intervals are omitted when the
@@ -182,8 +184,8 @@ wide (MPSP half-width typically 15-30 % of the MPSP for a known
 configuration, for a random-CV error of about 3.5 %). For a NEW
 configuration of a known product (LOCO scores) the MPSP intervals
 under-cover ethanol (0.77) and lactic acid (0.69), g under-covers TAL
-(0.43) and lactic acid (0.65), and b', c', d' under-cover ethanol and
-lactic acid (d' also oxalic acid). ``ensemble.meta['coverage_by_family']``
+(0.43) and lactic acid (0.65), b' and c' under-cover ethanol and lactic
+acid, d' lactic and oxalic acid, a' isobutanol. ``ensemble.meta['coverage_by_family']``
 (written by the experiment pipeline from the development out-of-fold
 scores; report-only metadata, the quantiles stay pooled) holds the coverage
 of the checkpoint's quantiles per fermentation product and key for a known
@@ -192,10 +194,28 @@ productivity-tail coverage) and for a new one (``'new_configuration'``:
 LOCO). ``predict`` / ``mpsp`` list the keys whose coverage for the row's
 family is more than :data:`UNDERCOVERAGE_TOL` below nominal in
 ``intervals_undercovered`` (e.g. ``'c 0.76, g 0.40'`` for a known TAL
-configuration; a row named by a training ``config_id``, without its own
-feedstock or conflicting names, counts as a known configuration, any other
-row of a known product as a new one) and issue an ApplicabilityWarning
-quoting the numbers; their intervals are too narrow for that family.
+configuration) and issue an ApplicabilityWarning quoting the numbers; their
+intervals are too narrow for that family. A row counts as a known
+configuration when its model input, apart from the contextual parameters
+(``p_*``, capacity), prices and productivity, equals that of a training
+configuration (a query by its ``config_id`` or by names that resolve to it
+alike; not a ``config_id`` row whose regime, downstream, product or
+feedstock fields are overridden); any other row of a known product counts
+as a new configuration.
+
+TEA settings fixed by a configuration
+-------------------------------------
+Some adapters do not sample every contextual TEA parameter: the training
+rows of those configurations hold NaN for it (encoded as missing, imputed
+at the training baseline), although the module's TEA has a definite value,
+e.g. the IRR of 0.15 of ethanol_corn and IBO_EtOH_corn (imputed 0.10) and
+the 350.4 operating days of ethanol_cornstover (imputed 330)
+(``registry/tea_settings.json``, written by ``data_generation/sim_checks.py``
+check ``tea_settings``). ``tea_fixed`` lists them for a row that encodes
+as such a configuration (or names it by ``config_id``). A given value equal
+to the fixed one is encoded as missing, as in training (UserWarning); any
+other value is applied relative to the imputed value, not to the fixed one,
+with an ApplicabilityWarning where the two differ.
 """
 import difflib
 import json
@@ -243,6 +263,15 @@ _CTX_RTOL = 1e-6
 #: coverage (``ensemble.meta['coverage_by_family']``) is more than this below
 #: the nominal level 1 - alpha
 UNDERCOVERAGE_TOL = 0.1
+#: TEA settings of the training configurations (``data_generation/
+#: sim_checks.py``, check ``tea_settings``): per configuration the cost year
+#: (``CE``), financial convention and the contextual TEA parameters its
+#: adapter does not sample (``'fixed'``: NaN in the training data, so the
+#: model input does not carry them)
+TEA_SETTINGS_PATH = os.path.join(os.path.dirname(__file__), 'registry', 'tea_settings.json')
+#: relative tolerance for a given contextual TEA parameter to equal the
+#: configuration's fixed value
+_TEA_RTOL = 1e-6
 #: coverage schemes of ``meta['coverage_by_family']`` and their labels
 _COVERAGE_SCHEMES = {'known_configuration': 'known configuration: min of random CV and productivity tails',
                      'new_configuration': 'new configuration: leave-one-configuration-out CV'}
@@ -255,7 +284,7 @@ _PASS_FIELDS = frozenset((
     'ferm_product_chemical', 'final_product_chemical', 'product_water_solubility',
     'g_predicted', 'g_source', 'ad_ratio', 'in_domain', 'outside_range', 'price_outside_range',
     'intervals_calibrated', 'intervals_undercovered', 'imputed', 'contextual_defaults', 'contextual_source', 'not_applicable',
-    'contextual_outside_range', 'filled_from_registry', 'MPSP_lo', 'MPSP_hi', 'MPSP_std',
+    'contextual_outside_range', 'filled_from_registry', 'tea_fixed', 'MPSP_lo', 'MPSP_hi', 'MPSP_std',
     'sample_id', 'biorefinery', 'sample_kind', 'seed', 'sample_index', 'source_file', 'separation_variant',
     'y_min', 'y_max', 't_min', 't_max', 'baseline_productivity', 'baseline_yield', 'baseline_titer',
     'downstream_spec_version', 'inflection_yield_config', 'n_points_raw', 'n_ok_raw', 'n_infeasible', 'n_failed',
@@ -731,6 +760,12 @@ class CoefficientPredictor:
                           'days, the others with 330): ' + '; '.join(f'row {i}: {", ".join(c)}' for i, c in cross[:6])
                           + ' -- specify them for this feedstock', UserWarning, stacklevel=3)
         batch = self.spec.transform(df, descriptors=descriptors, strict=True, missing_categorical='other')
+        for d, m in zip(det, self._training_configs(batch.X)):
+            d['training_configs'] = m
+        if self._apply_tea_fixed(df, det, warn):
+            # a given TEA parameter equal to the configuration's fixed value:
+            # encoded as missing, as in its training rows
+            batch = self.spec.transform(df, descriptors=descriptors, strict=True, missing_categorical='other')
         rows = batch.imputed_rows or [[] for _ in range(len(batch))]
         batch.imputed_rows = [sorted(set(r) | set(d['imputed_extra'])) for r, d in zip(rows, det)]
         batch.imputed = sorted({c for r in batch.imputed_rows for c in r})
@@ -799,7 +834,8 @@ class CoefficientPredictor:
         interval ``keys`` whose shipped quantiles cover the row's family
         (fermentation product) more than :data:`UNDERCOVERAGE_TOL` below
         nominal in development CV (``ensemble.meta['coverage_by_family']``;
-        a known ``config_id`` -> random-CV coverage, else LOCO), or None
+        a row that encodes as a training configuration, ``training_configs``
+        of :meth:`_batch` -> known-configuration coverage, else LOCO), or None
         (no intervals, no such metadata, or a feedstock / product not in
         training, which :meth:`_warn_uncalibrated` covers). ``user_g``: rows
         with a user recovery (their g interval is the given value)."""
@@ -809,12 +845,14 @@ class CoefficientPredictor:
         if not conf or not cbf:
             return out
         nominal = float(cbf.get('nominal', 1 - conf.get('alpha', 0.1)))
-        cfg = (self.spec.spec_registry or {}).get('config', {})
         fps = df['fermentation_product'].tolist() if 'fermentation_product' in df else [None] * len(det)
         for i, (fp, d) in enumerate(zip(fps, det)):
             if not d['calibrated'] or _bad_name(fp):
                 continue
-            known = (d.get('config_id') in cfg and not d['conflict'] and not d['custom_feedstock'])
+            # a known configuration: the row's model input, apart from the
+            # contextual parameters, prices and productivity, equals that of
+            # a training configuration (by config_id or by names alike)
+            known = bool(d.get('training_configs'))
             sch = 'known_configuration' if known else 'new_configuration'
             cov = (cbf.get(sch) or {}).get(str(fp)) or {}
             low = {k: float(cov[k]) for k in keys if k in cov and cov[k] is not None
@@ -843,6 +881,30 @@ class CoefficientPredictor:
                       + ' -- these intervals are too narrow for this family (column intervals_undercovered; '
                       'README section 4.5, REPORT.md section 6)', ApplicabilityWarning, stacklevel=stacklevel)
 
+    def _config_encodings(self):
+        """(config_ids, X) of the training configurations queried by
+        ``config_id`` at their baselines (computed once per predictor; X None
+        when the registry has no configurations or they cannot be encoded)."""
+        enc = getattr(self, '_enc', None)
+        if enc is not None:
+            return enc
+        cids = sorted((self.spec.spec_registry or {}).get('config', {}))
+        X = None
+        if cids:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore')
+                    df, _ = self._frame([dict(config_id=c, r=1., feedstock_price=1.) for c in cids])
+                    X = self.spec.transform(df, strict=False, missing_categorical='other').X
+            except Exception:
+                X = None
+        self._enc = (cids, X)
+        return self._enc
+
+    @staticmethod
+    def _row_keys(X):
+        return [(np.round(x, 9) + 0.).tobytes() for x in X]
+
     def _config_twins(self):
         """{config_id: [other training configurations whose by-name query
         encodes to the same model input]} (computed once per predictor)."""
@@ -850,35 +912,142 @@ class CoefficientPredictor:
         if tw is not None:
             return tw
         self._twins = {}
-        cids = sorted((self.spec.spec_registry or {}).get('config', {}))
-        if len(cids) < 2:
+        cids, X = self._config_encodings()
+        if len(cids) < 2 or X is None:
             return self._twins
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter('ignore')
-                df, _ = self._frame([dict(config_id=c, r=1., feedstock_price=1.) for c in cids])
-                X = self.spec.transform(df, strict=False, missing_categorical='other').X
-        except Exception:
-            return self._twins
-        keys = [np.round(x, 9).tobytes() for x in X]
+        keys = self._row_keys(X)
         for i, c in enumerate(cids):
             others = [cids[j] for j in range(len(cids)) if j != i and keys[j] == keys[i]]
             if others:
                 self._twins[c] = others
         return self._twins
 
+    def _identity_index(self):
+        """Columns of X that identify a configuration: the encoder columns
+        except the contextual parameters (``kind == 'param'``, incl. the
+        capacity) and their missing indicators (prices and the productivity
+        are not part of X)."""
+        idx = getattr(self, '_ident', None)
+        if idx is None:
+            cols = self.spec.columns
+            params = {d['name'] for d in self.spec.numeric if d['kind'] == 'param'}
+            idx = self._ident = np.asarray(
+                [i for i in self.spec.encoder_index() if cols[i] not in params
+                 and not (cols[i].startswith('missing__') and cols[i][len('missing__'):] in params)], int)
+        return idx
+
+    def _training_configs(self, X):
+        """Per row of X: the training configurations whose baseline
+        encoding equals the row's on :meth:`_identity_index` (several for
+        input twins; [] for a new configuration). A query by ``config_id`` or
+        by names that resolve to one configuration matches it; one whose
+        regime, downstream, product or feedstock fields differ does not."""
+        cids, XC = self._config_encodings()
+        if XC is None or not len(X):
+            return [[] for _ in range(len(X))]
+        idx = self._identity_index()
+        lut = {}
+        for c, k in zip(cids, self._row_keys(XC[:, idx])):
+            lut.setdefault(k, []).append(c)
+        return [list(lut.get(k, [])) for k in self._row_keys(np.asarray(X)[:, idx])]
+
+    def _tea_settings(self):
+        """{config_id: TEA settings} of :data:`TEA_SETTINGS_PATH` ({} if absent)."""
+        ts = getattr(self, '_tea', None)
+        if ts is None:
+            try:
+                with open(TEA_SETTINGS_PATH) as fh:
+                    ts = json.load(fh).get('configs', {})
+            except (OSError, ValueError):
+                ts = {}
+            self._tea = ts
+        return ts
+
+    def _tea_fixed(self, d):
+        """{p_*: value} of the contextual TEA parameters that the row's
+        configuration (the training configurations it encodes as, else its
+        ``config_id``) fixes in its TEA and that are not defined in its
+        training data (NaN there, so the model never saw them for it)."""
+        cids = list(d.get('training_configs') or [])
+        if not cids and d.get('config_id') and not d['conflict'] and not d['custom_feedstock']:
+            cids = [d['config_id']]
+        tab = self._tea_settings()
+        cr = ((self.spec.spec_registry or {}).get('context_range') or {}).get('config', {})
+        names = {x['name'] for x in self.spec.numeric}
+        out = None
+        for cid in cids:
+            ent = tab.get(cid)
+            if not ent:
+                return {}
+            fx = {c: float(v) for c, v in (ent.get('fixed') or {}).items()
+                  if c in names and v is not None and c not in cr.get(cid, {})}
+            out = fx if out is None else {c: v for c, v in out.items() if c in fx and fx[c] == v}
+        return out or {}
+
+    def _apply_tea_fixed(self, df, det, warn=True):
+        """Record ``tea_fixed`` per row; a given value equal to the fixed one
+        is encoded as missing, as in the configuration's training rows (True
+        if any was). A different given value is applied relative to the
+        model's imputed value, not to the fixed one: ApplicabilityWarning
+        where the two differ."""
+        fills = {x['name']: (10 ** x['fill'] if x['log'] else x['fill']) for x in self.spec.numeric}
+        same, other, changed = [], [], False
+        for i, d in enumerate(det):
+            tf = d['tea_fixed'] = self._tea_fixed(d)
+            ref = ', '.join(d.get('training_configs') or [d.get('config_id') or ''])
+            for c, v in tf.items():
+                if c not in df or c in d['filled'] or _bad(df.at[i, c]):
+                    continue
+                u = float(df.at[i, c])
+                if abs(u - v) <= _TEA_RTOL * max(abs(v), 1e-12):
+                    df.at[i, c] = float('nan')
+                    d['not_applicable'] = sorted(set(d['not_applicable']) | {c})
+                    d['context_outside'] = [x for x in d['context_outside'] if x[0] != c]
+                    same.append((i, c, v, ref))
+                    changed = True
+                elif abs(fills.get(c, v) - v) > _TEA_RTOL * max(abs(v), 1e-12):
+                    other.append((i, c, u, v, fills[c], ref))
+        if warn and same:
+            warnings.warn('; '.join(f'row {i}: {c}={v:g} is the fixed TEA value of {ref}' for i, c, v, ref in same[:6])
+                          + ' -- its training data do not record this parameter (NaN), so it is encoded as missing, '
+                          'as in training (column tea_fixed; README section 5)', UserWarning, stacklevel=4)
+        if warn and other:
+            warnings.warn('; '.join(f'row {i}: {c}={u:g} given, but {ref} fixes {c} at {v:g} in its TEA, which its '
+                                    f'training data do not record (the model imputes {f:g})'
+                                    for i, c, u, v, f, ref in other[:6])
+                          + ' -- the model applies the given value relative to the imputed one, not to the '
+                          'configuration\'s own value, so the prediction is biased by the model\'s response between '
+                          'the two (e.g. ethanol_corn, IRR 0.15, with p_IRR=0.10: +0.3 % MPSP, where BioSTEAM gives '
+                          '-6.6 %); omit the parameter to predict the configuration at its own value (column '
+                          'tea_fixed; README section 5)', ApplicabilityWarning, stacklevel=4)
+        return changed
+
     @staticmethod
-    def _user_recovery(df, batch, recovery=None):
+    def _user_recovery(df, batch, recovery=None, index=None):
         """Per-row user-supplied recovery g (NaN = use the prediction) from the
         ``recovery=`` argument (scalar or one value per row) or else the
-        ``recovery`` spec field. Raises ValueError unless 0 < g <= g_max
-        (``final_product_stoich_mass_ratio`` of the row, after the registry fill)."""
+        ``recovery`` spec field. A pandas Series is aligned by label with
+        ``index`` (the index of a DataFrame spec; ValueError for labels it
+        lacks), any other sequence is positional. Raises ValueError unless
+        0 < g <= g_max (``final_product_stoich_mass_ratio`` of the row, after
+        the registry fill)."""
         n = len(df)
         if recovery is None:
             if 'recovery' not in df:
                 return np.full(n, np.nan)
             vals, src = list(df['recovery']), "spec field 'recovery'"
         else:
+            if isinstance(recovery, pd.Series) and index is not None and not recovery.index.equals(index):
+                if index.has_duplicates or recovery.index.has_duplicates:
+                    raise ValueError('recovery= is a pandas Series whose index differs from the spec\'s index and '
+                                     'one of them has duplicate labels, so it cannot be aligned by label; pass a '
+                                     'Series with the spec\'s index or recovery.to_numpy() (positional)')
+                lack = index.difference(recovery.index)
+                if len(lack):
+                    raise ValueError(f'recovery= is a pandas Series without values for the spec row label(s) '
+                                     f'{list(lack[:10])}: a Series is aligned with the spec\'s index by label; '
+                                     'pass recovery.to_numpy() for values in row order')
+                recovery = recovery.reindex(index)
             arr = np.asarray(recovery, dtype=object)
             if arr.ndim == 0:
                 vals = [arr.item()] * n
@@ -925,13 +1094,15 @@ class CoefficientPredictor:
         of dicts). Returns a DataFrame with one row per spec.
 
         ``recovery``: optional known recovery g [kg final / kg fermentation
-        product] (scalar, or one value per row; None/NaN = predicted); else a
-        ``recovery`` spec field is used where given. It replaces the predicted
+        product] (scalar, or one value per row; None/NaN = predicted; a
+        pandas Series is aligned by label with a DataFrame spec's index, any
+        other sequence is in row order); else a ``recovery`` spec field is
+        used where given. It replaces the predicted
         g (kept as ``g_predicted``) and leaves a', b', c', d' unchanged (a
         first-order approximation, see the module docstring)."""
         ens = self.ensemble
         df, batch, det = self._batch(spec, descriptors, warn)
-        g_user = self._user_recovery(df, batch, recovery)
+        g_user = self._user_recovery(df, batch, recovery, _spec_index(spec))
         user = ~np.isnan(g_user)
         outs = ens.member_outputs(batch)
         conf = ens.conformal or {}
@@ -992,6 +1163,7 @@ class CoefficientPredictor:
         out['not_applicable'] = [', '.join(d['not_applicable']) for d in det]
         out['contextual_outside_range'] = [', '.join(c for c, *_ in d['context_outside']) for d in det]
         out['filled_from_registry'] = [', '.join(d['filled']) for d in det]
+        out['tea_fixed'] = [', '.join(f'{c}={v:g}' for c, v in d['tea_fixed'].items()) for d in det]
         if warn:
             self._warn_imputed(batch, det)
             self._warn_context_outside(det)
@@ -1057,7 +1229,7 @@ class CoefficientPredictor:
         y, t = np.broadcast_arrays(np.atleast_1d(np.asarray(y, float)), np.atleast_1d(np.asarray(t, float)))
         y, t = y.ravel(), t.ravel()
         df, batch, det = self._batch(spec, descriptors, warn)
-        g_user = self._user_recovery(df, batch, recovery)
+        g_user = self._user_recovery(df, batch, recovery, _spec_index(spec))
         if warn and ens.ad is not None:
             ratio, oor = self._ad(batch)
             warn_if_outside(ratio, oor)
@@ -1120,6 +1292,11 @@ def refresh_spec_registry(path, samples, strict=True):
     spec.spec_registry = new
     spec.to_json(fpath)
     return True
+
+
+def _spec_index(spec):
+    """Index of a DataFrame spec (rows keep it in ``predict``), else None."""
+    return spec.index if isinstance(spec, pd.DataFrame) else None
 
 
 def _bad_name(v):

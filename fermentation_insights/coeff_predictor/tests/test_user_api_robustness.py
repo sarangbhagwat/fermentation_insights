@@ -336,6 +336,59 @@ def test_dataframe_index_is_kept(shipped):
     assert sorted(_quiet(P.mpsp, df, y=0.5, t=50.)['row'].unique()) == [0, 1, 2]
 
 
+def test_recovery_series_is_aligned_with_the_spec_index(shipped):
+    _, P = shipped
+    df = pd.DataFrame([dict(config_id='HP_corn', r=0.3, feedstock_price=0.2),
+                       dict(config_id='TAL_glucose', r=1., feedstock_price=0.3),
+                       dict(config_id='HP_corn', r=0.5, feedstock_price=0.2)], index=['p', 'q', 'r'])
+    rec = pd.Series([0.5, 0.6, 0.7], index=['r', 'q', 'p'])
+    out = _quiet(P.predict, df, recovery=rec)
+    assert out['g'].tolist() == [0.7, 0.6, 0.5]
+    np.testing.assert_allclose(_quiet(P.mpsp, df, y=0.5, t=50., recovery=rec)['MPSP'].to_numpy(),
+                               _quiet(P.mpsp, df, y=0.5, t=50., recovery=[0.7, 0.6, 0.5])['MPSP'].to_numpy())
+    # positional sequences, a Series with the spec's index
+    assert _quiet(P.predict, df, recovery=rec.to_numpy())['g'].tolist() == [0.5, 0.6, 0.7]
+    assert _quiet(P.predict, df, recovery=rec.sort_index())['g'].tolist() == [0.7, 0.6, 0.5]
+    with pytest.raises(ValueError, match='without values for the spec row label'):
+        _quiet(P.predict, df, recovery=pd.Series([0.5, 0.6], index=['p', 'q']))
+
+
+def test_tea_settings_fixed_by_the_configuration(shipped):
+    """Contextual TEA parameters a configuration's adapter does not sample
+    (NaN in its training rows, registry/tea_settings.json): reported in
+    ``tea_fixed``; the configuration's own value is encoded as missing, as in
+    training; any other value warns that it is applied relative to the
+    imputed value."""
+    from fermentation_insights.coeff_predictor import predict as PR
+    if not os.path.exists(PR.TEA_SETTINGS_PATH):
+        pytest.skip('registry/tea_settings.json not available')
+    _, P = shipped
+    tab = json.load(open(PR.TEA_SETTINGS_PATH))['configs']
+    assert set(tab) == set(P.spec.spec_registry['config'])
+    assert tab['ethanol_corn']['fixed']['p_IRR'] == 0.15 and tab['IBO_EtOH_corn']['fixed']['p_IRR'] == 0.15
+    assert abs(tab['ethanol_cornstover']['fixed']['p_operating_days'] - 350.4) < 1e-9
+    assert not tab['HP_corn']['fixed']
+    base = dict(config_id='ethanol_corn', r=1., feedstock_price=0.15)
+    ref = _quiet(P.predict, base)
+    assert ref['tea_fixed'][0] == 'p_IRR=0.15, p_operating_days=330'
+    # by names that resolve to the configuration: the same
+    byname = dict(feedstock='corn', fermentation_product='Ethanol', final_product='Ethanol', r=1.,
+                  feedstock_price=0.15)
+    assert _quiet(P.predict, byname)['tea_fixed'][0] == 'p_IRR=0.15, p_operating_days=330'
+    assert _quiet(P.predict, dict(config_id='ethanol_cornstover', r=1., feedstock_price=0.08))['tea_fixed'][0] \
+        == 'p_IRR=0.1, p_operating_days=350.4'
+    out, msgs = _caught(P.predict, dict(base, p_IRR=0.15))
+    np.testing.assert_allclose(out[K].to_numpy(), ref[K].to_numpy())
+    assert out['contextual_outside_range'][0] == '' and 'p_IRR' in out['not_applicable'][0]
+    assert any('fixed TEA value of ethanol_corn' in m for m in msgs), msgs
+    out, msgs = _caught(P.predict, dict(base, p_IRR=0.12))
+    assert any('fixes p_IRR at 0.15' in m and 'imputes 0.1' in m for m in msgs), msgs
+    assert 'p_IRR' in out['contextual_outside_range'][0]
+    # a configuration that samples the parameter: nothing fixed
+    out, msgs = _caught(P.predict, dict(config_id='HP_corn', r=0.3, feedstock_price=0.2, p_IRR=0.11))
+    assert out['tea_fixed'][0] == '' and not any('TEA' in m for m in msgs), msgs
+
+
 @pytest.fixture(scope='module')
 def with_family_coverage(shipped, tmp_path_factory):
     """The release checkpoint with known per-family coverage metadata
@@ -363,13 +416,26 @@ def test_family_undercoverage_is_flagged(with_family_coverage):
     assert any('UNDER-cover' in m and 'TAL' in m and 'g 0.44' in m for m in msgs), msgs
     # a user recovery: its g interval is the given value, not flagged
     assert _quiet(P.predict, specs[0], recovery=0.7)['intervals_undercovered'][0] == 'c 0.76'
-    # mpsp(): the MPSP key only; a new ethanol configuration (no config_id) uses the LOCO coverage
-    eth = dict(feedstock='corn', fermentation_product='Ethanol', final_product='Ethanol', r=1.,
-               feedstock_price=0.2)
+    # mpsp(): the MPSP key only; a new ethanol configuration (ethanol from
+    # glucose: not in training) uses the LOCO coverage
+    eth = dict(feedstock='glucose', fermentation_product='Ethanol', final_product='Ethanol', r=1.,
+               feedstock_price=0.3)
     m, msgs = _caught(P.mpsp, [specs[0], eth], y=0.4, t=60.)
     assert m.groupby('row')['intervals_undercovered'].first().tolist() == ['', 'mpsp 0.77']
     assert any('new configuration' in x and 'mpsp 0.77' in x for x in msgs), msgs
     assert _quiet(P.predict, eth)['intervals_undercovered'][0] == 'b 0.67'
+    # names that resolve to one training configuration encode as it: the
+    # known-configuration flags, as by config_id
+    eth_corn = dict(eth, feedstock='corn', feedstock_price=0.2)
+    for spec in (eth_corn, dict(eth_corn, config_id='ethanol_corn')):
+        assert _quiet(P.predict, spec)['intervals_undercovered'][0] == ''
+        assert _quiet(P.mpsp, spec, y=0.4, t=60.)['intervals_undercovered'][0] == ''
+    tal = dict(feedstock='glucose', fermentation_product='TAL', final_product='TAL', r=1., feedstock_price=0.3)
+    assert _quiet(P.predict, tal)['intervals_undercovered'][0] == 'c 0.76, g 0.44'
+    # a config_id whose regime differs from the configuration's is a new
+    # configuration; a contextual parameter keeps it known
+    assert _quiet(P.predict, dict(specs[0], T_fermentation=310.))['intervals_undercovered'][0] == 'g 0.43'
+    assert _quiet(P.predict, dict(specs[0], p_IRR=0.11))['intervals_undercovered'][0] == 'c 0.76, g 0.44'
 
 
 def test_shipped_checkpoints_carry_family_coverage(shipped):
