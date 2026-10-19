@@ -11,6 +11,8 @@ v3 run (`results/v3/REPORT.md`) quotes.
 | file | check | content |
 |---|---|---|
 | `capacity_response.csv` | `capacity` | MPSP at the baseline yield and titer with `p_feedstock_capacity` x 0.5 / 0.85 / 1 / 1.15 / 2 / 3 (`harness_version` of the simulation state); read by `report_checks.capacity_response` (REPORT.md section 8) |
+| `contextual_response.csv` | `contextual` | MPSP at the baseline yield and titer with one contextual or technological parameter (`sim_checks.CONTEXTUAL_PARAMS`, where the adapter samples it) at the 10th / 90th percentile of its sampling distribution, every other parameter at baseline (`MPSP_baseline`: all at baseline); read by `report_checks.contextual_response` (REPORT.md section 8 (ii-d)) |
+| `tea_basis.csv` | `tea_basis` (D19, D20, DCF weight) | per configuration the baseline point with one TEA setting or price changed at a time: `CE` (`bst.CE` = 607.5), `IRR` (0.10, where the module's differs), `life_20` / `life_20_no_debt` (20-year life, then also without debt; where the module's life is not 20 years), `feedstock_price` (x 0.5 / 2 / 3), `startup_equal` / `startup_equal_feedstock_price` (`startup_VOCfrac` set to `startup_salesfrac`, then x 2 feedstock price), `baseline_repeat`; `dMPSP_pct`, `dFCI_pct` vs. the baseline and, for the price cases, `dcf_weight` = dMPSP / (dp x F_feedstock / F_final_product) at the actual feedstock-stream price (1 = the weight of the product sales) |
 | `ic_biogas_points.csv`, `ic_biogas_bias.csv` | `ic_biogas` (D17) | the baseline point and a 3 x 3 TY grid of every configuration with BioSTEAM's `InternalCirculationRx` (lumped method), simulated with BioSTEAM's original method (`as_is`, as harness <= 3), in the current harness's state (`harness`) and with the corrected method (`fixed`); per configuration the MPSP change at the baseline and the lowest yield, the refitted coefficients and the biogas / IC mass gain; the 14 configurations without such a reactor are listed as not affected (`affected` = False; the criterion of `data_patches.D17_CONFIGS`) |
 | `duplicate_inlets_bias.csv` | `duplicate_inlets` (D16) | units whose inlet list holds the same stream twice: none in the 41 configurations (TAL_SA_sugarcane's mill `U201` had one before the fi-TAL fix: `v3/duplicate_inlets_*.csv`) |
 | `unit_bounds.csv` | `unit_bounds` (D18) | design results outside the unit class's own `_bounds` at the baseline point, with the unit's installed cost and share of the installed equipment cost (one `note` row per configuration without any) |
@@ -64,7 +66,9 @@ Run of 2026-10-18 (harness v4), check `unit_bounds` (D18):
 Run of 2026-10-19 (final review, round 6), check `tea_settings` (D19, D20;
 no simulation, about 30-90 s per configuration for loading):
 `N_WORKERS=3 CHECKS=tea_settings RAW=/home/user/work/data/sim_checks_tea bash scripts/run_sim_checks.sh`
-(writes `tea_settings.csv` here and `registry/tea_settings.json`).
+(writes `tea_settings.csv` here and `registry/tea_settings.json`; since
+round 7 a collect merges its records into the existing registry file, so a
+subset run keeps the other configurations).
 
 * Cost year (`CE`): 608 (HP without hexanol, succinic), 607.5 (TAL,
   ethanol_sugarcane), 541.7 (HP hexanol designs, lactic, oxalic), 525.4
@@ -82,3 +86,44 @@ no simulation, about 30-90 s per configuration for loading):
   days (ethanol_cornstover; imputed 330), IRR 0.10 / income tax 0.21
   (lactic, succinic; equal to the imputation), 330 operating days
   (ethanol_corn; equal to the imputation).
+
+Run of 2026-10-19 (final review, round 7), check `contextual` (harness v4;
+about 1-2 min per configuration, 10-25 min for the lactic ones):
+`N_WORKERS=4 CHECKS=contextual RAW=/home/user/work/data/sim_checks_ctx bash scripts/run_sim_checks.sh`.
+
+* 434 points of 41 configurations (215 configuration x parameter pairs);
+  2 infeasible (`p_saccharification_yield` at one quantile of the two
+  lactic SSCF configurations), the rest converged.
+* Compared with the release model in REPORT.md section 8 (ii-d)
+  (`report_checks.contextual_response`, `results/tables/
+  contextual_response_release.csv`): sign mismatches (wrong sign, spurious
+  or missed response) for `p_acid_price` (8 of 23 configurations),
+  `p_income_tax` (6 / 29), `p_turbogenerator_efficiency` (5 / 25),
+  `p_boiler_efficiency` (3 / 37) and `p_base_price` (2 / 29); `p_IRR`,
+  `p_operating_days`, `p_enzyme_loading` and `p_saccharification_yield`
+  have the right sign everywhere (README section 7). The low-pH HP configurations'
+  simulated MPSP does not depend on `p_acid_price` (they buy no acid),
+  that of lactic low pH not on `p_base_price`.
+
+Run of 2026-10-19 (final review, round 7), check `tea_basis` (D19, D20,
+DCF weight of the price slopes; about 1-3 min per configuration, 10-15 min
+for the lactic ones):
+`N_WORKERS=3 CHECKS=tea_basis RAW=/home/user/work/data/sim_checks_teabasis bash scripts/run_sim_checks.sh`.
+It records, for every configuration, the re-simulations that round 6
+quoted from session scratch.
+
+* All 404 points converged. CE set to 607.5: IBO_EtOH_corn −8.47 % (FCI
+  −23.2 %), ethanol_cornstover +6.15 %, oxalic +5.41 %, HP hexanol designs
+  +3.48 to +6.71 %, lactic +2.49 to +3.12 %, ethanol_corn +1.54 %, the
+  configurations at 607.5-608 within 0.05 %.
+* IRR 0.15 → 0.10: ethanol_corn −6.55 %, IBO_EtOH_corn −9.71 %.
+* 20-year life: +1.76 to +4.68 % (HP_cornstover +3.83 %); 20 years and no
+  debt: +3.63 to +11.48 % (HP_cornstover +7.77 %, ethanol_cornstover
+  +11.48 %).
+* DCF weight of the feedstock price (`dcf_weight`, 0.5 / 2 / 3x):
+  1.0065-1.0068 for 34 of the 39 configurations with a startup period
+  (HP_corn 1.0066), ethanol_cornstover 1.0057-1.0077, lactic
+  1.0045-1.0095 (their repeated baseline point differs by up to 0.094 %,
+  `baseline_repeat`); 0.9997-1.0000 with `startup_VOCfrac` =
+  `startup_salesfrac`; 1.0000 for ethanol_corn and IBO_EtOH_corn
+  (`ConventionalEthanolTEA`).

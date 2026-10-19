@@ -7,15 +7,19 @@
 # with CHECKS=unit_bounds, design results outside the unit classes' own
 # bounds and the tray-cost sensitivity of columns wider than 24 ft (D18),
 # with CHECKS=tea_settings, the TEA conventions of each configuration (no
-# simulation; also written to the package's registry/tea_settings.json),
+# simulation; also merged into the package's registry/tea_settings.json,
+# which keeps the records of configurations not in RAW), with
+# CHECKS=contextual, the MPSP response to each sampled contextual /
+# technological p_* parameter at its 10th / 90th percentile,
 # for every configuration of every biorefinery, each configuration in its
 # own Python process (the HP systems are module-level singletons), N_WORKERS
 # at a time. Systems are simulated in the current harness's state (its
 # BioSTEAM corrections applied, as in the campaigns). A configuration whose
 # JSON already exists in RAW is skipped, so give each set of checks its own
 # RAW. Then merges the per-configuration JSON files into CSV_DIR (default:
-# data_generation/checks, see checks/README.md; capacity_response.csv is read
-# by report_checks.capacity_response for REPORT.md section 8).
+# data_generation/checks, see checks/README.md; capacity_response.csv and
+# contextual_response.csv are read by report_checks.capacity_response /
+# contextual_response for REPORT.md section 8).
 #
 # Usage:  N_WORKERS=3 CHECKS="capacity ic_biogas duplicate_inlets" RAW=/home/user/work/data/sim_checks_v4 bash run_sim_checks.sh
 #         N_WORKERS=3 bash run_sim_checks.sh                  # capacity + ic_biogas
@@ -23,6 +27,7 @@
 #         ADAPTERS="HP TAL" CHECKS="ic_biogas" bash run_sim_checks.sh
 #         N_WORKERS=3 CHECKS=unit_bounds RAW=/home/user/work/data/sim_checks_bounds bash run_sim_checks.sh
 #         N_WORKERS=4 CHECKS=tea_settings RAW=/home/user/work/data/sim_checks_tea bash run_sim_checks.sh
+#         N_WORKERS=4 CHECKS=contextual RAW=/home/user/work/data/sim_checks_ctx bash run_sim_checks.sh
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FI=${FI:-$(cd "$HERE/../../../.." && pwd)}

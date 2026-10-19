@@ -13,7 +13,7 @@ baseline productivity is used. The system is loaded and simulated as the
 campaigns of the current harness do: the BioSTEAM corrections of
 ``harness.apply_biosteam_fixes`` are applied first (harness v4: D17; recorded
 as ``harness_version`` / ``harness_fixes``); the ``ic_biogas`` check toggles
-them itself. Five checks:
+them itself. Seven checks:
 
 ``capacity``
     MPSP at the baseline yield and titer with ``p_feedstock_capacity``
@@ -54,6 +54,31 @@ them itself. Five checks:
     method), and the capacity response at the baseline yield and titer
     (:data:`COLUMN_CAPACITY_MULTS`) in both modes.
 
+``contextual``
+    MPSP at the baseline yield and titer with one contextual or
+    technological parameter at a time (:data:`CONTEXTUAL_PARAMS`, where the
+    adapter samples it) at the 10th and 90th percentile of its sampling
+    distribution (:data:`CONTEXTUAL_QUANTILES`, the parameter's
+    ``inverse_cdf``), every other parameter at its baseline. The prices of
+    feedstock, electricity and natural gas (price channels, REPORT.md section
+    8 (ii)-(ii-b)), the capacity (``capacity``) and the cell-mass yield
+    (which also moves the inflection yield) are not part of it. Compared
+    with the model by ``report_checks.contextual_response``.
+
+``tea_basis``
+    Known data defects D19 / D20 and the discounted-cash-flow weight of the
+    price slopes (README section 4.6): MPSP at the baseline point with the
+    plant cost index ``bst.CE`` set to :data:`TEA_BASIS_CE` (2019), the IRR
+    set to 0.10 where the module's differs (ethanol_corn, IBO_EtOH_corn:
+    0.15), the plant life set to 20 years and then also without debt (the
+    ``ConventionalEthanolTEA`` convention), and the feedstock price
+    (``p_feedstock_price``) scaled by :data:`TEA_BASIS_PRICE_MULTS`, also
+    with ``startup_VOCfrac`` set equal to ``startup_salesfrac``. Collected
+    with the change of the MPSP and FCI and, for the price cases, the
+    simulated dMPSP/dp over the price intensity (feedstock flow / final-product
+    flow, at the actual feedstock-stream price): the DCF weight of a variable
+    operating cost relative to the product sales.
+
 ``tea_settings``
     No simulation: the TEA conventions of the loaded configuration
     (``bst.CE``, the TEA class, IRR, income tax, operating days, plant life
@@ -65,15 +90,17 @@ them itself. Five checks:
     IBO_EtOH_corn), which the model's input does not carry.
 
 ``--collect DIR`` (no BioSTEAM needed) merges the per-configuration JSON
-files into ``capacity_response.csv``, ``ic_biogas_points.csv`` /
+files into ``capacity_response.csv``, ``contextual_response.csv``, ``ic_biogas_points.csv`` /
 ``ic_biogas_bias.csv``, ``duplicate_inlets_points.csv`` /
 ``duplicate_inlets_bias.csv`` (per configuration: MPSP change at the
 baseline and at the lowest-yield grid point, and the change of the refitted
 coefficients, at the same recovery), ``unit_bounds.csv`` and
 ``column_trays_points.csv`` / ``column_trays_bias.csv`` /
-``column_trays_capacity.csv``, ``tea_settings.csv`` in ``--csv-dir`` (and,
+``column_trays_capacity.csv``, ``tea_basis.csv``, ``tea_settings.csv`` in ``--csv-dir`` (and,
 with ``--registry-dir``, the TEA settings as :data:`TEA_SETTINGS_JSON`,
-which ``predict.py`` reads from the package's ``registry/``).
+which ``predict.py`` reads from the package's ``registry/``: merged into the
+existing file, so that collecting a subset of the configurations keeps the
+records of the others).
 ``scripts/run_sim_checks.sh`` runs every configuration.
 """
 from __future__ import annotations
@@ -95,6 +122,19 @@ CAPACITY_MULTS = (0.5, 0.85, 1.0, 1.15, 2.0, 3.0)
 TRAY_D_MAX = 24.
 #: capacity multipliers of the ``unit_bounds`` check's tray-cost sensitivity
 COLUMN_CAPACITY_MULTS = (0.85, 1.0, 1.15, 2.0)
+#: parameters of the ``contextual`` check (where the adapter samples them):
+#: the contextual and technological ``p_*`` other than the price-channel
+#: prices, the capacity and the cell-mass yield
+CONTEXTUAL_PARAMS = ('p_IRR', 'p_income_tax', 'p_operating_days', 'p_boiler_efficiency',
+                     'p_turbogenerator_efficiency', 'p_base_price', 'p_acid_price', 'p_enzyme_loading',
+                     'p_saccharification_yield')
+#: quantiles of each parameter's sampling distribution in the ``contextual`` check
+CONTEXTUAL_QUANTILES = (0.1, 0.9)
+#: common plant cost index of the ``tea_basis`` check (2019: HP, TAL,
+#: succinic acid, ethanol_sugarcane)
+TEA_BASIS_CE = 607.5
+#: feedstock-price multipliers of the ``tea_basis`` check
+TEA_BASIS_PRICE_MULTS = (0.5, 2.0, 3.0)
 
 
 def _grid(adapter, dom):
@@ -283,6 +323,93 @@ def _tea_settings(adapter, params):
     return out
 
 
+def _contextual(adapter, params, y0, t0, r0, names=CONTEXTUAL_PARAMS, quantiles=CONTEXTUAL_QUANTILES):
+    """Check ``contextual``: the baseline point, then each parameter of
+    ``names`` the adapter samples at the ``quantiles`` of its sampling
+    distribution (one at a time, the others at their baselines)."""
+    base = _simulate(adapter, y0, t0, r0)
+    print('contextual', 'baseline', base.get('MPSP'), base['status'], flush=True)
+    rows = []
+    for p in params:
+        if p.name not in names:
+            continue
+        for q in quantiles:
+            v = float(p.inverse_cdf(q))
+            p.setter(v)
+            row = _simulate(adapter, y0, t0, r0)
+            row.update(param=p.name, quantile=float(q), value=float(v), baseline_value=float(p.baseline))
+            rows.append(row)
+            print('contextual', p.name, q, v, row.get('MPSP'), row['status'], flush=True)
+        p.setter(p.baseline)
+    return dict(baseline=base, points=rows,
+                not_sampled=[n for n in names if n not in {p.name for p in params}])
+
+
+def _tea_basis(adapter, params, y0, t0, r0):
+    """Check ``tea_basis``: the baseline point with one TEA setting or the
+    feedstock price changed at a time (module docstring); every setting is
+    restored after its case."""
+    import biosteam as bst
+    tea = adapter.tea
+    P = {p.name: p for p in params}
+    rows = []
+
+    def run(case, value=float('nan')):
+        row = _simulate(adapter, y0, t0, r0)
+        row.update(case=case, value=float(value))
+        rows.append(row)
+        print('tea_basis', case, value, row.get('MPSP'), row['status'], flush=True)
+
+    run('baseline')
+    CE0 = bst.CE
+    try:
+        bst.CE = TEA_BASIS_CE
+        run('CE', TEA_BASIS_CE)
+    finally:
+        bst.CE = CE0
+    irr0 = float(tea.IRR)
+    if abs(irr0 - 0.10) > 1e-9:
+        try:
+            tea.IRR = 0.10
+            run('IRR', 0.10)
+        finally:
+            tea.IRR = irr0
+    fp = P.get('p_feedstock_price')
+    if fp is not None:
+        for m in TEA_BASIS_PRICE_MULTS:
+            try:
+                fp.setter(fp.baseline * m)
+                run('feedstock_price', m)
+            finally:
+                fp.setter(fp.baseline)
+        voc, sales = getattr(tea, 'startup_VOCfrac', None), getattr(tea, 'startup_salesfrac', None)
+        if voc is not None and sales is not None and voc != sales:
+            try:
+                tea.startup_VOCfrac = sales
+                run('startup_equal', 1.0)
+                fp.setter(fp.baseline * 2.)
+                run('startup_equal_feedstock_price', 2.)
+            finally:
+                fp.setter(fp.baseline)
+                tea.startup_VOCfrac = voc
+    dur0 = tuple(tea.duration)
+    fin0 = tuple(getattr(tea, a) for a in ('finance_fraction', 'finance_interest', 'finance_years'))
+    if dur0[1] - dur0[0] != 20:
+        try:
+            tea.duration = (dur0[0], dur0[0] + 20)
+            run('life_20', 20)
+            if fin0[0]:
+                tea.finance_fraction, tea.finance_interest, tea.finance_years = 0., 0., 0
+                run('life_20_no_debt', 20)
+        finally:
+            tea.duration = dur0
+            tea.finance_fraction, tea.finance_interest, tea.finance_years = fin0
+    run('baseline_repeat')
+    return dict(CE=float(CE0), IRR=irr0, duration=list(dur0), finance_fraction=float(fin0[0] or 0.),
+                startup_VOCfrac=getattr(tea, 'startup_VOCfrac', None),
+                startup_salesfrac=getattr(tea, 'startup_salesfrac', None), points=rows)
+
+
 def _simulate(adapter, y, t, r, ics=()):
     from .harness import InfeasibleSpecification, collect_natural_gas
     out = dict(y=float(y), t=float(t), r=float(r))
@@ -294,7 +421,9 @@ def _simulate(adapter, y, t, r, ics=()):
         out.update(status='ok', MPSP=float(res['MPSP']),
                    recovery=float(res.get('recovery', float('nan'))),
                    F_sugar_fed=float(res.get('F_sugar_fed', float('nan'))),
-                   F_feedstock=float(res.get('F_feedstock', float('nan'))))
+                   F_feedstock=float(res.get('F_feedstock', float('nan'))),
+                   F_final_product=float(res.get('F_final_product', float('nan'))),
+                   feedstock_price=float(res.get('feedstock_price', float('nan'))))
         tea = adapter.tea
         out['FCI'] = float(getattr(tea, 'FCI', float('nan')))
         out.update({k: float(v) for k, v in collect_natural_gas(adapter.system).items()})
@@ -353,6 +482,10 @@ def run_config(adapter_name, config_id, checks, capacity_mults=CAPACITY_MULTS):
                 print('capacity', config_id, m, row.get('MPSP'), row['status'], flush=True)
             cap.setter(cap.baseline)
             rec['capacity'] = dict(baseline=float(cap.baseline), points=rows)
+    if 'contextual' in checks:
+        rec['contextual'] = _contextual(A, params, y0, t0, r0)
+    if 'tea_basis' in checks:
+        rec['tea_basis'] = _tea_basis(A, params, y0, t0, r0)
     if 'ic_biogas' in checks:
         ics = _ic_units(A)
         lumped = [u for u in ics if str(getattr(u, 'method', 'lumped')).lower() != 'separate']
@@ -411,7 +544,7 @@ def collect(raw_dir, csv_dir, registry_dir=None):
     import pandas as pd
     from fermentation_insights.coeff_predictor import physics
     recs = [json.load(open(f)) for f in sorted(glob.glob(os.path.join(raw_dir, '*.json')))]
-    cap_rows, ic_pts, ic_bias, dup_pts, dup_bias = [], [], [], [], []
+    cap_rows, ctx_rows, ic_pts, ic_bias, dup_pts, dup_bias, tb_rows = [], [], [], [], [], [], []
     ub_rows, col_pts, col_bias, col_cap = [], [], [], []
     tea_rows, tea_reg = [], {}
     for rec in recs:
@@ -440,6 +573,16 @@ def collect(raw_dir, csv_dir, registry_dir=None):
                                  capacity_baseline=c['baseline'],
                                  **{k: row.get(k) for k in ('mult', 'p_feedstock_capacity', 'y', 't', 'r',
                                                             'status', 'MPSP', 'recovery', 'FCI')}))
+        cx = rec.get('contextual') or {}
+        b = cx.get('baseline') or {}
+        for row in cx.get('points', ()):
+            ctx_rows.append(dict(config_id=cid, harness_version=rec.get('harness_version', 3),
+                                 MPSP_baseline=b.get('MPSP'), status_baseline=b.get('status'),
+                                 **{k: row.get(k) for k in ('param', 'quantile', 'value', 'baseline_value', 'y', 't',
+                                                            'r', 'status', 'MPSP', 'recovery', 'FCI')}))
+        tb = rec.get('tea_basis') or {}
+        if tb.get('points'):
+            tb_rows.extend(_tea_basis_rows(cid, rec, tb))
         for key, pts_, bias_, extra in (('ic_biogas', ic_pts, ic_bias, ('biogas_kg_h', 'ic_mass_gain_kg_h')),
                                         ('duplicate_inlets', dup_pts, dup_bias, ('F_sugar_fed',))):
             if key in rec:
@@ -466,11 +609,13 @@ def collect(raw_dir, csv_dir, registry_dir=None):
         col_cap = cc.to_dict('records')
     os.makedirs(csv_dir, exist_ok=True)
     written = []
-    for name, rows in (('capacity_response.csv', cap_rows), ('ic_biogas_points.csv', ic_pts),
+    for name, rows in (('capacity_response.csv', cap_rows), ('contextual_response.csv', ctx_rows),
+                       ('ic_biogas_points.csv', ic_pts),
                        ('ic_biogas_bias.csv', ic_bias), ('duplicate_inlets_points.csv', dup_pts),
                        ('duplicate_inlets_bias.csv', dup_bias), ('unit_bounds.csv', ub_rows),
                        ('column_trays_points.csv', col_pts), ('column_trays_bias.csv', col_bias),
-                       ('column_trays_capacity.csv', col_cap), ('tea_settings.csv', tea_rows)):
+                       ('column_trays_capacity.csv', col_cap), ('tea_basis.csv', tb_rows),
+                       ('tea_settings.csv', tea_rows)):
         if rows:
             path = os.path.join(csv_dir, name)
             pd.DataFrame(rows).to_csv(path, index=False, float_format='%.6g')
@@ -481,12 +626,56 @@ def collect(raw_dir, csv_dir, registry_dir=None):
         note = ('TEA settings of each training configuration at its baseline (data_generation/sim_checks.py, '
                 'check tea_settings); "fixed": contextual parameters the adapter does not sample (NaN in the '
                 'training data) and their value in the module')
+        # merge: predict.py reads every configuration's record, so a collect of
+        # a subset of the configurations must not drop the others
+        old = {}
+        if os.path.exists(path):
+            try:
+                with open(path) as fh:
+                    old = json.load(fh).get('configs') or {}
+            except (OSError, ValueError) as e:
+                raise RuntimeError(f'{path} exists but cannot be read ({e}); not overwritten') from e
+        kept = sorted(set(old) - set(tea_reg))
+        if kept:
+            print(f'{TEA_SETTINGS_JSON}: kept the records of {len(kept)} configuration(s) not in {raw_dir}: '
+                  + ', '.join(kept))
+        tea_reg = {**old, **tea_reg}
         with open(path, 'w') as fh:       # one line per configuration
             fh.write('{"note": ' + json.dumps(note) + ',\n "configs": {\n')
             fh.write(',\n'.join(f'  {json.dumps(k)}: {json.dumps(tea_reg[k])}' for k in sorted(tea_reg)))
             fh.write('\n }\n}\n')
         written.append(path)
     return written
+
+
+def _tea_basis_rows(cid, rec, tb):
+    """Rows of one configuration's ``tea_basis`` check: per case the MPSP and
+    FCI change from the baseline (%) and, for the feedstock-price cases, the
+    DCF weight dMPSP / (dp x F_feedstock / F_final_product) (dp: change of
+    the actual feedstock-stream price; 1 = the weight of the product sales)."""
+    import numpy as np
+    pts = tb['points']
+    base = next((r for r in pts if r.get('case') == 'baseline'), None)
+    seq = next((r for r in pts if r.get('case') == 'startup_equal'), None)
+    out = []
+    for r in pts:
+        row = dict(config_id=cid, harness_version=rec.get('harness_version'), CE_module=tb.get('CE'),
+                   IRR_module=tb.get('IRR'), plant_life_years=(tb['duration'][1] - tb['duration'][0])
+                   if tb.get('duration') else None, finance_fraction=tb.get('finance_fraction'),
+                   startup_VOCfrac=tb.get('startup_VOCfrac'), startup_salesfrac=tb.get('startup_salesfrac'),
+                   **{k: r.get(k) for k in ('case', 'value', 'status', 'y', 't', 'r', 'MPSP', 'FCI', 'feedstock_price',
+                                             'F_feedstock', 'F_final_product')})
+        ok = base is not None and base.get('status') == 'ok' and r.get('status') == 'ok'
+        ref = seq if r.get('case') == 'startup_equal_feedstock_price' else base
+        if ok:
+            row['dMPSP_pct'] = 100 * (r['MPSP'] / base['MPSP'] - 1)
+            row['dFCI_pct'] = 100 * (r['FCI'] / base['FCI'] - 1) if base.get('FCI') else np.nan
+        if r.get('case', '').endswith('feedstock_price') and ok and ref is not None and ref.get('status') == 'ok':
+            dp = r['feedstock_price'] - ref['feedstock_price']
+            slope = dp * ref['F_feedstock'] / ref['F_final_product'] if ref.get('F_final_product') else np.nan
+            row['dcf_weight'] = (r['MPSP'] - ref['MPSP']) / slope if slope else np.nan
+        out.append(row)
+    return out
 
 
 def _paired_effect(ic, cid, ic_pts, ic_bias, extra):

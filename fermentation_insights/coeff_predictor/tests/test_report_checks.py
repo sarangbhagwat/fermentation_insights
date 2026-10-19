@@ -207,3 +207,84 @@ def test_sim_checks_unit_bounds_collect_and_parallel_trays(tmp_path):
     c = pd.read_csv(tmp_path / 'csv' / 'column_trays_capacity.csv').set_index(['mode', 'mult'])
     assert c.loc[('as_is', 2.), 'MPSP_rel_to_1x'] == pytest.approx(1.02)
     assert c.loc[('fixed', 2.), 'FCI_rel_to_1x'] == pytest.approx(2 ** 0.8)
+
+
+def test_sim_checks_tea_settings_registry_is_merged(tmp_path):
+    """A collect of a subset of the configurations keeps the registry records
+    of the others (predict.py reads registry/tea_settings.json at run time)."""
+    import json
+    from fermentation_insights.coeff_predictor.data_generation import sim_checks as SC
+    raw, reg_dir = tmp_path / 'raw', tmp_path / 'registry'
+    raw.mkdir(), reg_dir.mkdir()
+    old = {'note': 'x', 'configs': {'A': dict(CE=567., fixed={'p_IRR': 0.15}, adapter='ethanol'),
+                                    'X': dict(CE=1., fixed={}, adapter='old')}}
+    json.dump(old, open(reg_dir / SC.TEA_SETTINGS_JSON, 'w'))
+    json.dump(dict(config_id='X', adapter='HP', tea_settings=dict(CE=608., tea_class='T', sampled=['p_IRR'],
+                                                                fixed={})), open(raw / 'X.json', 'w'))
+    SC.collect(str(raw), str(tmp_path / 'csv'), registry_dir=str(reg_dir))
+    reg = json.load(open(reg_dir / SC.TEA_SETTINGS_JSON))['configs']
+    assert sorted(reg) == ['A', 'X']
+    assert reg['A']['fixed'] == {'p_IRR': 0.15} and reg['X']['CE'] == 608. and reg['X']['adapter'] == 'HP'
+    # an unreadable registry file is not overwritten
+    (reg_dir / SC.TEA_SETTINGS_JSON).write_text('{not json')
+    with pytest.raises(RuntimeError):
+        SC.collect(str(raw), str(tmp_path / 'csv'), registry_dir=str(reg_dir))
+    assert (reg_dir / SC.TEA_SETTINGS_JSON).read_text() == '{not json'
+
+
+def test_sim_checks_contextual_and_tea_basis_collect(tmp_path):
+    import json
+    from fermentation_insights.coeff_predictor.data_generation import sim_checks as SC
+    pt = lambda **kw: dict(dict(y=0.5, t=50., r=1., status='ok', recovery=0.9, FCI=100., F_feedstock=1000.,
+                                F_final_product=100., feedstock_price=0.1), **kw)
+    ctx = dict(baseline=pt(MPSP=2.), points=[
+        pt(MPSP=1.9, param='p_IRR', quantile=0.1, value=0.08, baseline_value=0.1),
+        pt(MPSP=2.1, param='p_IRR', quantile=0.9, value=0.12, baseline_value=0.1)], not_sampled=['p_acid_price'])
+    # feedstock price x2: dp = 0.1 USD/kg, intensity 1000 / 100 kg/kg -> +1.0 USD/kg at weight 1
+    tb = dict(CE=541.7, IRR=0.1, duration=[2019, 2049], finance_fraction=0.4, startup_VOCfrac=0.75,
+              startup_salesfrac=0.5, points=[
+                  pt(MPSP=2., case='baseline', value=float('nan')), pt(MPSP=2.1, case='CE', value=607.5, FCI=112.),
+                  pt(MPSP=3.0066, case='feedstock_price', value=2., feedstock_price=0.2),
+                  pt(MPSP=1.99, case='startup_equal', value=1.),
+                  pt(MPSP=2.99, case='startup_equal_feedstock_price', value=2., feedstock_price=0.2)])
+    json.dump(dict(config_id='X', harness_version=4, contextual=ctx, tea_basis=tb), open(tmp_path / 'X.json', 'w'))
+    written = SC.collect(str(tmp_path), str(tmp_path / 'csv'))
+    assert sorted(os.path.basename(p) for p in written) == ['contextual_response.csv', 'tea_basis.csv']
+    c = pd.read_csv(tmp_path / 'csv' / 'contextual_response.csv')
+    assert list(c['quantile']) == [0.1, 0.9] and (c['MPSP_baseline'] == 2.).all() and (c['param'] == 'p_IRR').all()
+    t = pd.read_csv(tmp_path / 'csv' / 'tea_basis.csv').set_index('case')
+    assert t.loc['CE', 'dMPSP_pct'] == pytest.approx(5.) and t.loc['CE', 'dFCI_pct'] == pytest.approx(12.)
+    assert t.loc['feedstock_price', 'dcf_weight'] == pytest.approx(1.0066)
+    # with startup_VOCfrac = startup_salesfrac: relative to that case's own baseline
+    assert t.loc['startup_equal_feedstock_price', 'dcf_weight'] == pytest.approx(1.0)
+    assert np.isnan(t.loc['baseline', 'dcf_weight']) and t.loc['baseline', 'CE_module'] == 541.7
+
+
+def test_contextual_response_sign_comparison():
+    """report_checks.contextual_response on a stub predictor: responses below
+    CONTEXTUAL_ZERO count as 0, so a spurious predicted response is a sign
+    mismatch, and the model is queried by config_id with the parameter."""
+    class _Spec:
+        spec_registry = {'config': {'X': {}}}
+
+    class _P:
+        spec = _Spec()
+        calls = []
+
+        def predict(self, specs):
+            self.calls.append(specs)
+            v = np.array([s['p_acid_price'] for s in specs])
+            return pd.DataFrame(dict(a=1. - 2. * (v - 0.1), b=0., c=0., d=0., g=1., in_domain=True,
+                                     contextual_outside_range=''))
+    sim = pd.DataFrame(dict(config_id='X', param='p_acid_price', quantile=[0.1, 0.9], value=[0.09, 0.11],
+                            baseline_value=0.1, y=0.5, t=50., r=1., status='ok', MPSP=[2., 2.0002],
+                            MPSP_baseline=2.))
+    samples = pd.DataFrame(dict(config_id=['X'], sample_kind=['baseline'], feedstock_price=[0.05]))
+    P = _P()
+    t = RC.contextual_response(P, sim, samples).iloc[0]
+    assert P.calls[0][0] == dict(config_id='X', r=1., feedstock_price=0.05, p_acid_price=0.09)
+    assert t['dlnMPSP_sim_pct'] == pytest.approx(100 * np.log(2.0002 / 2.))
+    assert t['dlnMPSP_pred_pct'] == pytest.approx(100 * np.log(0.98 / 1.02))
+    assert t['sign_mismatch'] and t['in_domain']
+    s = RC.contextual_response_summary(RC.contextual_response(P, sim, samples)).iloc[0]
+    assert s['n_sign_mismatch'] == 1 and s['n_configs'] == 1

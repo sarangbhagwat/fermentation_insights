@@ -713,6 +713,78 @@ def data_violation_rates(samples_by_id, points_by_id, ids, tol=1e-3):
             for c in d.columns if c.startswith('viol_')}
 
 
+CONTEXTUAL_RESPONSE_CSV = os.path.join('data_generation', 'checks', 'contextual_response.csv')
+#: [% of MPSP] a predicted or simulated response (ln MPSP change from the 10th
+#: to the 90th percentile of a parameter) larger than this counts in the sign
+#: comparison of :func:`contextual_response`
+CONTEXTUAL_SIGN_MIN = 0.3
+#: [% of MPSP] responses smaller than this count as zero (sign 0) in that
+#: comparison (e.g. the acid price of a configuration that buys no acid)
+CONTEXTUAL_ZERO = 0.1
+
+
+def contextual_response(P, sim, samples):
+    """Model vs. BioSTEAM response of the MPSP to one contextual or
+    technological parameter at a time (report only). ``sim``:
+    :data:`CONTEXTUAL_RESPONSE_CSV` (``sim_checks.py`` check ``contextual``:
+    per configuration and sampled parameter, every other parameter at its
+    baseline, the baseline yield, titer and productivity, the parameter at
+    the 10th and 90th percentile of its sampling distribution); the model
+    is queried by ``config_id`` with that parameter value, the productivity
+    and the baseline sample's feedstock price (every other contextual
+    parameter at the configuration's baseline). Per configuration x
+    parameter: the values, the simulated and predicted response
+    100 ln(MPSP(q90) / MPSP(q10)) [% of MPSP], their difference, whether the
+    signs differ while either exceeds :data:`CONTEXTUAL_SIGN_MIN`
+    (``sign_mismatch``: the wrong sign, or a spurious or missed response, a
+    response below :data:`CONTEXTUAL_ZERO` having sign 0), and the
+    ``in_domain`` / ``contextual_outside_range`` flags of the two queries."""
+    import warnings
+    sim = sim[sim['status'] == 'ok']
+    base = samples[samples['sample_kind'].astype(str) == 'baseline'].groupby('config_id').first()
+    reg = (P.spec.spec_registry or {}).get('config', {})
+    rows = []
+    for (cid, par), g in sim.groupby(['config_id', 'param'], sort=True):
+        g = g.sort_values('quantile')
+        if cid not in reg or cid not in base.index or len(g) < 2:
+            continue
+        lo, hi = g.iloc[0], g.iloc[-1]
+        specs = [dict(config_id=cid, r=float(x.r), feedstock_price=float(base.loc[cid, 'feedstock_price']),
+                      **{par: float(x.value)}) for x in (lo, hi)]
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            q = P.predict(specs)
+        y, t = np.array([lo.y, hi.y], float), np.array([lo.t, hi.t], float)
+        m = ((q['a'] + q['b'] / y + q['c'] / t + q['d'] / (y * t)) / q['g']).to_numpy(float)
+        ds, dm = 100 * math.log(hi.MPSP / lo.MPSP), 100 * math.log(m[1] / m[0])
+        big = max(abs(ds), abs(dm)) > CONTEXTUAL_SIGN_MIN
+        sgn = lambda v: 0. if abs(v) < CONTEXTUAL_ZERO else float(np.sign(v))
+        rows.append(dict(config_id=cid, param=par, q_lo=float(lo['quantile']), q_hi=float(hi['quantile']),
+                         value_lo=float(lo.value), value_hi=float(hi.value), baseline_value=float(lo.baseline_value),
+                         MPSP_sim_baseline=float(lo.MPSP_baseline), dlnMPSP_sim_pct=ds, dlnMPSP_pred_pct=dm,
+                         diff_pct=dm - ds, sign_mismatch=bool(big and sgn(ds) != sgn(dm)),
+                         in_domain=bool(q['in_domain'].all()) if 'in_domain' in q else True,
+                         contextual_outside_range=', '.join(sorted({c for v in q['contextual_outside_range']
+                                                                    for c in str(v).split(', ') if c}))
+                         if 'contextual_outside_range' in q else ''))
+    return pd.DataFrame(rows)
+
+
+def contextual_response_summary(t):
+    """Per parameter over the configurations of :func:`contextual_response`:
+    n, the median simulated and predicted response, the median and maximum
+    |difference| [% of MPSP] and the number of sign mismatches."""
+    if t is None or not len(t):
+        return pd.DataFrame()
+    g = t.groupby('param')
+    out = pd.DataFrame(dict(n_configs=g.size(), sim_median=g['dlnMPSP_sim_pct'].median(),
+                            pred_median=g['dlnMPSP_pred_pct'].median(),
+                            abs_diff_median=g['diff_pct'].apply(lambda x: x.abs().median()),
+                            abs_diff_max=g['diff_pct'].apply(lambda x: x.abs().max()),
+                            n_sign_mismatch=g["sign_mismatch"].sum().astype(int)))
+    return out.reset_index()
+
+
 def price_response_error(P, samples, keys=(('fs', 'feedstock_price'), ('el', 'electricity_price'),
                                            ('ng', 'natural_gas_price'))):
     """Accuracy of the predicted price sensitivity: per sample, the error of
@@ -743,6 +815,46 @@ def price_response_error(P, samples, keys=(('fs', 'feedstock_price'), ('el', 'el
             with np.errstate(divide='ignore', invalid='ignore'):
                 res['fs_sensitivity_rel_err'] = dpred / dsim - 1
     return res.groupby('config_id').median().reset_index()
+
+
+def ng_slope_at_baseline(P, samples, points, n_nearest=4):
+    """Sign of the natural-gas price slope at each configuration's baseline
+    yield and titer (report only): per configuration, the MPSP response to a
+    100 % natural-gas price change [% of MPSP], (I_ng / g) x p_ng / MPSP,
+    predicted (``P`` queried by ``config_id`` with the baseline sample's
+    productivity and feedstock price) and from the baseline sample's fitted
+    intensities ``int__ng__*`` (the reference of
+    :func:`price_response_error`), and the simulated natural-gas use
+    ``q__ng`` at the baseline sample's ``n_nearest`` points closest to the
+    baseline (relative distance in y and t; mean and max)."""
+    s = samples[samples['sample_kind'].astype(str) == 'baseline'].groupby('config_id').first()
+    if not len(s) or not all(f'int__ng__{k}' in s for k in 'abcd'):
+        return pd.DataFrame()
+    specs = [dict(config_id=c, r=float(x.r), feedstock_price=float(x.feedstock_price)) for c, x in s.iterrows()]
+    q = P.predict(specs, warn=False)
+    if not all(f'int__ng__{k}' in q for k in 'abcd'):
+        return pd.DataFrame()
+    y, t = s['baseline_yield'].to_numpy(float), s['baseline_titer'].to_numpy(float)
+
+    def surf(D, pre):
+        return (D[pre + 'a'].to_numpy(float) + D[pre + 'b'].to_numpy(float) / y + D[pre + 'c'].to_numpy(float) / t
+                + D[pre + 'd'].to_numpy(float) / (y * t))
+    png = s['natural_gas_price'].to_numpy(float)
+    pred = 100 * surf(q, 'int__ng__') * png / surf(q, '')
+    fit = 100 * surf(s, 'int__ng__') * png / surf(s, '')
+    out = pd.DataFrame(dict(config_id=s.index, ng_response_pred_pct=pred, ng_response_fit_pct=fit))
+    if points is not None and 'q__ng' in points:
+        qm, qx = [], []
+        for c, x in s.iterrows():
+            p = points[points['sample_id'] == x.sample_id]
+            if not len(p):
+                qm.append(np.nan), qx.append(np.nan)
+                continue
+            d = np.hypot(p['y'].to_numpy(float) / x.baseline_yield - 1, p['t'].to_numpy(float) / x.baseline_titer - 1)
+            v = p['q__ng'].to_numpy(float)[np.argsort(d)[:n_nearest]]
+            qm.append(float(np.nanmean(v))), qx.append(float(np.nanmax(v)))
+        out['q_ng_nearest_mean'], out['q_ng_nearest_max'] = qm, qx
+    return out.reset_index(drop=True)
 
 
 #: markers of the generated accuracy block in README.md (``readme_summary``)
