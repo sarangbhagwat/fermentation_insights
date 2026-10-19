@@ -18,7 +18,8 @@ interrupted run resumes where it stopped)
 ------------------------------------------------------------------------
 1. ``data``    processed tables from the raw harness files (``dataset.build``),
                cached in ``data/processed/`` and rebuilt only when the raw files
-               change (size/mtime fingerprint);
+               (path relative to ``--raw``, size and content hash) or the
+               processing sources change;
 2. ``split``   final test set, FROZEN in ``results/split.json`` (committed) before
                any modelling and never used for selection: one whole
                configuration from every biorefinery with >= ``min_configs``
@@ -367,13 +368,47 @@ def processing_source_hash():
     return h.hexdigest()[:16]
 
 
+def _file_sha(path, chunk=1 << 20):
+    h = hashlib.sha256()
+    with open(path, 'rb') as fh:
+        for b in iter(lambda: fh.read(chunk), b''):
+            h.update(b)
+    return h.hexdigest()
+
+
 def raw_fingerprint(raw_dirs):
-    files = []
+    """(hash, files) of the raw ``*.jsonl`` records under ``raw_dirs``. The
+    hash covers each file's path relative to its raw directory, its size and
+    its content (SHA-256), not its absolute path or mtime, so the same records
+    under another ``--raw`` path or unpacked again reuse the cached tables;
+    ``files`` = [[absolute path, size, mtime]] (recorded, and the mtime used
+    for the recent-file warning)."""
+    files, key = [], []
     for d in raw_dirs:
         for p in sorted(glob.glob(os.path.join(d, '**', '*.jsonl'), recursive=True)):
             st = os.stat(p)
             files.append([os.path.abspath(p), int(st.st_size), int(st.st_mtime)])
-    return _sha(files), files
+            key.append([os.path.relpath(p, d), int(st.st_size), _file_sha(p)])
+    return _sha(key), files
+
+
+def _legacy_raw_fingerprint(files):
+    """The raw fingerprint of experiments.py before round 7 of the final
+    review (absolute path, size and mtime): accepted once for tables recorded
+    with it, so that the change of the fingerprint does not rebuild them."""
+    return _sha(files)
+
+
+def _gzip_without_timestamp(path):
+    """Rewrite a .gz file with the same content and no timestamp in its
+    header (byte-level: the CSV text is unchanged)."""
+    import gzip
+    with gzip.open(path, 'rb') as fh:
+        data = fh.read()
+    tmp = path + '.tmp'
+    with open(tmp, 'wb') as fh:
+        fh.write(gzip.compress(data, mtime=0))
+    os.replace(tmp, path)
 
 
 def data_hash(samples, points):
@@ -394,13 +429,22 @@ def stage_data(a):
         with open(fp_path) as fh:
             old = json.load(fh)
     src_changed = old.get('processing_sources') not in (None, src)
+    if old.get('raw_content_fingerprint') is None and old.get('raw_fingerprint') is not None \
+            and old['raw_fingerprint'] == _legacy_raw_fingerprint(files):
+        # tables recorded with the legacy (path / mtime) fingerprint of the
+        # same raw files: adopt them under the content fingerprint
+        log('data: raw fingerprint recorded with the legacy path/mtime key; the raw files are unchanged: '
+            'recording the content fingerprint (no rebuild)')
+        old = dict(old, raw_content_fingerprint=fp)
+        _dump_json(old, fp_path)
     if have and not files and not a.rebuild:
         # a clone without the raw simulation records (not in git): the shipped
         # processed tables are the data (README section 8, "Data availability")
         log(f'data: no raw *.jsonl files under {a.raw}: using the shipped processed tables in {proc}'
             + (' (WARNING: the data-processing sources changed since they were built; they cannot be rebuilt '
                'without the raw records)' if src_changed else ''))
-    elif have and (a.no_rebuild or (old.get('raw_fingerprint') == fp and not a.rebuild and not src_changed)):
+    elif have and (a.no_rebuild or (old.get('raw_content_fingerprint') == fp and not a.rebuild
+                                    and not src_changed)):
         log(f'data: cached processed tables in {proc} '
             f'({"--no-rebuild" if a.no_rebuild else "raw files and processing sources unchanged"})')
         if old.get('processing_sources') is None and not a.no_rebuild:
@@ -418,7 +462,10 @@ def stage_data(a):
         t0 = time.time()
         log(f'data: building processed tables from {len(files)} raw files ...')
         dataset.build(a.raw, out_dir=proc)
-        _dump_json(dict(raw_fingerprint=fp, raw_dirs=a.raw, files=files, processing_sources=src,
+        for n in ('samples', 'points', 'configs'):
+            # the tables are tracked in git: same content, same bytes
+            _gzip_without_timestamp(os.path.join(proc, f'{n}.csv.gz'))
+        _dump_json(dict(raw_content_fingerprint=fp, raw_dirs=a.raw, files=files, processing_sources=src,
                         built=time.strftime('%Y-%m-%d %H:%M:%S')), fp_path)
         log(f'data: built in {time.time() - t0:.0f}s -> {proc}')
     # processed tables built before the downstream specification (patch S1):
@@ -2065,6 +2112,23 @@ def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
             t.to_csv(os.path.join(tdir, f'price_response_{os.path.basename(path_)}.csv'), index=False)
         except Exception as e:
             log(f'tables: WARNING price response of {path_} failed: {type(e).__name__}: {e}')
+    checks['tea_basis'] = None
+    tb_csv = os.path.join(PKG_DIR, 'data_generation', 'checks', 'tea_basis.csv')
+    if os.path.exists(tb_csv):
+        import pandas as pd
+        checks['tea_basis'] = pd.read_csv(tb_csv)
+    checks['ng_slope_baseline'] = None
+    if os.path.isdir(os.path.join(a.models, 'release')):
+        try:
+            from fermentation_insights.coeff_predictor.predict import CoefficientPredictor
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                t = RC.ng_slope_at_baseline(CoefficientPredictor.load(os.path.join(a.models, 'release')),
+                                            D['samples'], D['points'])
+            checks['ng_slope_baseline'] = t
+            t.to_csv(os.path.join(tdir, 'ng_slope_baseline_release.csv'), index=False)
+        except Exception as e:
+            log(f'tables: WARNING natural-gas slope at the baseline failed: {type(e).__name__}: {e}')
     checks['capacity_response'] = None
     cap_csv = os.path.join(PKG_DIR, RC.CAPACITY_RESPONSE_CSV)
     rel_path = os.path.join(a.models, 'release')
@@ -2079,6 +2143,19 @@ def report_only_checks(a, D, cv, fin, checks, S, Pts, tdir, fp):
             t.to_csv(os.path.join(tdir, 'capacity_response_release.csv'), index=False)
         except Exception as e:
             log(f'tables: WARNING capacity response failed: {type(e).__name__}: {e}')
+    checks['contextual_response'] = None
+    ctx_csv = os.path.join(PKG_DIR, RC.CONTEXTUAL_RESPONSE_CSV)
+    if os.path.exists(ctx_csv) and os.path.isdir(rel_path):
+        try:
+            import pandas as pd
+            from fermentation_insights.coeff_predictor.predict import CoefficientPredictor
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                t = RC.contextual_response(CoefficientPredictor.load(rel_path), pd.read_csv(ctx_csv), D['samples'])
+            checks['contextual_response'] = t
+            t.to_csv(os.path.join(tdir, 'contextual_response_release.csv'), index=False)
+        except Exception as e:
+            log(f'tables: WARNING contextual response failed: {type(e).__name__}: {e}')
     r = cv['results']
     r = r[(r['scheme'] == 'random') & (r['fold'] >= 0) & (r['metric'] == 'mpsp_mape_cfg_gmean_random')]
     checks['random_cv_random_samples'] = r.groupby('method')['value'].mean().to_dict()
@@ -3734,8 +3811,9 @@ def in_distribution_coverage(shc, idf, idc=None, nominal=None, tol=0.1):
           + f' `predict()` / `mpsp()` list, per row, the keys whose coverage for the row\'s fermentation product is '
           f'more than {tol:.1f} below nominal in `intervals_undercovered`, with an ApplicabilityWarning (the '
           'coverage of each checkpoint\'s own quantiles on these development out-of-fold scores, '
-          '`meta[\'coverage_by_family\']`: for a training `config_id` the lower of the random-CV and '
-          'productivity-tail coverage, for any other row of a known product the LOCO coverage; report-only '
+          '`meta[\'coverage_by_family\']`: for a row that encodes as a training configuration (by `config_id` or '
+          'names, and its training rows) the lower of the random-CV and productivity-tail coverage, for any other '
+          'row of a known product the LOCO coverage; report-only '
           'metadata, the quantiles are unchanged).\n')
     summ = ('* For a KNOWN configuration the shipped intervals are conservative pooled ('
             + '; '.join(pooled) + ')' + (', but not for every family: ' + low_txt if low_txt else '')
@@ -3829,6 +3907,67 @@ def data_violation_note(byc):
             '`viol_mono_y` near the data\'s is not a model error. The predicted g is bounded by g_max.\n')
 
 
+def dcf_weight_text(t):
+    """Parenthesis of section 8 (ii-b) on the simulated DCF weight of the
+    feedstock price (``data_generation/checks/tea_basis.csv``, check
+    ``tea_basis``: dMPSP / (dp x F_feedstock / F_final_product) at 0.5-3x the
+    feedstock price, baseline point)."""
+    import numpy as np
+    if t is None or not len(t) or 'dcf_weight' not in t:
+        return 'no `tea_basis` check table'
+    w = t[t['case'] == 'feedstock_price'].groupby('config_id')['dcf_weight'].agg(['min', 'max', 'median'])
+    eq = t[t['case'] == 'startup_equal_feedstock_price'].set_index('config_id')['dcf_weight']
+    if not len(w):
+        return 'no feedstock-price case in the `tea_basis` check table'
+    start = w[w.index.isin(eq.index)]
+    conv = w[~w.index.isin(eq.index)]
+    exact = start[(start['min'] > 1.0063) & (start['max'] < 1.0069)]
+    other = start.drop(exact.index)
+    parts = [f'feedstock price re-simulated at 0.5-3x at the baseline point for every configuration, '
+             f'`data_generation/checks/tea_basis.csv`: 1.0065-1.0068 for {len(exact)} of the {len(start)} '
+             'configurations with a startup period']
+    rng = lambda lo, hi: f'{lo:.4f}' if f'{lo:.4f}' == f'{hi:.4f}' else f'{lo:.4f}-{hi:.4f}'
+    if len(other):
+        rep = t[(t['case'] == 'baseline_repeat') & t['config_id'].isin(other.index)]['dMPSP_pct'].abs()
+        parts.append(', '.join(f'{c} {rng(x["min"], x["max"])}' for c, x in other.iterrows())
+                     + ' (other financing / tax settings and convergence noise: the repeated baseline point of these '
+                     f'differs by up to {rep.max():.3f} %)' if len(rep) else '')
+    if len(eq):
+        parts.append(f'{rng(eq.min(), eq.max())} with startup_VOCfrac set equal to startup_salesfrac')
+    if len(conv):
+        parts.append(f'{rng(conv["min"].min(), conv["max"].max())} for ' + ', '.join(conv.index)
+                     + ' (ConventionalEthanolTEA, no startup period)')
+    return '; '.join(parts)
+
+
+def ng_baseline_text(t):
+    """Sentence on the configurations whose predicted natural-gas price slope
+    is negative at the baseline point itself (``report_checks.
+    ng_slope_at_baseline``)."""
+    import numpy as np
+    if t is None or not len(t):
+        return '.'
+    neg = t[t['ng_response_pred_pct'] < 0].sort_values('ng_response_pred_pct')
+    if not len(neg):
+        return ('; at every configuration\'s baseline yield and titer the predicted slope is >= 0 '
+                '(`tables/ng_slope_baseline_release.csv`).')
+
+    def one(x):
+        sim = ''
+        if 'q_ng_nearest_max' in t and np.isfinite(x.q_ng_nearest_max):
+            sim = (', simulated natural-gas use 0 at the nearest points of its baseline sample'
+                   if x.q_ng_nearest_max <= 0 else ', simulated natural-gas use > 0 there')
+        return (f'{x.config_id} {x.ng_response_pred_pct:+.1f} % (fitted reference {x.ng_response_fit_pct:+.1f} %'
+                f'{sim})')
+    fitneg = neg[neg['ng_response_fit_pct'] < 0]
+    return ('. This holds at the baseline point itself: per 100 % natural-gas price change the predicted MPSP '
+            'response at the baseline yield and titer is negative for ' + '; '.join(one(x) for x in neg.itertuples())
+            + ' (`report_checks.ng_slope_at_baseline`, `tables/ng_slope_baseline_release.csv`)'
+            + (f'; for {", ".join(fitneg["config_id"])} the fitted reference is negative as well, so the '
+               'natural-gas error above understates the slope error there (the true slope is about 0 where no '
+               'natural gas is used)' if len(fitneg) else '') + '.')
+
+
 def capacity_response_text(t, samples=None):
     """Section 8 paragraph: the release model's MPSP response to the
     feedstock capacity vs. BioSTEAM (``report_checks.capacity_response``)."""
@@ -3870,6 +4009,59 @@ def capacity_response_text(t, samples=None):
             f'contextual range check flags {100 * out_flag:.0f} % of them (`contextual_outside_range`, with an '
             'ApplicabilityWarning). Scale-up effects should not be read from the model:\n\n'
             + md_table(tab.round(1)) + '\n')
+
+
+def contextual_response_text(t):
+    """Section 8 paragraph: the release model's MPSP response to one
+    contextual / technological parameter at a time vs. BioSTEAM
+    (``report_checks.contextual_response``)."""
+    from fermentation_insights.coeff_predictor import report_checks as RC
+    if t is None or not len(t):
+        return ''
+    summ = RC.contextual_response_summary(t)
+    summ = summ.sort_values('n_sign_mismatch', ascending=False, kind='mergesort')
+    tab = summ.rename(columns=dict(param='parameter', n_configs='configurations', sim_median='simulated (median)',
+                                   pred_median='predicted (median)', abs_diff_median='abs. difference (median)',
+                                   abs_diff_max='abs. difference (max)', n_sign_mismatch='sign mismatches'))
+    bad = t[t['sign_mismatch']].sort_values(['param', 'config_id'])
+    worst = t.reindex(t['diff_pct'].abs().sort_values(ascending=False).index).head(6)
+    ok = summ[summ['n_sign_mismatch'] == 0]['param'].tolist()
+    nb = summ[summ['n_sign_mismatch'] > 0]['param'].tolist()
+    ind = float(t['in_domain'].mean())
+    oor = float((t['contextual_outside_range'].fillna('').astype(str) != '').mean())
+    btab = bad[['config_id', 'param', 'value_lo', 'value_hi', 'dlnMPSP_sim_pct', 'dlnMPSP_pred_pct']].rename(
+        columns=dict(dlnMPSP_sim_pct='simulated %', dlnMPSP_pred_pct='predicted %'))
+    return ('**(ii-d) Contextual-parameter response** (report only): MPSP response to one contextual or technological '
+            'parameter at a time, 100 ln(MPSP(q90) / MPSP(q10)) in % of the MPSP, with the parameter at the 10th and '
+            '90th percentile of its sampling distribution, predicted (`models/release`, queried by `config_id` with '
+            'that value) vs. simulated (BioSTEAM, every other parameter at baseline, baseline yield, titer and '
+            'productivity; `data_generation/sim_checks.py` check `contextual`, `data_generation/checks/'
+            'contextual_response.csv`; `report_checks.contextual_response`, `tables/contextual_response_release.csv`; '
+            f'{len(t)} configuration x parameter pairs of {t["config_id"].nunique()} configurations; the prices of '
+            'the price channels, the capacity (ii-c) and the cell-mass yield are not part of it). A sign mismatch is '
+            f'a wrong sign or a spurious or missed response (either response above {RC.CONTEXTUAL_SIGN_MIN:g} %, a '
+            f'response below {RC.CONTEXTUAL_ZERO:g} % counting as 0). All these queries are in_domain '
+            f'({100 * ind:.0f} %) and inside the configuration\'s contextual training range ({100 * (1 - oor):.0f} %), '
+            'so no ApplicabilityWarning flags them:\n\n'
+            + md_table(tab.round(2)) + '\n\n'
+            + (f'Sign mismatches ({len(bad)}):\n\n' + md_table(btab.round(3)) + '\n\n' if len(bad) else '')
+            + 'Largest differences: ' + '; '.join(f'{x.config_id} {x.param} simulated {x.dlnMPSP_sim_pct:+.1f} %, '
+                                                    f'predicted {x.dlnMPSP_pred_pct:+.1f} %'
+                                                    for x in worst.itertuples()) + '. '
+            + (f'The response to {", ".join(ok)} has the right sign in every configuration checked, but its size '
+               'is off by up to ' + ', '.join(f'{x.abs_diff_max:.1f} %' for x in summ[summ['n_sign_mismatch'] == 0]
+                                              .itertuples()) + ' of the MPSP (same order)'
+               if ok else 'Every parameter has a sign mismatch somewhere')
+            + (f'; the response to {", ".join(nb)} is NOT reliable' if nb else '')
+            + '. Unlike the prices of the price channels, these parameters have no explicit structure in the model: '
+            'they are inputs of the channel heads whose input groups contain them (`model.CHANNEL_INPUT_PRESETS`: '
+            'financial, utilities, reagent_prices; the base and acid prices also reach the fermentation and '
+            'downstream capital heads, which they cannot physically change, and the neutralization head, whose '
+            'regime inputs do not separate a configuration that buys base from one that does not), so their '
+            'slopes are learned from the within-configuration spread of samples in which every parameter varies '
+            'at once. Do not run sweeps of these parameters with the model; `predict()` / `mpsp()` warn when one '
+            'of the unreliable ones (or the unchecked cell-mass yield) is given '
+            '(`predict.CONTEXT_RESPONSE_UNRELIABLE`, README section 7).\n')
 
 
 def loco_structure_section(checks):
@@ -4475,8 +4667,10 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
       'and are not harmonized: plant cost index `bst.CE` 525.4 (ethanol_cornstover) to 797.9 (IBO_EtOH_corn); 30-year '
       'life with 40-60 % debt, 3-year construction and a startup period, except ethanol_corn and IBO_EtOH_corn '
       '(ConventionalEthanolTEA: 20 years, no debt, 2-year construction, no startup, IRR 0.15). At the baseline point '
-      'these settings shift the MPSP by about 3-9 % per configuration (e.g. CE set to 607.5: IBO_EtOH_corn -8.5 %, '
-      'ethanol_cornstover +6.2 %), and the offsets are part of the configuration and family effects that the CV '
+      'these settings shift the MPSP by up to about 12 % per configuration (`data_generation/checks/tea_basis.csv`, '
+      'check `tea_basis`: CE set to 607.5: IBO_EtOH_corn -8.5 %, ethanol_cornstover +6.1 %; the 20-year, no-debt '
+      'convention: +3.6 to +11.5 % for the 30-year configurations), and the offsets are part of the configuration '
+      'and family effects that the CV '
       'schemes transfer. The IRR of 0.15 of ethanol_corn and IBO_EtOH_corn (and the 350.4 operating days of '
       'ethanol_cornstover) are not sampled and are NaN in the training data, so the model input carries the imputed '
       'training baseline (IRR 0.10, 330 days) for them.\n')
@@ -4818,16 +5012,14 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           'TEAs with a startup period (CellulosicEthanolTEA and LacticTEA: startup_VOCfrac 0.75 vs. '
           'startup_salesfrac 0.5; every configuration but ethanol_corn and IBO_EtOH_corn, '
           '`data_generation/checks/tea_settings.csv`) weight variable operating costs slightly more: their '
-          'simulated dMPSP/dp is about 1.0066 x intensity / g (feedstock price re-simulated at 0.5-3x at the '
-          'baseline point: 1.0066 for HP_corn, succinic_glucose, TAL_glucose, oxalic_neutral_sugarcane, '
-          '1.0064-1.0076 for lactic_lowpH_SHF_cornstover and ethanol_cornstover; 1.0000 for '
-          'ConventionalEthanolTEA). The difference sits in the closure channel, which does not depend on the '
+          'simulated dMPSP/dp is about 1.0066 x intensity / g (' + dcf_weight_text(checks.get('tea_basis'))
+          + '). The difference sits in the closure channel, which does not depend on the '
           'prices, so the true price response of these configurations is about 0.7 % larger than predicted (per '
           '100 % price change, 0.7 % of the price channel\'s share of the MPSP; 0.1-0.4 % of the MPSP for the '
-          'feedstock). (2) The errors '
-          'are at the baseline yield and titer; away from it the natural-gas intensity, a 4-term fit of a '
-          'hinge-shaped demand, can be negative (README section 4.6), and with it the predicted natural-gas price '
-          'slope, while the simulated one is never negative.\n')
+          'feedstock). (2) The natural-gas intensity is a 4-term fit of a hinge-shaped demand and can be '
+          'negative (README section 4.6), and with it the predicted natural-gas price slope, while the simulated '
+          'one is never negative; the error above compares the prediction with the sample\'s FITTED intensity, '
+          'which is negative at the same places' + ng_baseline_text(checks.get('ng_slope_baseline')) + '\n')
         for name, t in pre.items():
             q = t.set_index('config_id')
             big = q[(q.abs() > 0.10).any(axis=1)]
@@ -4839,6 +5031,7 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
                 b = (100 * big).round(1).reset_index()
                 P(md_table(b) + '\n')
     P(capacity_response_text(checks.get('capacity_response'), D['samples']))
+    P(contextual_response_text(checks.get('contextual_response')))
     P('**(iii) Channel breakdown** of the held-out test configurations (final PI-NN; mean over each configuration\'s '
       'test samples): `tables/channel_breakdown.csv`, `figures/channels_test.png`.\n')
     if len(ch):
