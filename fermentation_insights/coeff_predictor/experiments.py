@@ -252,6 +252,9 @@ PLANNED_SAMPLES = dict(oxalic=211, isobutanol=109, ethanol=109, HP=29, TAL=29, l
 #: modules whose edits change the processed tables (their hash is part of the
 #: processed-data fingerprint)
 PROCESSING_SOURCES = ('dataset.py', 'physics.py', 'data_patches.py', 'downstream.py')
+#: gzip settings of the .csv.gz report tables: no timestamp in the gzip
+#: header, so a re-run with unchanged content writes the same bytes
+GZIP_REPRODUCIBLE = {'method': 'gzip', 'mtime': 0}
 #: nominal miscoverage of the conformal intervals
 ALPHA = 0.1
 
@@ -4467,6 +4470,16 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
               'interacts with the sampled parameters (e.g. the lactic SSCF configurations lose the random samples '
               'of low feedstock carbohydrate content, which reach the 40 g/L minimum titer at too few yields). '
               'Known data defects and their effects: DESIGN.md section 1 ("Known data defects").\n')
+    P('**Cost year and financial basis** (report only; `data_generation/checks/tea_settings.csv`, DESIGN.md section 1, '
+      'D19 / D20): the MPSPs are in each module\'s own cost year and financial convention, which are not model inputs '
+      'and are not harmonized: plant cost index `bst.CE` 525.4 (ethanol_cornstover) to 797.9 (IBO_EtOH_corn); 30-year '
+      'life with 40-60 % debt, 3-year construction and a startup period, except ethanol_corn and IBO_EtOH_corn '
+      '(ConventionalEthanolTEA: 20 years, no debt, 2-year construction, no startup, IRR 0.15). At the baseline point '
+      'these settings shift the MPSP by about 3-9 % per configuration (e.g. CE set to 607.5: IBO_EtOH_corn -8.5 %, '
+      'ethanol_cornstover +6.2 %), and the offsets are part of the configuration and family effects that the CV '
+      'schemes transfer. The IRR of 0.15 of ethanol_corn and IBO_EtOH_corn (and the 350.4 operating days of '
+      'ethanol_cornstover) are not sampled and are NaN in the training data, so the model input carries the imputed '
+      'training baseline (IRR 0.10, 330 days) for them.\n')
     flags = checks.get('data_flags')
     if flags is not None and len(flags):
         P('Data-consistency flags (configurations to inspect; they are kept): '
@@ -4800,7 +4813,21 @@ def write_report(a, ctx, D, sp, dev, plan, hpo, cv, fin, checks, figs, timings):
           'baseline yield and titer (median over its samples; simulated = decomposed simulation intensities with '
           'the fitted g; `report_checks.price_response_error`, `tables/price_response_<model>.csv`). The '
           'predictions are exactly linear in the prices, but the intensities they multiply are learned, and are '
-          'biased for some configurations even in-sample:\n')
+          'biased for some configurations even in-sample. Two limits these errors cannot show: (1) the price '
+          'channels weight an operating cost like the product sales (dMPSP/dp = intensity / g), while BioSTEAM\'s '
+          'TEAs with a startup period (CellulosicEthanolTEA and LacticTEA: startup_VOCfrac 0.75 vs. '
+          'startup_salesfrac 0.5; every configuration but ethanol_corn and IBO_EtOH_corn, '
+          '`data_generation/checks/tea_settings.csv`) weight variable operating costs slightly more: their '
+          'simulated dMPSP/dp is about 1.0066 x intensity / g (feedstock price re-simulated at 0.5-3x at the '
+          'baseline point: 1.0066 for HP_corn, succinic_glucose, TAL_glucose, oxalic_neutral_sugarcane, '
+          '1.0064-1.0076 for lactic_lowpH_SHF_cornstover and ethanol_cornstover; 1.0000 for '
+          'ConventionalEthanolTEA). The difference sits in the closure channel, which does not depend on the '
+          'prices, so the true price response of these configurations is about 0.7 % larger than predicted (per '
+          '100 % price change, 0.7 % of the price channel\'s share of the MPSP; 0.1-0.4 % of the MPSP for the '
+          'feedstock). (2) The errors '
+          'are at the baseline yield and titer; away from it the natural-gas intensity, a 4-term fit of a '
+          'hinge-shaped demand, can be negative (README section 4.6), and with it the predicted natural-gas price '
+          'slope, while the simulated one is never negative.\n')
         for name, t in pre.items():
             q = t.set_index('config_id')
             big = q[(q.abs() > 0.10).any(axis=1)]
@@ -5066,13 +5093,16 @@ def main(argv=None):
                                                   and cv['headline'][c].isna().all()])
     cv['headline'].to_csv(os.path.join(tdir, 'cv_headline.csv'), index=False)
     if len(cv['oof']):
-        cv['oof'].to_csv(os.path.join(tdir, 'cv_oof_predictions.csv.gz'), index=False)
+        cv['oof'].to_csv(os.path.join(tdir, 'cv_oof_predictions.csv.gz'), index=False,
+                         compression=GZIP_REPRODUCIBLE)
     if len(cv['oof_scores']):
-        cv['oof_scores'].to_csv(os.path.join(tdir, 'cv_oof_scores.csv.gz'), index=False)
+        cv['oof_scores'].to_csv(os.path.join(tdir, 'cv_oof_scores.csv.gz'), index=False,
+                                compression=GZIP_REPRODUCIBLE)
     cv['crossfit'].to_csv(os.path.join(tdir, 'cv_coverage_crossfit.csv'), index=False)
     checks['fidelity'], checks['fidelity_per_config'] = fidelity_tables(cv.get('fidelity'))
     if len(checks['fidelity']):
-        cv['fidelity'].to_csv(os.path.join(tdir, 'cv_channel_fidelity.csv.gz'), index=False)
+        cv['fidelity'].to_csv(os.path.join(tdir, 'cv_channel_fidelity.csv.gz'), index=False,
+                              compression=GZIP_REPRODUCIBLE)
         checks['fidelity'].to_csv(os.path.join(tdir, 'cv_fidelity_summary.csv'), index=False)
         checks['fidelity_per_config'].to_csv(os.path.join(tdir, 'cv_fidelity_per_config.csv'), index=False)
     checks['loco_matched'] = loco_matched(cv['results'], S)
