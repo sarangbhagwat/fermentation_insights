@@ -6,6 +6,8 @@
 # CHECKS=duplicate_inlets, units that receive the same stream twice (D16),
 # with CHECKS=unit_bounds, design results outside the unit classes' own
 # bounds and the tray-cost sensitivity of columns wider than 24 ft (D18),
+# with CHECKS=tea_settings, the TEA conventions of each configuration (no
+# simulation; also written to the package's registry/tea_settings.json),
 # for every configuration of every biorefinery, each configuration in its
 # own Python process (the HP systems are module-level singletons), N_WORKERS
 # at a time. Systems are simulated in the current harness's state (its
@@ -20,6 +22,7 @@
 #         N_WORKERS=3 CHECKS=duplicate_inlets RAW=/home/user/work/data/sim_checks_dup bash run_sim_checks.sh
 #         ADAPTERS="HP TAL" CHECKS="ic_biogas" bash run_sim_checks.sh
 #         N_WORKERS=3 CHECKS=unit_bounds RAW=/home/user/work/data/sim_checks_bounds bash run_sim_checks.sh
+#         N_WORKERS=4 CHECKS=tea_settings RAW=/home/user/work/data/sim_checks_tea bash run_sim_checks.sh
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FI=${FI:-$(cd "$HERE/../../../.." && pwd)}
@@ -27,6 +30,7 @@ BIP_BASE=${BIP_BASE:-/home/user/work}
 ENV_BASE=${ENV_BASE:-/home/user/miniforge3/envs}
 RAW=${RAW:-/home/user/work/data/sim_checks}
 CSV_DIR=${CSV_DIR:-$HERE/../checks}
+REGISTRY_DIR=${REGISTRY_DIR:-$HERE/../../registry}
 N_WORKERS=${N_WORKERS:-2}
 ADAPTERS=${ADAPTERS:-"HP TAL ethanol succinic lactic oxalic isobutanol"}
 CHECKS=${CHECKS:-"capacity ic_biogas"}
@@ -56,4 +60,4 @@ printf '%s\n' "${jobs[@]}" | xargs -P "$N_WORKERS" -L 1 bash -c '
         --out "$out" --checks '"$CHECKS"' > "'"$RAW"'/${cid}.log" 2>&1
     echo "done $cid (exit $?)"
 '
-PYTHONPATH="$FI" "$ML_PY" -m $MOD --collect "$RAW" --csv-dir "$CSV_DIR"
+PYTHONPATH="$FI" "$ML_PY" -m $MOD --collect "$RAW" --csv-dir "$CSV_DIR" --registry-dir "$REGISTRY_DIR"

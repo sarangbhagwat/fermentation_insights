@@ -14,6 +14,7 @@ v3 run (`results/v3/REPORT.md`) quotes.
 | `ic_biogas_points.csv`, `ic_biogas_bias.csv` | `ic_biogas` (D17) | the baseline point and a 3 x 3 TY grid of every configuration with BioSTEAM's `InternalCirculationRx` (lumped method), simulated with BioSTEAM's original method (`as_is`, as harness <= 3), in the current harness's state (`harness`) and with the corrected method (`fixed`); per configuration the MPSP change at the baseline and the lowest yield, the refitted coefficients and the biogas / IC mass gain; the 14 configurations without such a reactor are listed as not affected (`affected` = False; the criterion of `data_patches.D17_CONFIGS`) |
 | `duplicate_inlets_bias.csv` | `duplicate_inlets` (D16) | units whose inlet list holds the same stream twice: none in the 41 configurations (TAL_SA_sugarcane's mill `U201` had one before the fi-TAL fix: `v3/duplicate_inlets_*.csv`) |
 | `unit_bounds.csv` | `unit_bounds` (D18) | design results outside the unit class's own `_bounds` at the baseline point, with the unit's installed cost and share of the installed equipment cost (one `note` row per configuration without any) |
+| `tea_settings.csv` | `tea_settings` (D19, D20) | no simulation: per configuration the module's cost year (`CE` = `bst.CE`), TEA class, IRR, income tax, operating days, plant life (`duration`, `plant_life_years`), depreciation, construction schedule, startup (`startup_months`, `startup_FOCfrac` / `VOCfrac` / `salesfrac`), working capital, financing, Lang factor and labor cost at the parameter baselines; `sampled` / `fixed`: which of `p_IRR`, `p_income_tax`, `p_operating_days` the adapter samples, and the module's value of the others (NaN in the training data). The same records are written to the package's `registry/tea_settings.json`, which `predict.py` reads (`tea_fixed`) |
 | `column_trays_points.csv`, `column_trays_bias.csv`, `column_trays_capacity.csv` | `unit_bounds` (D18) | configurations with a column wider than 24 ft: the baseline point and the 3 x 3 TY grid as simulated (`as_is`) and with that column's trays priced as N = ceil((D / 24 ft)^2) parallel stacks of the same area (`fixed`, a sensitivity), the MPSP change and refitted coefficients per configuration, and the capacity response (0.85 / 1 / 1.15 / 2x) in both modes |
 
 Run of 2026-10-18 (harness v4):
@@ -59,3 +60,25 @@ Run of 2026-10-18 (harness v4), check `unit_bounds` (D18):
   +0.8 % at 1.15x, +20 / +21 % at 2x); with parallel stacks every HP
   configuration's MPSP falls with the capacity (−0.6 to −1.5 % at 1.15x,
   −2 to −6 % at 2x).
+
+Run of 2026-10-19 (final review, round 6), check `tea_settings` (D19, D20;
+no simulation, about 30-90 s per configuration for loading):
+`N_WORKERS=3 CHECKS=tea_settings RAW=/home/user/work/data/sim_checks_tea bash scripts/run_sim_checks.sh`
+(writes `tea_settings.csv` here and `registry/tea_settings.json`).
+
+* Cost year (`CE`): 608 (HP without hexanol, succinic), 607.5 (TAL,
+  ethanol_sugarcane), 541.7 (HP hexanol designs, lactic, oxalic), 525.4
+  (ethanol_cornstover), 567 (ethanol_corn), 797.9 (IBO_EtOH_corn); the
+  harness does not override `bst.CE`.
+* Financial convention: `CellulosicEthanolTEA` / `LacticTEA` (39
+  configurations) 30-year life, 3-year construction (8 / 60 / 32 %),
+  3-month startup (VOC 75 %, sales 50 %), 40 % debt at 8 % over 10 years
+  (60 % for ethanol_cornstover and ethanol_sugarcane);
+  `ConventionalEthanolTEA` (ethanol_corn, IBO_EtOH_corn) 20-year life,
+  2-year construction (40 / 60 %), no startup, no debt, IRR 0.15
+  (ethanol_corn: Lang factor 4).
+* TEA parameters not sampled (`fixed`; NaN in the training data, D19):
+  IRR 0.15 (ethanol_corn, IBO_EtOH_corn; imputed 0.10), 350.4 operating
+  days (ethanol_cornstover; imputed 330), IRR 0.10 / income tax 0.21
+  (lactic, succinic; equal to the imputation), 330 operating days
+  (ethanol_corn; equal to the imputation).

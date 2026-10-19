@@ -1,0 +1,42 @@
+config_id,adapter,CE,tea_class,IRR,income_tax,operating_days,duration,plant_life_years,depreciation,construction_schedule,startup_months,startup_FOCfrac,startup_VOCfrac,startup_salesfrac,WC_over_FCI,finance_interest,finance_years,finance_fraction,lang_factor,labor_cost,sampled,fixed
+HP_corn,HP,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.86646e+06,p_IRR p_income_tax p_operating_days,
+HP_cornstover,HP,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,2.64319e+06,p_IRR p_income_tax p_operating_days,
+HP_glucose,HP,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.78716e+06,p_IRR p_income_tax p_operating_days,
+HP_hexanol_corn,HP,541.7,CellulosicEthanolTEA,0.1,0.21,330,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,2.2794e+06,p_IRR p_income_tax p_operating_days,
+HP_hexanol_cornstover,HP,541.7,CellulosicEthanolTEA,0.1,0.21,330,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,3.19109e+06,p_IRR p_income_tax p_operating_days,
+HP_hexanol_glucose,HP,541.7,CellulosicEthanolTEA,0.1,0.21,330,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.82393e+06,p_IRR p_income_tax p_operating_days,
+HP_hexanol_sugarcane,HP,541.7,CellulosicEthanolTEA,0.1,0.21,180,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,3.70256e+06,p_IRR p_income_tax p_operating_days,
+HP_neutral_corn,HP,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.86646e+06,p_IRR p_income_tax p_operating_days,
+HP_neutral_cornstover,HP,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,2.64319e+06,p_IRR p_income_tax p_operating_days,
+HP_neutral_glucose,HP,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.78716e+06,p_IRR p_income_tax p_operating_days,
+HP_neutral_hexanol_corn,HP,541.7,CellulosicEthanolTEA,0.1,0.21,330,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,2.2794e+06,p_IRR p_income_tax p_operating_days,
+HP_neutral_hexanol_cornstover,HP,541.7,CellulosicEthanolTEA,0.1,0.21,330,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,3.19109e+06,p_IRR p_income_tax p_operating_days,
+HP_neutral_hexanol_glucose,HP,541.7,CellulosicEthanolTEA,0.1,0.21,330,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.82393e+06,p_IRR p_income_tax p_operating_days,
+HP_neutral_hexanol_sugarcane,HP,541.7,CellulosicEthanolTEA,0.1,0.21,180,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,3.70256e+06,p_IRR p_income_tax p_operating_days,
+HP_neutral_sugarcane,HP,608,CellulosicEthanolTEA,0.1,0.21,180,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,5.54307e+06,p_IRR p_income_tax p_operating_days,
+HP_sugarcane,HP,608,CellulosicEthanolTEA,0.1,0.21,180,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,5.54307e+06,p_IRR p_income_tax p_operating_days,
+IBO_EtOH_corn,isobutanol,797.9,ConventionalEthanolTEA,0.15,0.21,330,2018-2038,20,MACRS7,0.4 0.6,0,0,0,0,0.05,0,0,0,,2.3e+06,p_income_tax p_operating_days,p_IRR=0.15
+TAL_SA_corn,TAL,607.5,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,678189,p_IRR p_income_tax p_operating_days,
+TAL_SA_cornstover,TAL,607.5,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,957795,p_IRR p_income_tax p_operating_days,
+TAL_SA_glucose,TAL,607.5,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,541087,p_IRR p_income_tax p_operating_days,
+TAL_SA_sugarcane,TAL,607.5,CellulosicEthanolTEA,0.1,0.21,180,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,2.0126e+06,p_IRR p_income_tax p_operating_days,
+TAL_corn,TAL,607.5,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,560376,p_IRR p_income_tax p_operating_days,
+TAL_cornstover,TAL,607.5,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,791412,p_IRR p_income_tax p_operating_days,
+TAL_glucose,TAL,607.5,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,458347,p_IRR p_income_tax p_operating_days,
+TAL_sugarcane,TAL,607.5,CellulosicEthanolTEA,0.1,0.21,180,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.66298e+06,p_IRR p_income_tax p_operating_days,
+ethanol_corn,ethanol,567,ConventionalEthanolTEA,0.15,0.35,330,2018-2038,20,MACRS7,0.4 0.6,0,0,0,0,0.05,0,0,0,4,2.3e+06,p_income_tax,p_IRR=0.15; p_operating_days=330
+ethanol_cornstover,ethanol,525.4,CellulosicEthanolTEA,0.1,0.35,350.4,2007-2037,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.6,,2.5e+06,p_income_tax,p_IRR=0.1; p_operating_days=350.4
+ethanol_sugarcane,ethanol,607.5,CellulosicEthanolTEA,0.1,0.21,180,2007-2037,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.6,,2.5e+06,p_IRR p_income_tax p_operating_days,
+lactic_lowpH_SHF_cornstover,lactic,541.7,LacticTEA,0.1,0.21,328.5,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,3.21328e+06,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+lactic_lowpH_SSCF_cornstover,lactic,541.7,LacticTEA,0.1,0.21,328.5,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,3.21328e+06,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+lactic_neutral_SHF_cornstover,lactic,541.7,LacticTEA,0.1,0.21,328.5,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,3.21328e+06,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+lactic_neutral_SSCF_cornstover,lactic,541.7,LacticTEA,0.1,0.21,328.5,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,3.21328e+06,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+oxalic_neutral_sugarcane,oxalic,541.7,CellulosicEthanolTEA,0.1,0.21,200,2016-2046,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,6.40837e+06,p_IRR p_income_tax p_operating_days,
+succinic_corn,succinic,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.81583e+07,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+succinic_cornstover,succinic,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.70442e+07,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+succinic_glucose,succinic,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,7.00891e+06,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+succinic_neutral_corn,succinic,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.81583e+07,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+succinic_neutral_cornstover,succinic,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.70442e+07,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+succinic_neutral_glucose,succinic,608,CellulosicEthanolTEA,0.1,0.21,330,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,7.00891e+06,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+succinic_neutral_sugarcane,succinic,608,CellulosicEthanolTEA,0.1,0.21,180,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.11013e+06,p_operating_days,p_IRR=0.1; p_income_tax=0.21
+succinic_sugarcane,succinic,608,CellulosicEthanolTEA,0.1,0.21,180,2019-2049,30,MACRS7,0.08 0.6 0.32,3,1,0.75,0.5,0.05,0.08,10,0.4,,1.11013e+06,p_operating_days,p_IRR=0.1; p_income_tax=0.21

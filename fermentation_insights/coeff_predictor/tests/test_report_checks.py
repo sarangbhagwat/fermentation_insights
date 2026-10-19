@@ -3,6 +3,8 @@
 family-level paired statistics, LOCO subsets, new-product folds, input
 twins, the test set without some configurations and the data's own
 constraint violations."""
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -139,6 +141,28 @@ def test_sim_checks_collect_pairs_as_is_and_corrected_runs(tmp_path):
     assert sorted(p['mode'].unique()) == ['as_is', 'fixed', 'harness']
     c = pd.read_csv(tmp_path / 'csv' / 'capacity_response.csv')
     assert list(c['mult']) == [1., 2.]
+
+
+def test_sim_checks_tea_settings_collect(tmp_path):
+    import json
+    from fermentation_insights.coeff_predictor.data_generation import sim_checks as SC
+    ts = dict(CE=567., tea_class='ConventionalEthanolTEA', IRR=0.15, income_tax=0.35, operating_days=330.,
+              duration=[2018, 2038], construction_schedule=[0.4, 0.6], lang_factor=4, sampled=['p_income_tax'],
+              fixed={'p_IRR': 0.15, 'p_operating_days': 330.})
+    raw, reg_dir = tmp_path / 'raw', tmp_path / 'registry'
+    raw.mkdir(), reg_dir.mkdir()
+    json.dump(dict(config_id='X', adapter='ethanol', tea_settings=ts), open(raw / 'X.json', 'w'))
+    json.dump(dict(config_id='Y', capacity=dict(skipped='none')), open(raw / 'Y.json', 'w'))
+    written = SC.collect(str(raw), str(tmp_path / 'csv'), registry_dir=str(reg_dir))
+    assert sorted(os.path.basename(p) for p in written) == ['tea_settings.csv', SC.TEA_SETTINGS_JSON]
+    t = pd.read_csv(tmp_path / 'csv' / 'tea_settings.csv').set_index('config_id')
+    assert list(t.index) == ['X'] and t.loc['X', 'plant_life_years'] == 20
+    assert t.loc['X', 'duration'] == '2018-2038' and t.loc['X', 'construction_schedule'] == '0.4 0.6'
+    assert t.loc['X', 'fixed'] == 'p_IRR=0.15; p_operating_days=330'
+    reg = json.load(open(reg_dir / SC.TEA_SETTINGS_JSON))['configs']
+    assert reg['X']['fixed'] == {'p_IRR': 0.15, 'p_operating_days': 330.} and reg['X']['adapter'] == 'ethanol'
+    # without --registry-dir: the CSV only
+    assert [os.path.basename(p) for p in SC.collect(str(raw), str(tmp_path / 'csv2'))] == ['tea_settings.csv']
 
 
 def test_sim_checks_unit_bounds_collect_and_parallel_trays(tmp_path):

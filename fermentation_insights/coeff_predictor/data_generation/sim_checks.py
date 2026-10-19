@@ -13,7 +13,7 @@ baseline productivity is used. The system is loaded and simulated as the
 campaigns of the current harness do: the BioSTEAM corrections of
 ``harness.apply_biosteam_fixes`` are applied first (harness v4: D17; recorded
 as ``harness_version`` / ``harness_fixes``); the ``ic_biogas`` check toggles
-them itself. Four checks:
+them itself. Five checks:
 
 ``capacity``
     MPSP at the baseline yield and titer with ``p_feedstock_capacity``
@@ -54,6 +54,16 @@ them itself. Four checks:
     method), and the capacity response at the baseline yield and titer
     (:data:`COLUMN_CAPACITY_MULTS`) in both modes.
 
+``tea_settings``
+    No simulation: the TEA conventions of the loaded configuration
+    (``bst.CE``, the TEA class, IRR, income tax, operating days, plant life
+    (``duration``), depreciation, construction and startup schedule, working
+    capital, financing, Lang factor, labor cost: :data:`TEA_ATTRS`) and
+    which TEA settings among the contextual parameters (:data:`TEA_PARAMS`)
+    the adapter samples. The others are fixed at the module's value and are
+    NaN in the training data (e.g. the IRR of 0.15 of ethanol_corn and
+    IBO_EtOH_corn), which the model's input does not carry.
+
 ``--collect DIR`` (no BioSTEAM needed) merges the per-configuration JSON
 files into ``capacity_response.csv``, ``ic_biogas_points.csv`` /
 ``ic_biogas_bias.csv``, ``duplicate_inlets_points.csv`` /
@@ -61,7 +71,9 @@ files into ``capacity_response.csv``, ``ic_biogas_points.csv`` /
 baseline and at the lowest-yield grid point, and the change of the refitted
 coefficients, at the same recovery), ``unit_bounds.csv`` and
 ``column_trays_points.csv`` / ``column_trays_bias.csv`` /
-``column_trays_capacity.csv`` in ``--csv-dir``.
+``column_trays_capacity.csv``, ``tea_settings.csv`` in ``--csv-dir`` (and,
+with ``--registry-dir``, the TEA settings as :data:`TEA_SETTINGS_JSON`,
+which ``predict.py`` reads from the package's ``registry/``).
 ``scripts/run_sim_checks.sh`` runs every configuration.
 """
 from __future__ import annotations
@@ -229,6 +241,48 @@ def _unit_bounds(adapter, dom, params, y0, t0, r0, capacity_mults=COLUMN_CAPACIT
     return rec
 
 
+#: TEA attributes recorded by the ``tea_settings`` check (where the TEA class
+#: has them): the financial convention, the construction / startup schedule
+#: and the capital-cost basis of the configuration's module
+TEA_ATTRS = ('IRR', 'income_tax', 'operating_days', 'duration', 'depreciation', 'construction_schedule',
+             'startup_months', 'startup_FOCfrac', 'startup_VOCfrac', 'startup_salesfrac', 'WC_over_FCI',
+             'finance_interest', 'finance_years', 'finance_fraction', 'lang_factor', 'labor_cost')
+#: contextual parameters of the training data that are TEA settings: their
+#: TEA attribute (same unit)
+TEA_PARAMS = {'p_IRR': 'IRR', 'p_income_tax': 'income_tax', 'p_operating_days': 'operating_days'}
+#: file name of the collected TEA settings in ``--registry-dir``
+TEA_SETTINGS_JSON = 'tea_settings.json'
+
+
+def _tea_settings(adapter, params):
+    """TEA conventions of the loaded configuration (uncertain parameters at
+    their baselines): ``bst.CE``, the TEA class and :data:`TEA_ATTRS`, and
+    which of :data:`TEA_PARAMS` the adapter samples (the others are fixed at
+    the module's value and are NaN in the training data)."""
+    import biosteam as bst
+    tea = adapter.tea
+    out = dict(CE=float(bst.CE), tea_class=type(tea).__name__)
+    for a in TEA_ATTRS:
+        try:
+            v = getattr(tea, a)
+        except Exception:
+            continue
+        if v is None:
+            out[a] = None
+        elif hasattr(v, 'tolist'):
+            out[a] = v.tolist()
+        elif isinstance(v, (list, tuple)):
+            out[a] = [x if isinstance(x, (int, float)) else str(x) for x in v]
+        elif isinstance(v, (bool, int, float, str)):
+            out[a] = v
+        else:
+            out[a] = str(v)
+    names = {p.name for p in params}
+    out['sampled'] = sorted(p for p in TEA_PARAMS if p in names)
+    out['fixed'] = {p: out.get(a) for p, a in TEA_PARAMS.items() if p not in names and out.get(a) is not None}
+    return out
+
+
 def _simulate(adapter, y, t, r, ics=()):
     from .harness import InfeasibleSpecification, collect_natural_gas
     out = dict(y=float(y), t=float(t), r=float(r))
@@ -281,6 +335,9 @@ def run_config(adapter_name, config_id, checks, capacity_mults=CAPACITY_MULTS):
     rec = dict(adapter=adapter_name, config_id=config_id, domain={k: float(v) for k, v in dom.items()
                                                                 if isinstance(v, (int, float))},
                versions=A.versions(), harness_version=HARNESS_VERSION, harness_fixes=fixes)
+    if 'tea_settings' in checks:
+        rec['tea_settings'] = _tea_settings(A, params)
+        print('tea_settings', config_id, json.dumps(rec['tea_settings'], default=str), flush=True)
     if 'capacity' in checks:
         cap = [p for p in params if p.name == 'p_feedstock_capacity']
         if not cap:
@@ -349,15 +406,34 @@ def run_config(adapter_name, config_id, checks, capacity_mults=CAPACITY_MULTS):
 
 # %% collection (no BioSTEAM)
 
-def collect(raw_dir, csv_dir):
+def collect(raw_dir, csv_dir, registry_dir=None):
     import numpy as np
     import pandas as pd
     from fermentation_insights.coeff_predictor import physics
     recs = [json.load(open(f)) for f in sorted(glob.glob(os.path.join(raw_dir, '*.json')))]
     cap_rows, ic_pts, ic_bias, dup_pts, dup_bias = [], [], [], [], []
     ub_rows, col_pts, col_bias, col_cap = [], [], [], []
+    tea_rows, tea_reg = [], {}
     for rec in recs:
         cid = rec['config_id']
+        ts = rec.get('tea_settings')
+        if ts is not None:
+            tea_reg[cid] = dict(ts, adapter=rec.get('adapter'))
+            row = dict(config_id=cid, adapter=rec.get('adapter'))
+            for k, v in ts.items():
+                if k == 'fixed':
+                    row[k] = '; '.join(f'{p}={x:g}' for p, x in v.items())
+                elif k == 'duration' and isinstance(v, list) and len(v) == 2:
+                    row['duration'] = f'{v[0]}-{v[1]}'
+                    try:
+                        row['plant_life_years'] = int(v[1]) - int(v[0])
+                    except (TypeError, ValueError):
+                        pass
+                elif isinstance(v, list):
+                    row[k] = ' '.join(f'{x:g}' if isinstance(x, float) else str(x) for x in v)
+                else:
+                    row[k] = v
+            tea_rows.append(row)
         c = rec.get('capacity') or {}
         for row in c.get('points', ()):
             cap_rows.append(dict(config_id=cid, harness_version=rec.get('harness_version', 3),
@@ -394,11 +470,22 @@ def collect(raw_dir, csv_dir):
                        ('ic_biogas_bias.csv', ic_bias), ('duplicate_inlets_points.csv', dup_pts),
                        ('duplicate_inlets_bias.csv', dup_bias), ('unit_bounds.csv', ub_rows),
                        ('column_trays_points.csv', col_pts), ('column_trays_bias.csv', col_bias),
-                       ('column_trays_capacity.csv', col_cap)):
+                       ('column_trays_capacity.csv', col_cap), ('tea_settings.csv', tea_rows)):
         if rows:
             path = os.path.join(csv_dir, name)
             pd.DataFrame(rows).to_csv(path, index=False, float_format='%.6g')
             written.append(path)
+    if tea_reg and registry_dir:
+        # read by predict.py (TEA settings the model input does not carry)
+        path = os.path.join(registry_dir, TEA_SETTINGS_JSON)
+        note = ('TEA settings of each training configuration at its baseline (data_generation/sim_checks.py, '
+                'check tea_settings); "fixed": contextual parameters the adapter does not sample (NaN in the '
+                'training data) and their value in the module')
+        with open(path, 'w') as fh:       # one line per configuration
+            fh.write('{"note": ' + json.dumps(note) + ',\n "configs": {\n')
+            fh.write(',\n'.join(f'  {json.dumps(k)}: {json.dumps(tea_reg[k])}' for k in sorted(tea_reg)))
+            fh.write('\n }\n}\n')
+        written.append(path)
     return written
 
 
@@ -473,9 +560,12 @@ def main(argv=None):
     ap.add_argument('--capacity-mults', type=float, nargs='*', default=list(CAPACITY_MULTS))
     ap.add_argument('--collect', help='directory of per-configuration JSON files')
     ap.add_argument('--csv-dir', help='output directory of --collect')
+    ap.add_argument('--registry-dir', help='--collect: also write the tea_settings records (if any) as '
+                                           f'{TEA_SETTINGS_JSON} into this directory (the package registry/, '
+                                           'read by predict.py)')
     args = ap.parse_args(argv)
     if args.collect:
-        for p in collect(args.collect, args.csv_dir or args.collect):
+        for p in collect(args.collect, args.csv_dir or args.collect, args.registry_dir):
             print('wrote', p)
         return 0
     if not (args.adapter and args.config and args.out):
