@@ -186,7 +186,12 @@ those). Use `Parameter.from_biosteam(p, name=...)` and give canonical names
 where they apply; otherwise the default `bp_<slug>` name. Keep units as in the
 biorefinery but document them in the `Parameter.description`. If a setter
 needs a re-simulation to take effect, that is fine — the harness simulates
-after setting TRY.
+after setting TRY. A canonical TEA parameter (`p_IRR`, `p_income_tax`,
+`p_operating_days`) that the configuration does not sample is NaN in the
+training data although the TEA has a definite value, so the model imputes
+the training baseline for it (D19, DESIGN.md section 1: ethanol_corn and
+IBO_EtOH_corn run at an IRR of 0.15, imputed 0.10): sample it, or record
+it (`sim_checks.py` check `tea_settings` lists the unsampled ones).
 
 ### `set_try(y, t, r)` and `simulate()`
 Set the fermentation specifications and simulate robustly (reuse the
@@ -229,6 +234,12 @@ facilities`); map a group to `None` only if it would double count.
    BioSTEAM does not warn), e.g. distillation columns at 3-24 ft diameter:
    `sim_checks.py` check `unit_bounds` (D18: the HP purification columns are
    27-40 ft wide).
+9. TEA conventions: the module's cost year (`bst.CE`), TEA class, plant
+   life, financing, construction and startup schedule, Lang factor, and
+   the canonical TEA parameters it does not sample (`sim_checks.py` check
+   `tea_settings`, `checks/tea_settings.csv`). The harness does not
+   harmonize them (D20: CE 525.4-797.9, 20- or 30-year life, 0-60 % debt
+   across the current modules), so state them for a new configuration.
 
 Status of item 1: the comparison of the baseline coefficients of the 32
 configurations of the publication with the publication's (REPORT.md section

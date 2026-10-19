@@ -55,8 +55,9 @@ directions (section 4.5): for a new configuration the MPSP intervals cover
 only 0.77 of the ethanol and 0.69 of the lactic samples (worst
 configurations ethanol_sugarcane 0.31, lactic_neutral_SHF_cornstover 0.28),
 the recovery (g) intervals 0.43 of TAL (also for a known TAL configuration:
-0.44) and 0.65 of lactic, and b′, c′, d′ under-cover ethanol and lactic
-acid; HP, succinic acid and, for a known configuration, every family but
+0.44 in random CV, 0.40 in the productivity tails) and 0.65 of lactic, b′
+and c′ under-cover ethanol and lactic acid, d′ lactic acid (and, for the
+new-product folds, oxalic acid; a′ isobutanol); HP, succinic acid and, for a known configuration, every family but
 TAL and lactic acid are covered at 1.0, i.e. their intervals are too wide
 (MPSP typically ±15-30 %). `predict()` / `mpsp()` name the under-covering
 keys of each row in `intervals_undercovered`. The model does not fully reproduce the economy of
@@ -482,11 +483,19 @@ outside its training titer range.
   `mpsp()` for a new ethanol configuration), with an `ApplicabilityWarning`
   that quotes the numbers. The numbers are the coverage of the checkpoint's
   own quantiles on the development out-of-fold scores
-  (`P.ensemble.meta['coverage_by_family']`): for a row named by a training
-  `config_id` (without its own feedstock composition or conflicting names)
-  the lower of the random-CV and productivity-tail coverage, for any other
-  row of a known product the leave-one-configuration-out coverage. Those
-  intervals are too narrow for the family; a per-family (Mondrian)
+  (`P.ensemble.meta['coverage_by_family']`): for a row that encodes as a
+  training configuration the lower of the random-CV and productivity-tail
+  coverage, for any other row of a known product the
+  leave-one-configuration-out coverage. A row encodes as a training
+  configuration when its model input, apart from the contextual `p_*`
+  parameters, the feedstock capacity, the prices and the productivity,
+  equals that configuration's: a query by its `config_id` or by names that
+  resolve to it (a (pair, feedstock) combination with one configuration,
+  section 4.1) alike, but not a `config_id` row whose regime, downstream,
+  product or feedstock fields are overridden (e.g.
+  `lactic_neutral_SHF_cornstover` with `neutralization=False` or another
+  `T_fermentation`: a new configuration). Those intervals are too narrow
+  for the family; a per-family (Mondrian)
   calibration is an open item (DESIGN.md section 6, 4f, open item 12).
 * **A known configuration** (a training configuration with new parameter
   values; coverage of the shipped quantiles on the random-CV out-of-fold
@@ -579,7 +588,43 @@ leave-one-feedstock-out), by 18 % for corn ethanol, 30 % for cellulosic
 ethanol and 18 % for oxalic acid, and the isobutanol feedstock response by
 18 %. Treat
 price sensitivities of those families, and of any new feedstock or product,
-as rough. (The v2 checkpoint was biased even in-sample: every corn
+as rough. Two further limits of the price slopes, which these in-sample
+errors (against the decomposed simulation intensities, at the baseline
+yield and titer) cannot show:
+
+* *Discounted-cash-flow weight.* The price channels give an operating cost
+  the same weight as the product sales (weight 1: dMPSP/dp = intensity / g).
+  BioSTEAM's TEAs with a startup period (`CellulosicEthanolTEA`, and
+  `LacticTEA` built on it: startup_VOCfrac 0.75 vs. startup_salesfrac 0.5
+  in the startup year; every configuration but ethanol_corn and
+  IBO_EtOH_corn, `data_generation/checks/tea_settings.csv`) weight variable
+  operating costs slightly more, so their simulated dMPSP/dp is about
+  1.0066 x intensity / g (feedstock price re-simulated at 0.5-3x its
+  baseline, at the baseline yield and titer: 1.0066 for HP_corn,
+  succinic_glucose, TAL_glucose and oxalic_neutral_sugarcane, 1.0064-1.0068
+  for lactic_lowpH_SHF_cornstover, 1.0071-1.0076 for ethanol_cornstover
+  with its 60 % debt and 35 % income tax; 1.0000 for ethanol_corn and
+  IBO_EtOH_corn, whose `ConventionalEthanolTEA` has no startup period). In
+  the training data the difference sits in the closure channel, which does
+  not depend on the prices, so the model's feedstock, electricity and
+  natural-gas slopes are about 0.7 % low for these configurations, i.e.
+  about 0.7 % of the price channel's share of the MPSP per 100 % price
+  change (0.1-0.4 % of the MPSP for the feedstock). Multiply the slopes by
+  about 1.0066 where this matters.
+* *Natural gas: sign.* The natural-gas intensity is a 4-term fit of a
+  hinge-shaped demand (section 2) and can be negative toward the high-titer
+  and high-yield corners of the domain: over each configuration's training
+  yield-titer box, I_ng(y, t) = `int__ng__a` + `int__ng__b`/y +
+  `int__ng__c`/t + `int__ng__d`/(y t) of the release model is negative
+  somewhere for 32 of the 41 configurations (most HP and ethanol ones; on
+  up to 62 % of the box for HP_hexanol_sugarcane), so the predicted
+  dMPSP/d(natural_gas_price) = I_ng / g is negative there, down to -3.6 %
+  of the MPSP per 100 % price change (HP_sugarcane). The simulated
+  natural-gas use is never negative, so the true slope is >= 0: use
+  max(0, I_ng) / g for the natural-gas price sensitivity there (and clip
+  the natural-gas use at 0 when reporting it, section 7).
+
+(The v2 checkpoint was biased even in-sample: every corn
 configuration's feedstock sensitivity 19-24 % low, power export predicted
 for plants without a turbogenerator. Round 5 removed these biases by
 comparing channels and intensities as surfaces at the sample's points, the
@@ -597,7 +642,10 @@ breakdown = {c: [r[f'ch__{c}__{k}'] for k in 'abcd'] for c in names}
 
 If the recovery of the downstream process is known, pass it as `recovery=`
 (a scalar, or one value per row; None/NaN = predicted) or as a `recovery`
-field of the spec (the argument takes precedence):
+field of the spec (the argument takes precedence). A pandas Series is
+aligned by label with the index of a DataFrame spec (ValueError if it lacks
+a row's label); any other sequence, and a Series with a dict or list spec,
+is taken in row order:
 
 ```python
 P.predict(itaconic, descriptors={'ItaconicAcid': desc}, recovery=0.85)   # g = 0.85, g_source = 'user'
@@ -627,8 +675,11 @@ given), `g_predicted`, `g_source`, `<k>_std`, `<k>_lo`, `<k>_hi`,
 `ch__<channel>__<k>`, `int__<fs|el|ng>__<k>`, `ad_ratio`, `in_domain`,
 `outside_range`, `price_outside_range`, `intervals_calibrated`,
 `intervals_undercovered` (section 4.5), `imputed`, `contextual_defaults`,
-`contextual_source`, `not_applicable`, `contextual_outside_range` and
-`filled_from_registry`, one row per spec row in the same order; for a
+`contextual_source`, `not_applicable` (contextual parameters encoded as
+missing, as NaN in training: not applicable to the configuration, or fixed
+by its TEA, next), `contextual_outside_range`, `filled_from_registry` and
+`tea_fixed` (section 5, "TEA settings fixed by a configuration"), one row
+per spec row in the same order; for a
 DataFrame spec the output keeps the spec's index, so it can be joined back
 by index. `mpsp()` returns `row, y, t, MPSP, MPSP_std, MPSP_lo, MPSP_hi,
 g_source, intervals_calibrated, intervals_undercovered,
@@ -730,6 +781,32 @@ defaulted or imputed field is reported per row.
 | `y` | g fermentation product / g glucose-eq. sugar | argument of `mpsp()` |
 | `t` | g/L | argument of `mpsp()` |
 | `MPSP` | USD/kg final product | output |
+
+**TEA settings fixed by a configuration.** The adapters sample the
+contextual TEA parameters `p_IRR`, `p_income_tax` and `p_operating_days`
+for some configurations only. For the others the module's TEA has a fixed
+value, and the training data hold NaN, which the model encodes as missing
+(imputed at the training baseline: IRR 0.10, income tax 0.21, 330
+operating days; `data_generation/checks/tea_settings.csv`,
+`registry/tea_settings.json`). Where the fixed value differs from the
+imputed one, the model input misstates it: ethanol_corn and IBO_EtOH_corn
+are simulated at an IRR of 0.15 (imputed 0.10), ethanol_cornstover at
+350.4 operating days (imputed 330); the IRR 0.10 and income tax 0.21 of
+the lactic and succinic configurations equal the imputation. The default
+prediction of such a configuration is at its own value (the model learned
+it as part of the configuration), and the output column `tea_fixed` lists
+these parameters for a row that encodes as the configuration (by
+`config_id` or by names; e.g. `'p_IRR=0.15, p_operating_days=330'` for
+ethanol_corn). Giving the fixed value itself (e.g. `p_IRR=0.15` for
+ethanol_corn) encodes it as missing, as in training (with a UserWarning).
+Any other value is applied relative to the imputed value, not to the
+configuration's own one, with an ApplicabilityWarning: at the baseline
+yield and titer, `p_IRR=0.10` gives +0.3 % MPSP for ethanol_corn and
++0.6 % for IBO_EtOH_corn, where BioSTEAM gives −6.6 % and −9.7 %. Do not
+vary these parameters for these configurations. (Data defect D19,
+DESIGN.md §1: filling them from the TEA changes the training inputs and
+needs a retraining.) `not_applicable` lists every contextual parameter
+encoded as missing, including these.
 
 Names of the planned configurations: the feedstocks `glucose`, `corn`,
 `sugarcane` and `cornstover`, and the product pairs (`fermentation_product`
@@ -885,6 +962,33 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   each configuration's inflection yield, and titers and productivities over
   the simulated ranges. Each configuration's feedstock capacity was sampled
   only 0.81-1.19 x its baseline (next bullet).
+* **Cost year and financial convention differ by module.** Coefficients
+  and MPSPs are in each Bioindustrial-Park module's own cost year and
+  financial convention. These are not model inputs and were not harmonized
+  (`data_generation/checks/tea_settings.csv`, one row per configuration):
+  the plant cost index `bst.CE` is 607.5-608 (2019) for HP (without
+  hexanol), TAL, succinic acid and ethanol_sugarcane, 541.7 (2016) for the
+  HP hexanol designs, lactic and oxalic acid, 525.4 (2007) for
+  ethanol_cornstover, 567 for ethanol_corn and 797.9 for IBO_EtOH_corn.
+  The plant life is 30 years with 40 % debt financing (60 % for cellulosic
+  and cane ethanol), a 3-year construction and a 3-month startup, except
+  for ethanol_corn and IBO_EtOH_corn (`ConventionalEthanolTEA`: 20 years,
+  no debt, 2-year construction, no startup, IRR 0.15; ethanol_corn prices
+  its capital with a Lang factor of 4). Measured at the baseline point,
+  everything else held (final review, round 6): setting CE to 607.5
+  changes the MPSP by −8.5 % for IBO_EtOH_corn (FCI −23 %), +6.2 % for
+  ethanol_cornstover and +3.1 % for lactic_lowpH_SHF_cornstover;
+  HP_cornstover at ethanol_cornstover's CE: −6.1 %; HP_cornstover with
+  the 20-year, no-debt convention: +7.8 % (+3.8 % from the plant life
+  alone). Comparisons across families carry these offsets (HP_cornstover
+  vs. ethanol_cornstover: about 6 % from the cost year alone), and the
+  offsets are part of the product and family effects that the model
+  transfers to a new configuration, so a prediction for a new
+  configuration has no defined cost year or financial basis (in practice
+  roughly that of the nearest training family). For a known configuration
+  the prediction is on that configuration's basis. Harmonizing (one CE and
+  one convention in the harness, then regeneration and retraining) is an
+  open item (DESIGN.md §1, D20).
 * **Scale (capacity) response: about two thirds of the simulated economy
   of scale.** The capacity was sampled within ±10-20 % of each configuration's
   baseline, with every other parameter varied at the same time, so the
@@ -999,7 +1103,11 @@ writes to `results/quick/`; its numbers are not results. The protocol (§6):
   two configurations are why the yield- and titer-monotonicity priors are
   off for every product (section 2). The natural-gas intensities are fits
   of a hinge-shaped demand and can be negative in parts of the domain;
-  clip the natural-gas use at 0 when reporting it.
+  clip the natural-gas use at 0 when reporting it. The predicted
+  natural-gas price slope I_ng / g then has the wrong sign too (down to
+  −3.6 % of the MPSP per 100 % price change toward the high-titer and
+  high-yield corners, for most HP and ethanol configurations; the true
+  slope is ≥ 0): use max(0, I_ng) / g there (section 4.6).
 * **TAL recovery noise.** Within a TAL configuration the recovery g varies
   with the decarboxylation conversion of the TAL separation
   (`bp_separation_tal_decarboxylation_conversion`, a sampled module
