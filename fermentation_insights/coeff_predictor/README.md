@@ -62,7 +62,12 @@ TAL and lactic acid are covered at 1.0, i.e. their intervals are too wide
 (MPSP typically ±15-30 %). `predict()` / `mpsp()` name the under-covering
 keys of each row in `intervals_undercovered`. The model does not fully reproduce the economy of
 scale: it gives about two thirds of the simulated MPSP change for a 2-3x
-larger plant (section 7). The shipped (v4) checkpoints train on the data
+larger plant (section 7). Do not run reagent-price, boiler/turbogenerator
+efficiency, income-tax, enzyme-loading or cell-mass-yield sweeps with the
+model: its response to the contextual parameters has the wrong sign, or is
+spurious or missed, for 24 of 215 configuration x parameter pairs (a
+warning names them), the enzyme-loading response is about 40 % low and the
+cell-mass-yield response was not checked (section 7). The shipped (v4) checkpoints train on the data
 regenerated with the D16 / D17 corrections (2026-10-18; the processed
 tables in git): the training data of the v3 checkpoints (`results/v3/`)
 understated the MPSP of the HP and TAL plants (and, slightly, of sugarcane
@@ -895,7 +900,15 @@ training rows, used where R² >= 0.9), as in its training samples, instead
 of being taken at the registry baseline; `filled_from_registry` then lists
 `inflection_yield (from p_cell_mass_yield)`, with a UserWarning, and the
 fitted-domain check of `mpsp()` ("y above the inflection yield") uses the
-derived value. Give `inflection_yield` to override it.
+derived value. Within the configuration's training range of the cell-mass
+yield the derived value is kept inside the training spread of the inflection
+yield (the fit is not exact for TAL, so at the ends of the range it could
+otherwise fall just outside and the row would no longer count as the known
+configuration); a value equal to the registry baseline does not warn. Give
+`inflection_yield` to override it. A row that gives `p_cell_mass_yield` but
+encodes no training configuration (e.g. a names-only query whose
+downstream fields are not all given) keeps the registry inflection yield,
+and a UserWarning says that no training relation applied.
 
 **ethanol_sugarcane: feedstock price before the transport adjustment.**
 The ethanol_sugarcane module adjusts the sampled cane price
