@@ -1,0 +1,231 @@
+From 9f07d81429ce5a787c7094acaf7165c8e8675e71 Mon Sep 17 00:00:00 2001
+From: sarangbhagwat <sarangbhagwat.developer@gmail.com>
+Date: Fri, 16 Oct 2026 10:13:05 +0000
+Subject: [PATCH] Port succinic biorefineries (and the cellulosic/corn parts
+ they use) to BioSTEAM 2.54 / thermosteam 0.54.2
+
+- succinic/units.py: import StirredTankReactor from
+  biosteam.units.abstract_stirred_tank_reactor when it is no longer exported
+  by biosteam.units.
+- succinic/system_*.py: call the succinic SystemFactory with autorename=False;
+  biosteam >= 2.53 autorenames objects with duplicate IDs by default (e.g. the
+  two 'dilution_water' streams, the two 'S301' units), which broke flowsheet
+  lookups. autorename=False restores the original replace-in-registry behavior.
+- succinic/__init__.py: runtime replacement of thermosteam.utils.trim_cache,
+  which iterates over an int (`for i in 20`) and raises TypeError once an
+  indexer cache exceeds 200 keys (reached by the succinic systems).
+- succinic/_process_specification.py (load_yield): bug fix for yields above
+  1 - pyruvic acid yield - cell mass yield: the xylose cell-mass conversion was
+  written to glucose_to_microbe_rxn and cell-mass conversions were left stale
+  when the pyruvic acid yield remained > 0. No effect for yields below that
+  (i.e. the publication's TRY domain at baseline cell mass yield).
+- cellulosic create_facilities: FireWaterTank has no inlet in biosteam >= 2.53
+  (flow given by fire_water_flow_rate), and CoolingTower outlets changed
+  (blowdown is now outs[0]); use CT.blowdown_water where CT-1 (blowdown) was
+  used before.
+- corn/units.py: SimultaneousSaccharificationFermentation keeps 2 inlets
+  (biosteam 2.53.8 reduced BatchBioreactor._N_ins to 1).
+
+Process assumptions and values are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ .../cellulosic/systems/cellulosic_ethanol.py  | 23 ++++++++++++-------
+ biorefineries/corn/units.py                   |  5 ++--
+ biorefineries/succinic/__init__.py            | 13 +++++++++++
+ .../succinic/_process_specification.py        | 10 ++++++--
+ biorefineries/succinic/system_corn.py         |  2 +-
+ biorefineries/succinic/system_cs.py           |  2 +-
+ biorefineries/succinic/system_glucose.py      |  2 +-
+ biorefineries/succinic/system_sc.py           |  2 +-
+ biorefineries/succinic/units.py               |  6 ++++-
+ 9 files changed, 48 insertions(+), 17 deletions(-)
+
+diff --git a/biorefineries/cellulosic/systems/cellulosic_ethanol.py b/biorefineries/cellulosic/systems/cellulosic_ethanol.py
+index 7910e137..0f89fc0b 100644
+--- a/biorefineries/cellulosic/systems/cellulosic_ethanol.py
++++ b/biorefineries/cellulosic/systems/cellulosic_ethanol.py
+@@ -43,9 +43,10 @@ def create_facilities(
+     
+     bst.facilities.ChilledWaterPackage(area or 'CWP')
+     CT = bst.facilities.CoolingTower(area or 'CT')
++    CT_blowdown = CT.blowdown_water # CT-1 before biosteam 2.53 (CoolingTower outs changed)
+     
+     process_water_streams = (*process_water_streams,
+-                              BT-1, CT-1)
++                              BT-1, CT_blowdown)
+             
+     makeup_water = Stream('makeup_water', price=0.00025353160151260924)
+     
+@@ -53,7 +54,7 @@ def create_facilities(
+         ins=(RO_water, '', recycle_process_water, makeup_water),
+         outs=(),
+         thermo=None,
+-        makeup_water_streams=(BT-1, CT-1),
++        makeup_water_streams=(BT-1, CT_blowdown),
+         process_water_streams=process_water_streams,
+     )
+     
+@@ -69,15 +70,21 @@ def create_facilities(
+     @ADP.add_specification(run=True)
+     def adjust_plant_air(): plant_air.imass['N2'] = feedstock.F_mass * ADP.plant_air_over_feedstock
+         
+-    fire_water = Stream('fire_water', Water=8343, units='kg/hr')
+-    FT = bst.FireWaterTank(area or 'FT', fire_water)
+-    FT.fire_water_over_feedstock = 0.08
+-    @FT.add_specification(run=True)
+-    def adjust_fire_water(): fire_water.imass['Water'] = feedstock.F_mass * FT.fire_water_over_feedstock
++    if bst.FireWaterTank._N_ins == 0: # biosteam >= 2.53: no inlet; flow rate is an attribute
++        FT = bst.FireWaterTank(area or 'FT')
++        FT.fire_water_over_feedstock = 0.08
++        @FT.add_specification(run=True)
++        def adjust_fire_water(): FT.fire_water_flow_rate = feedstock.F_mass * FT.fire_water_over_feedstock
++    else:
++        fire_water = Stream('fire_water', Water=8343, units='kg/hr')
++        FT = bst.FireWaterTank(area or 'FT', fire_water)
++        FT.fire_water_over_feedstock = 0.08
++        @FT.add_specification(run=True)
++        def adjust_fire_water(): fire_water.imass['Water'] = feedstock.F_mass * FT.fire_water_over_feedstock
+     
+     ### Complete system
+     if blowdown_to_wastewater:
+-        bst.BlowdownMixer(area or 'blowdown_mixer', (BT-1, CT-1), blowdown_to_wastewater)
++        bst.BlowdownMixer(area or 'blowdown_mixer', (BT-1, CT_blowdown), blowdown_to_wastewater)
+ 
+ @bst.SystemFactory(
+     ID='cornstover_sys',
+diff --git a/biorefineries/corn/units.py b/biorefineries/corn/units.py
+index e9ed0c54..2d60e24e 100644
+--- a/biorefineries/corn/units.py
++++ b/biorefineries/corn/units.py
+@@ -298,8 +298,9 @@ class SimultaneousSaccharificationFermentation(bst.BatchBioreactor):
+     
+     
+     """
+-    
+-    def __init__(self, ID='', ins=None, outs=(), thermo=None, *, 
++    _N_ins = 2 # biosteam >= 2.53.8 reduced BatchBioreactor._N_ins from 2 to 1
++
++    def __init__(self, ID='', ins=None, outs=(), thermo=None, *,
+                  tau=60.,  N=None, V_max=None, T=305.15, P=101325., Nmin=2, Nmax=36,
+                  yield_=0.95, V_wf=0.83):
+         bst.BatchBioreactor.__init__(self, ID, ins, outs, thermo,
+diff --git a/biorefineries/succinic/__init__.py b/biorefineries/succinic/__init__.py
+index f24723b8..647005a6 100644
+--- a/biorefineries/succinic/__init__.py
++++ b/biorefineries/succinic/__init__.py
+@@ -18,6 +18,19 @@ This module is a modified implementation of modules from the following:
+ # from .import analyses, models
+ from warnings import filterwarnings
+ filterwarnings('ignore')
++
++# Compatibility: thermosteam.utils.trim_cache (thermosteam <= 0.54.2 at least) iterates
++# over an int (`for i in 20`) and raises TypeError once a chemical-indexer cache exceeds
++# 200 keys, which the succinic systems reach. Replace it at runtime with a working
++# implementation having the intended semantics (drop the 20 oldest cache entries).
++import thermosteam as _tmo
++from itertools import islice as _islice
++def _trim_cache(cache):
++    if cache.__len__() > 200:
++        for key in list(_islice(cache, 20)): del cache[key]
++_tmo.utils.trim_cache = _trim_cache
++if hasattr(_tmo.utils, 'cache'): _tmo.utils.cache.trim_cache = _trim_cache
++
+ from biorefineries import succinic
+ succinic_filepath = succinic.__file__.replace('\\__init__.py', '')
+ succinic_results_filepath = succinic_filepath + '\\analyses\\results\\'
+diff --git a/biorefineries/succinic/_process_specification.py b/biorefineries/succinic/_process_specification.py
+index 9864d28a..bfe56cb0 100644
+--- a/biorefineries/succinic/_process_specification.py
++++ b/biorefineries/succinic/_process_specification.py
+@@ -434,9 +434,15 @@ class ProcessSpecification(bst.process_tools.ReactorSpecification):
+             reactor.xylose_to_pyruvic_acid_rxn.X = xuf*pyruvic_acid_yield
+             
+             if pyruvic_acid_yield==0:
+-                cell_mass_yield = reactor.glucose_to_microbe_rxn.X =\
++                cell_mass_yield = \
+                     max(0, baseline_cell_mass_yield - diff + baseline_pyruvic_acid_yield - reduce_by_for_fp_error)
+-                reactor.glucose_to_microbe_rxn.X = xuf*cell_mass_yield
++            else:
++                cell_mass_yield = baseline_cell_mass_yield
++            # Bug fix: previously the xylose cell mass conversion was written to
++            # glucose_to_microbe_rxn (overwriting it with xuf*cell_mass_yield), and the
++            # cell mass conversions were left stale from a previous yield when pyruvic_acid_yield > 0.
++            reactor.glucose_to_microbe_rxn.X = cell_mass_yield
++            reactor.xylose_to_microbe_rxn.X = xuf*cell_mass_yield
+         else:
+             reactor.glucose_to_pyruvic_acid_rxn.X = baseline_pyruvic_acid_yield
+             reactor.glucose_to_microbe_rxn.X = baseline_cell_mass_yield
+diff --git a/biorefineries/succinic/system_corn.py b/biorefineries/succinic/system_corn.py
+index 666a667f..ed4d2102 100644
+--- a/biorefineries/succinic/system_corn.py
++++ b/biorefineries/succinic/system_corn.py
+@@ -852,7 +852,7 @@ def create_succinic_sys(ins, outs):
+ #%%
+ 
+ succinic_sys = bst.System.from_units('succinic_sys', 
+-                               create_succinic_sys().units + 
++                               create_succinic_sys(autorename=False).units + # biosteam >= 2.53 autorenames duplicate IDs by default
+                                corn_system_upto_slurry.units)
+ 
+ u = flowsheet.unit
+diff --git a/biorefineries/succinic/system_cs.py b/biorefineries/succinic/system_cs.py
+index 48b2f20a..1095fa1e 100644
+--- a/biorefineries/succinic/system_cs.py
++++ b/biorefineries/succinic/system_cs.py
+@@ -809,7 +809,7 @@ def create_succinic_sys(ins, outs):
+ 
+ 
+ #%%
+-succinic_sys = create_succinic_sys()
++succinic_sys = create_succinic_sys(autorename=False) # biosteam >= 2.53 autorenames duplicate IDs by default; keep original (replace-in-registry) behavior
+ u = flowsheet.unit
+ s = flowsheet.stream
+ feedstock = s.cornstover
+diff --git a/biorefineries/succinic/system_glucose.py b/biorefineries/succinic/system_glucose.py
+index 34654723..651fd12b 100644
+--- a/biorefineries/succinic/system_glucose.py
++++ b/biorefineries/succinic/system_glucose.py
+@@ -771,7 +771,7 @@ def create_succinic_sys(ins, outs):
+ 
+ 
+ #%%
+-succinic_sys = create_succinic_sys()
++succinic_sys = create_succinic_sys(autorename=False) # biosteam >= 2.53 autorenames duplicate IDs by default; keep original (replace-in-registry) behavior
+ u = flowsheet.unit
+ s = flowsheet.stream
+ feedstock = s.glucose_feedstock
+diff --git a/biorefineries/succinic/system_sc.py b/biorefineries/succinic/system_sc.py
+index 606751ad..292e3d8c 100644
+--- a/biorefineries/succinic/system_sc.py
++++ b/biorefineries/succinic/system_sc.py
+@@ -727,7 +727,7 @@ def create_succinic_sys(ins, outs):
+ 
+ 
+ #%%
+-succinic_sys = create_succinic_sys()
++succinic_sys = create_succinic_sys(autorename=False) # biosteam >= 2.53 autorenames duplicate IDs by default; keep original (replace-in-registry) behavior
+ u = flowsheet.unit
+ s = flowsheet.stream
+ feedstock = s.sugarcane
+diff --git a/biorefineries/succinic/units.py b/biorefineries/succinic/units.py
+index 6be7e56b..36fd71b1 100644
+--- a/biorefineries/succinic/units.py
++++ b/biorefineries/succinic/units.py
+@@ -49,7 +49,11 @@ from warnings import warn
+ from flexsolve import aitken_secant
+ from biosteam import Unit
+ from biosteam.units import Flash, HXutility, Mixer, MixTank, Pump, \
+-    SolidsSeparator, StorageTank, LiquidsSplitSettler, Compressor, StirredTankReactor
++    SolidsSeparator, StorageTank, LiquidsSplitSettler, Compressor
++try:
++    from biosteam.units import StirredTankReactor
++except ImportError: # biosteam >= 2.52: alias only in abstract_stirred_tank_reactor
++    from biosteam.units.abstract_stirred_tank_reactor import StirredTankReactor
+ from biosteam.units.decorators import cost
+ from thermosteam import Stream, MultiStream
+ from biorefineries.succinic.process_settings import price
+-- 
+2.43.0
+

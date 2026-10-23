@@ -1,0 +1,114 @@
+scheme,variant,subset,fold,delta
+config,pinn-no_channels,all folds of the variant,HP_hexanol_corn,-0.0002580289523355442
+config,pinn-no_channels,all folds of the variant,HP_hexanol_sugarcane,0.011809191261326794
+config,pinn-no_channels,all folds of the variant,HP_neutral_cornstover,-0.004881284708221922
+config,pinn-no_channels,all folds of the variant,HP_neutral_hexanol_cornstover,-0.01142192581206564
+config,pinn-no_channels,all folds of the variant,IBO_EtOH_corn,-0.10692138887108771
+config,pinn-no_channels,all folds of the variant,TAL_SA_corn,0.0037637577873094186
+config,pinn-no_channels,all folds of the variant,TAL_glucose,-0.0028567733177939647
+config,pinn-no_channels,all folds of the variant,ethanol_sugarcane,0.2027191016845998
+config,pinn-no_channels,all folds of the variant,lactic_neutral_SHF_cornstover,-0.015192871820859627
+config,pinn-no_channels,all folds of the variant,oxalic_neutral_sugarcane,0.17629663528897077
+config,pinn-no_channels,all folds of the variant,succinic_cornstover,0.00758603452450211
+config,pinn-no_channels,all folds of the variant,succinic_sugarcane,-0.00026835241953782757
+config,pinn-no_price,all folds of the variant,HP_hexanol_corn,0.0031439029532839315
+config,pinn-no_price,all folds of the variant,HP_hexanol_sugarcane,0.001695980631326536
+config,pinn-no_price,all folds of the variant,HP_neutral_cornstover,-0.0015642471253435007
+config,pinn-no_price,all folds of the variant,HP_neutral_hexanol_cornstover,-0.003682299900907106
+config,pinn-no_price,all folds of the variant,IBO_EtOH_corn,0.8351401479100868
+config,pinn-no_price,all folds of the variant,TAL_SA_corn,-0.0004016846850535827
+config,pinn-no_price,all folds of the variant,TAL_glucose,0.00938007795536712
+config,pinn-no_price,all folds of the variant,ethanol_sugarcane,0.01067882878476939
+config,pinn-no_price,all folds of the variant,lactic_neutral_SHF_cornstover,0.0058322137852494516
+config,pinn-no_price,all folds of the variant,oxalic_neutral_sugarcane,0.09101619053552967
+config,pinn-no_price,all folds of the variant,succinic_cornstover,0.003512001585672213
+config,pinn-no_price,all folds of the variant,succinic_sugarcane,-0.003792672512787646
+config,pinn-no_phys,all folds of the variant,HP_hexanol_corn,0.00024105652526858548
+config,pinn-no_phys,all folds of the variant,HP_hexanol_sugarcane,0.00030116625032168554
+config,pinn-no_phys,all folds of the variant,HP_neutral_cornstover,0.00100929776944007
+config,pinn-no_phys,all folds of the variant,HP_neutral_hexanol_cornstover,-0.0030661168696398157
+config,pinn-no_phys,all folds of the variant,IBO_EtOH_corn,-0.013613711198608602
+config,pinn-no_phys,all folds of the variant,TAL_SA_corn,-0.0014567588345767712
+config,pinn-no_phys,all folds of the variant,TAL_glucose,0.0019970634606270854
+config,pinn-no_phys,all folds of the variant,ethanol_sugarcane,-0.007886622160727247
+config,pinn-no_phys,all folds of the variant,lactic_neutral_SHF_cornstover,-0.010527143849565601
+config,pinn-no_phys,all folds of the variant,oxalic_neutral_sugarcane,0.014666643781417688
+config,pinn-no_phys,all folds of the variant,succinic_cornstover,0.0036303857093399616
+config,pinn-no_phys,all folds of the variant,succinic_sugarcane,-0.0017330959268937046
+config,plain,all folds of the variant,HP_cornstover,0.004682122209479576
+config,plain,all folds of the variant,HP_glucose,0.007666017659634268
+config,plain,all folds of the variant,HP_hexanol_corn,0.012751626776828204
+config,plain,all folds of the variant,HP_hexanol_cornstover,0.0018581803091743225
+config,plain,all folds of the variant,HP_hexanol_glucose,-0.0015965492885300012
+config,plain,all folds of the variant,HP_hexanol_sugarcane,0.016763864117512666
+config,plain,all folds of the variant,HP_neutral_corn,0.013377061948981868
+config,plain,all folds of the variant,HP_neutral_cornstover,-0.0003133283431711528
+config,plain,all folds of the variant,HP_neutral_glucose,0.01518036692156416
+config,plain,all folds of the variant,HP_neutral_hexanol_corn,0.0039056898195690797
+config,plain,all folds of the variant,HP_neutral_hexanol_cornstover,-0.009302889487748992
+config,plain,all folds of the variant,HP_neutral_hexanol_glucose,0.009595336999314225
+config,plain,all folds of the variant,HP_neutral_hexanol_sugarcane,0.021286632629990893
+config,plain,all folds of the variant,HP_neutral_sugarcane,0.004479334370284301
+config,plain,all folds of the variant,HP_sugarcane,0.011090145410760581
+config,plain,all folds of the variant,IBO_EtOH_corn,0.11259074911850159
+config,plain,all folds of the variant,TAL_SA_corn,0.02347638599987399
+config,plain,all folds of the variant,TAL_SA_cornstover,-0.01984267057990939
+config,plain,all folds of the variant,TAL_SA_glucose,0.0032593712364524796
+config,plain,all folds of the variant,TAL_SA_sugarcane,0.020489671829202166
+config,plain,all folds of the variant,TAL_corn,0.06041723863682587
+config,plain,all folds of the variant,TAL_cornstover,-0.013645523502245849
+config,plain,all folds of the variant,TAL_glucose,0.014797633642246108
+config,plain,all folds of the variant,ethanol_corn,-0.067839728893997
+config,plain,all folds of the variant,ethanol_cornstover,0.14559590672808248
+config,plain,all folds of the variant,ethanol_sugarcane,0.2268004290251389
+config,plain,all folds of the variant,lactic_lowpH_SHF_cornstover,0.018884112794194052
+config,plain,all folds of the variant,lactic_lowpH_SSCF_cornstover,0.025007957905860648
+config,plain,all folds of the variant,lactic_neutral_SHF_cornstover,0.035995807795828366
+config,plain,all folds of the variant,oxalic_neutral_sugarcane,0.47657657258524966
+config,plain,all folds of the variant,succinic_corn,0.0007549704390580406
+config,plain,all folds of the variant,succinic_cornstover,0.016165629829840687
+config,plain,all folds of the variant,succinic_neutral_corn,0.023288228645873058
+config,plain,all folds of the variant,succinic_neutral_cornstover,0.01298330826115389
+config,plain,all folds of the variant,succinic_neutral_glucose,0.0937512913695181
+config,plain,all folds of the variant,succinic_neutral_sugarcane,0.022945668966904944
+config,plain,all folds of the variant,succinic_sugarcane,0.01924841490113231
+config,plain,ablation folds,HP_hexanol_corn,0.012751626776828204
+config,plain,ablation folds,HP_hexanol_sugarcane,0.016763864117512666
+config,plain,ablation folds,HP_neutral_cornstover,-0.0003133283431711528
+config,plain,ablation folds,HP_neutral_hexanol_cornstover,-0.009302889487748992
+config,plain,ablation folds,IBO_EtOH_corn,0.11259074911850159
+config,plain,ablation folds,TAL_SA_corn,0.02347638599987399
+config,plain,ablation folds,TAL_glucose,0.014797633642246108
+config,plain,ablation folds,ethanol_sugarcane,0.2268004290251389
+config,plain,ablation folds,lactic_neutral_SHF_cornstover,0.035995807795828366
+config,plain,ablation folds,oxalic_neutral_sugarcane,0.47657657258524966
+config,plain,ablation folds,succinic_cornstover,0.016165629829840687
+config,plain,ablation folds,succinic_sugarcane,0.01924841490113231
+product,pinn-no_channels,all folds of the variant,Ethanol,0.04217828423985592
+product,pinn-no_channels,all folds of the variant,HP,0.0694905602657833
+product,pinn-no_channels,all folds of the variant,Isobutanol,-0.08975017083024589
+product,pinn-no_channels,all folds of the variant,LacticAcid,0.010793788246216685
+product,pinn-no_channels,all folds of the variant,OxalicAcid,0.14413617780539761
+product,pinn-no_channels,all folds of the variant,SuccinicAcid,-0.11906225217972632
+product,pinn-no_channels,all folds of the variant,TAL,0.03788544449542153
+product,pinn-no_price,all folds of the variant,Ethanol,0.1314210733099317
+product,pinn-no_price,all folds of the variant,HP,0.00780230614906291
+product,pinn-no_price,all folds of the variant,Isobutanol,0.9065702655421559
+product,pinn-no_price,all folds of the variant,LacticAcid,0.07135269335610162
+product,pinn-no_price,all folds of the variant,OxalicAcid,0.19244242383783833
+product,pinn-no_price,all folds of the variant,SuccinicAcid,-0.07392659185192108
+product,pinn-no_price,all folds of the variant,TAL,0.002817798977171826
+product,pinn-no_phys,all folds of the variant,Ethanol,0.02971482924789115
+product,pinn-no_phys,all folds of the variant,HP,-0.009399753062482002
+product,pinn-no_phys,all folds of the variant,Isobutanol,0.03870131250552178
+product,pinn-no_phys,all folds of the variant,LacticAcid,-0.003973450135235701
+product,pinn-no_phys,all folds of the variant,OxalicAcid,0.028872798196850846
+product,pinn-no_phys,all folds of the variant,SuccinicAcid,-0.056664284289067335
+product,pinn-no_phys,all folds of the variant,TAL,0.003940641684608448
+product,plain,all folds of the variant,Ethanol,-0.034736315707321386
+product,plain,all folds of the variant,HP,0.14784126434473488
+product,plain,all folds of the variant,Isobutanol,0.19466138485761764
+product,plain,all folds of the variant,LacticAcid,0.12260178781700426
+product,plain,all folds of the variant,OxalicAcid,0.36395794578636415
+product,plain,all folds of the variant,SuccinicAcid,-0.0588784572141301
+product,plain,all folds of the variant,TAL,0.043038623598578796

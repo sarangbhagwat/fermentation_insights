@@ -1,0 +1,5 @@
+scheme,excluded_folds,method,n_folds,n_families,mean,se,median,n_pinn_better,n_baseline_better,p_wilcoxon,p_sign,p_min_attainable,dominant_family,dominant_delta
+config,"IBO_EtOH_corn, oxalic_neutral_sugarcane",plain,35,5,0.03506069822274889,0.01705235508461829,0.026629292831961023,5,0,0.0625,0.0625,0.0625,ethanol,0.10151886895307478
+config,"IBO_EtOH_corn, oxalic_neutral_sugarcane",ridge,35,5,0.04601687179412893,0.023927877831445368,0.030969209942635547,5,0,0.0625,0.0625,0.0625,succinic,0.13695104448128229
+config,"IBO_EtOH_corn, oxalic_neutral_sugarcane",hgb,35,5,0.029674661904151616,0.013346629311493,0.021105853319038408,5,0,0.0625,0.0625,0.0625,ethanol,0.07969565177476784
+config,"IBO_EtOH_corn, oxalic_neutral_sugarcane",knn,35,5,0.07675208625194715,0.009207117492682677,0.07904504728765398,5,0,0.0625,0.0625,0.0625,HP,0.0988712845262556

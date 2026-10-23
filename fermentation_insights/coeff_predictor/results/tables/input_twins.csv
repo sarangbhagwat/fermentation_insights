@@ -1,0 +1,3 @@
+config_id,twin,set,twin_set,n_features,n_features_different,crosses_split
+lactic_lowpH_SHF_cornstover,lactic_lowpH_SSCF_cornstover,development,development,151,0,False
+lactic_neutral_SHF_cornstover,lactic_neutral_SSCF_cornstover,development,test_ood,151,0,True

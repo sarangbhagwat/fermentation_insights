@@ -1,0 +1,112 @@
+From 4b4f412fed0799d14daf62312f78364f0547d30f Mon Sep 17 00:00:00 2001
+From: fermentation-insights agent <sarangbhagwat.developer@gmail.com>
+Date: Fri, 16 Oct 2026 10:37:04 +0000
+Subject: [PATCH 1/2] Fix cellulosic SSCF sizing and corn SSF inlets for
+ BioSTEAM 2.54
+
+- cellulosic/units.py: size_batch was called with positional arguments in
+  the wrong order (N_reactors passed as V_wf and V_wf as V_max), sizing the
+  SaccharificationAndCoFermentation / SimultaneousSaccharificationAndCoFermentation
+  vessels as thousands of 0.9 m3 tanks (fermentor capital ~0). Pass V_wf and
+  N_reactors correctly.
+- corn/units.py: SimultaneousSaccharificationFermentation inherits a fixed
+  1-inlet size from bst.BatchBioreactor but receives mash + yeast; declare
+  _N_ins = 2 so the corn dry-grind system builds.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/cellulosic/units.py | 4 ++--
+ biorefineries/corn/units.py       | 2 ++
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/biorefineries/cellulosic/units.py b/biorefineries/cellulosic/units.py
+index c06ad328..937fa14b 100644
+--- a/biorefineries/cellulosic/units.py
++++ b/biorefineries/cellulosic/units.py
+@@ -603,7 +603,7 @@ class SaccharificationAndCoFermentation(Unit):
+         Design = self.design_results
+         Design['Flow rate'] = v_0 / self.N_reactors
+         tau = self.tau_saccharification + self.tau_cofermentation
+-        Design.update(size_batch(v_0, tau, self.tau_0, self.N_reactors, self.V_wf))
++        Design.update(size_batch(v_0, tau, self.tau_0, self.V_wf, N_reactors=self.N_reactors))
+         Design['Batch duty'] = batch_duty = self._batch_duty
+         Design['Reactor duty'] = reactor_duty = self.Hnet - batch_duty
+         self.add_heat_utility(reactor_duty + batch_duty, effluent.T)
+@@ -700,7 +700,7 @@ class SimultaneousSaccharificationAndCoFermentation(Unit):
+         v_0 = effluent.F_vol
+         Design = self.design_results
+         Design['Flow rate'] = v_0 / self.N_reactors
+-        Design.update(size_batch(v_0, self.tau, self.tau_0, self.N_reactors, self.V_wf))
++        Design.update(size_batch(v_0, self.tau, self.tau_0, self.V_wf, N_reactors=self.N_reactors))
+         Design['Reactor duty'] = reactor_duty = self.Hnet
+         self.add_heat_utility(reactor_duty, effluent.T)
+ 
+diff --git a/biorefineries/corn/units.py b/biorefineries/corn/units.py
+index e9ed0c54..61efe81f 100644
+--- a/biorefineries/corn/units.py
++++ b/biorefineries/corn/units.py
+@@ -299,6 +299,8 @@ class SimultaneousSaccharificationFermentation(bst.BatchBioreactor):
+     
+     """
+     
++    _N_ins = 2 # Mash and yeast
++    
+     def __init__(self, ID='', ins=None, outs=(), thermo=None, *, 
+                  tau=60.,  N=None, V_max=None, T=305.15, P=101325., Nmin=2, Nmax=36,
+                  yield_=0.95, V_wf=0.83):
+-- 
+2.43.0
+
+
+From fbd918765f492c6af5b603b3d7e036e67849489e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 22:16:57 +0000
+Subject: [PATCH 2/2] corn: mass-conserving yeast growth in the SSF unit
+
+The growth reaction 'Glucose -> Yeast' was defined on a molar basis, so
+one glucose (180 g) became one Yeast (22.6 g) and ~87 % of the mass of
+the glucose not converted to ethanol disappeared from the broth (cell
+mass / sugar fed 0.12 at low ethanol yield). Define it by weight and
+express it by mol, as bst.Fermentation does for its cell growth
+reaction; the reaction is then thermally neutral (Yeast Hf per kg equals
+glucose's).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EDo4jhmi7JA1qzTHaSinXa
+---
+ biorefineries/corn/units.py | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/biorefineries/corn/units.py b/biorefineries/corn/units.py
+index 61efe81f..58a24ded 100644
+--- a/biorefineries/corn/units.py
++++ b/biorefineries/corn/units.py
+@@ -276,8 +276,10 @@ class SimultaneousSaccharificationFermentation(bst.BatchBioreactor):
+     .. math:: 
+         Glucose -> 2Ethanol + 2CO_2
+     
+-    Yeast is assumed to be produced from the any remaining glucose:
+-        Glucoes -> Yeast
++    Yeast is assumed to be produced from the any remaining glucose, by mass
++    (1 kg glucose -> 1 kg yeast, as in ``bst.Fermentation``; a molar 1:1
++    stoichiometry would destroy ~87 % of the remaining glucose mass):
++        Glucose -> Yeast
+     
+     A compound with name 'Yeast' must be present. Note that only glucose is 
+     taken into account for conversion. Cleaning and unloading time,
+@@ -308,7 +310,10 @@ class SimultaneousSaccharificationFermentation(bst.BatchBioreactor):
+             tau=tau, N=N, V_max=V_max, T=T, P=P, Nmin=Nmin, Nmax=Nmax
+         )
+         self.reaction = tmo.Rxn('Glucose -> 2Ethanol + 2CO2',  'Glucose', yield_)
+-        self.growth = tmo.Rxn('Glucose -> Yeast',  'Glucose', 1.0)
++        # Mass-conserving growth: defined by weight, then expressed by mol
++        # (same convention as bst.Fermentation's cell growth reaction).
++        self.growth = tmo.Rxn('Glucose -> Yeast',  'Glucose', 1.0, basis='wt')
++        self.growth.basis = 'mol'
+         self.V_wf = V_wf
+     
+     def _run(self):
+-- 
+2.43.0
+

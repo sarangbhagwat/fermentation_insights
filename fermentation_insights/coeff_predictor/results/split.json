@@ -1,0 +1,243 @@
+{
+ "rule_version": 2,
+ "seed": 2026,
+ "min_configs": 4,
+ "id_frac": 0.1,
+ "rule": "OOD: one whole configuration from every biorefinery with >= 4 PLANNED configurations (most-constrained biorefinery first; sha1 rank of \"seed|test-config|config_id\", preferring a feedstock not held out yet). ID: every sample of the other configurations with sha1(\"seed|id-test|sample_id\")[:12] / 16^12 < 0.1. Depends only on the planned list, the seed and the sample id; never on which data exist.",
+ "planned_configs": [
+  {
+   "config_id": "HP_glucose",
+   "biorefinery": "HP",
+   "feedstock": "glucose"
+  },
+  {
+   "config_id": "HP_corn",
+   "biorefinery": "HP",
+   "feedstock": "corn"
+  },
+  {
+   "config_id": "HP_sugarcane",
+   "biorefinery": "HP",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "HP_cornstover",
+   "biorefinery": "HP",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "HP_neutral_glucose",
+   "biorefinery": "HP",
+   "feedstock": "glucose"
+  },
+  {
+   "config_id": "HP_neutral_corn",
+   "biorefinery": "HP",
+   "feedstock": "corn"
+  },
+  {
+   "config_id": "HP_neutral_sugarcane",
+   "biorefinery": "HP",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "HP_neutral_cornstover",
+   "biorefinery": "HP",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "HP_hexanol_glucose",
+   "biorefinery": "HP",
+   "feedstock": "glucose"
+  },
+  {
+   "config_id": "HP_hexanol_corn",
+   "biorefinery": "HP",
+   "feedstock": "corn"
+  },
+  {
+   "config_id": "HP_hexanol_sugarcane",
+   "biorefinery": "HP",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "HP_hexanol_cornstover",
+   "biorefinery": "HP",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "HP_neutral_hexanol_glucose",
+   "biorefinery": "HP",
+   "feedstock": "glucose"
+  },
+  {
+   "config_id": "HP_neutral_hexanol_corn",
+   "biorefinery": "HP",
+   "feedstock": "corn"
+  },
+  {
+   "config_id": "HP_neutral_hexanol_sugarcane",
+   "biorefinery": "HP",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "HP_neutral_hexanol_cornstover",
+   "biorefinery": "HP",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "TAL_glucose",
+   "biorefinery": "TAL",
+   "feedstock": "glucose"
+  },
+  {
+   "config_id": "TAL_corn",
+   "biorefinery": "TAL",
+   "feedstock": "corn"
+  },
+  {
+   "config_id": "TAL_sugarcane",
+   "biorefinery": "TAL",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "TAL_cornstover",
+   "biorefinery": "TAL",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "TAL_SA_glucose",
+   "biorefinery": "TAL",
+   "feedstock": "glucose"
+  },
+  {
+   "config_id": "TAL_SA_corn",
+   "biorefinery": "TAL",
+   "feedstock": "corn"
+  },
+  {
+   "config_id": "TAL_SA_sugarcane",
+   "biorefinery": "TAL",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "TAL_SA_cornstover",
+   "biorefinery": "TAL",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "succinic_glucose",
+   "biorefinery": "succinic",
+   "feedstock": "glucose"
+  },
+  {
+   "config_id": "succinic_corn",
+   "biorefinery": "succinic",
+   "feedstock": "corn"
+  },
+  {
+   "config_id": "succinic_sugarcane",
+   "biorefinery": "succinic",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "succinic_cornstover",
+   "biorefinery": "succinic",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "succinic_neutral_glucose",
+   "biorefinery": "succinic",
+   "feedstock": "glucose"
+  },
+  {
+   "config_id": "succinic_neutral_corn",
+   "biorefinery": "succinic",
+   "feedstock": "corn"
+  },
+  {
+   "config_id": "succinic_neutral_sugarcane",
+   "biorefinery": "succinic",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "succinic_neutral_cornstover",
+   "biorefinery": "succinic",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "lactic_neutral_SSCF_cornstover",
+   "biorefinery": "lactic",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "lactic_neutral_SHF_cornstover",
+   "biorefinery": "lactic",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "lactic_lowpH_SSCF_cornstover",
+   "biorefinery": "lactic",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "lactic_lowpH_SHF_cornstover",
+   "biorefinery": "lactic",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "ethanol_cornstover",
+   "biorefinery": "ethanol",
+   "feedstock": "cornstover"
+  },
+  {
+   "config_id": "ethanol_sugarcane",
+   "biorefinery": "ethanol",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "ethanol_corn",
+   "biorefinery": "ethanol",
+   "feedstock": "corn"
+  },
+  {
+   "config_id": "oxalic_neutral_sugarcane",
+   "biorefinery": "oxalic",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "IBO_EtOH_corn",
+   "biorefinery": "isobutanol",
+   "feedstock": "corn"
+  }
+ ],
+ "test_configs": [
+  {
+   "config_id": "HP_corn",
+   "biorefinery": "HP",
+   "feedstock": "corn"
+  },
+  {
+   "config_id": "TAL_sugarcane",
+   "biorefinery": "TAL",
+   "feedstock": "sugarcane"
+  },
+  {
+   "config_id": "succinic_glucose",
+   "biorefinery": "succinic",
+   "feedstock": "glucose"
+  },
+  {
+   "config_id": "lactic_neutral_SSCF_cornstover",
+   "biorefinery": "lactic",
+   "feedstock": "cornstover"
+  }
+ ],
+ "biorefineries_without_held_out_config": [
+  "ethanol",
+  "isobutanol",
+  "oxalic"
+ ],
+ "created": "2026-10-16 22:49:56",
+ "note": "Frozen before any modelling (2026-10-16). experiments.py loads this file and never regenerates it; the final evaluation refuses to run while a test configuration has no data."
+}

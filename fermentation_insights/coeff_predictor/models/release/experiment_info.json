@@ -1,0 +1,67 @@
+{
+ "job_key": "c2e0fa667e5ef82e317835be",
+ "tag": "release(all data)",
+ "method": "pinn",
+ "members": 5,
+ "mk": {
+  "width": 128,
+  "depth": 2,
+  "dropout": 0.05,
+  "clip_inputs": 0.0,
+  "water_gate": true,
+  "fs_prior": true,
+  "neutralization_gate": true,
+  "clip_groups": [
+   "feedstock",
+   "pretreatment"
+  ],
+  "power_gate": true,
+  "clip_exempt": [
+   "final_product_stoich_mass_ratio",
+   "phys_pp_fp_MW_ratio"
+  ],
+  "channel_inputs": "physics_v2",
+  "r_structure": "physics",
+  "masked_width": 64,
+  "masked_depth": 1
+ },
+ "lk": {
+  "w_mpsp": 0.3,
+  "w_ch": 3.0,
+  "w_phys": 0.03,
+  "colloc_ratio": 2.0,
+  "ch_space": "surface"
+ },
+ "tk": {
+  "lr": 0.0047,
+  "weight_decay": 6e-05,
+  "epochs": 300,
+  "patience": 40,
+  "min_epochs": 20,
+  "batch_size": 128,
+  "threads": 1,
+  "early_stop": "mpsp",
+  "refit": "none"
+ },
+ "seed": 0,
+ "group_col": null,
+ "calib_frac": 0.0,
+ "protocol": "v2",
+ "calib_info": {
+  "source": "out-of-fold scores of the development leave-one-configuration-out CV (5-member ensembles, same training procedure); the release ensemble trains on development + test samples",
+  "scheme": "config",
+  "cv_members": 5,
+  "weighting": "sample",
+  "method_scores": "pinn"
+ },
+ "best_epochs": [
+  112,
+  125,
+  223,
+  81,
+  68
+ ],
+ "n_train_samples": 1600,
+ "data_hash": "ae69af98b3ba4561",
+ "saved": "2026-10-18 20:58:45"
+}

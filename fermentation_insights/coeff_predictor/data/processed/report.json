@@ -1,0 +1,504 @@
+{
+ "stats": {
+  "files": 41,
+  "restarted_attempts": 8,
+  "config_records": 41,
+  "samples_seen": 1623,
+  "points_seen": 38613,
+  "config_conflicts": 0
+ },
+ "rejections": {
+  "incomplete": 1,
+  "too_few_yields": 9,
+  "too_few_points": 11,
+  "low_R2": 2
+ },
+ "points_beyond_inflection_dropped": 2155,
+ "n_candidates": 1602,
+ "n_retained": 1600,
+ "filters": {
+  "min_points": 8,
+  "min_yields": 3,
+  "min_titers": 3,
+  "min_R2": 0.9,
+  "max_closure_rel": 0.05,
+  "max_g_over_stoich": 1.05,
+  "require_complete": true,
+  "clip_to_inflection": true,
+  "drop_superseded_smoke": true
+ },
+ "ng_pool": "auto",
+ "capital_basis": "auto",
+ "patches": true,
+ "data_patches": {
+  "M1": {
+   "config_records": 10,
+   "configs": [
+    "succinic|succinic_corn",
+    "succinic|succinic_cornstover",
+    "succinic|succinic_glucose",
+    "succinic|succinic_sugarcane"
+   ]
+  },
+  "M3": {
+   "config_records": 0,
+   "configs": []
+  },
+  "M12": {
+   "config_records": 0,
+   "configs": []
+  },
+  "M23": {
+   "config_records": 0,
+   "configs": []
+  },
+  "S1": {
+   "config_records": 88,
+   "configs": [
+    "HP|HP_corn",
+    "HP|HP_cornstover",
+    "HP|HP_glucose",
+    "HP|HP_hexanol_corn",
+    "HP|HP_hexanol_cornstover",
+    "HP|HP_hexanol_glucose",
+    "HP|HP_hexanol_sugarcane",
+    "HP|HP_neutral_corn",
+    "HP|HP_neutral_cornstover",
+    "HP|HP_neutral_glucose",
+    "HP|HP_neutral_hexanol_corn",
+    "HP|HP_neutral_hexanol_cornstover",
+    "HP|HP_neutral_hexanol_glucose",
+    "HP|HP_neutral_hexanol_sugarcane",
+    "HP|HP_neutral_sugarcane",
+    "HP|HP_sugarcane",
+    "TAL|TAL_SA_corn",
+    "TAL|TAL_SA_cornstover",
+    "TAL|TAL_SA_glucose",
+    "TAL|TAL_SA_sugarcane",
+    "TAL|TAL_corn",
+    "TAL|TAL_cornstover",
+    "TAL|TAL_glucose",
+    "TAL|TAL_sugarcane",
+    "ethanol|ethanol_corn",
+    "ethanol|ethanol_cornstover",
+    "ethanol|ethanol_sugarcane",
+    "isobutanol|IBO_EtOH_corn",
+    "lactic|lactic_lowpH_SHF_cornstover",
+    "lactic|lactic_lowpH_SSCF_cornstover",
+    "lactic|lactic_neutral_SHF_cornstover",
+    "lactic|lactic_neutral_SSCF_cornstover",
+    "oxalic|oxalic_neutral_sugarcane",
+    "succinic|succinic_corn",
+    "succinic|succinic_cornstover",
+    "succinic|succinic_glucose",
+    "succinic|succinic_neutral_corn",
+    "succinic|succinic_neutral_cornstover",
+    "succinic|succinic_neutral_glucose",
+    "succinic|succinic_neutral_sugarcane",
+    "succinic|succinic_sugarcane"
+   ],
+   "spec_version": 1,
+   "configs_without_spec": []
+  },
+  "D2": {
+   "samples_unpatchable": 0
+  },
+  "D15": {
+   "samples_unpatchable": 0
+  },
+  "D16": {
+   "samples_unpatchable": 0
+  },
+  "D17": {
+   "samples_unpatchable": 0,
+   "by_config": {},
+   "samples_corrected": 1125
+  },
+  "D3": {
+   "points": 3855,
+   "samples": 181,
+   "by_config": {
+    "ethanol|ethanol_cornstover": 2720,
+    "succinic|succinic_corn": 287,
+    "succinic|succinic_cornstover": 280,
+    "succinic|succinic_glucose": 288,
+    "succinic|succinic_sugarcane": 280
+   },
+   "points_skipped": 0,
+   "moved_kg_per_h_total": 23979702.12540827
+  },
+  "D4": {
+   "points": 0,
+   "samples": 0,
+   "by_config": {}
+  },
+  "D6": {
+   "points": 0,
+   "samples": 0,
+   "by_config": {}
+  },
+  "D7": {
+   "points": 0,
+   "samples": 0,
+   "by_config": {},
+   "points_skipped": 0,
+   "points_above_inflection": 0
+  }
+ },
+ "median_R2": 0.9996908840822409,
+ "median_fit_mape": 0.012379724806559826,
+ "median_closure_rel": 0.0010986340616949274,
+ "max_sum_check": 1.68082681661321e-14,
+ "phi_flags": {
+  "ok": 1600
+ },
+ "ng_pools": {
+  "split": 1600
+ },
+ "ng_pool_inadmissible": 0,
+ "F_negative": 0,
+ "capital_bases": {
+  "FCI": 1600
+ },
+ "channels_ok": 1600,
+ "median_phi": 0.14446913885326773,
+ "median_area_coverage": 1.0,
+ "median_el_area_mismatch": 1.251954613616363e-16,
+ "min_materials_other_rel": 0.0024493050372057703,
+ "min_utilities_other_rel": 5.64835966818382e-06,
+ "imputed": {},
+ "per_config": {
+  "HP|HP_corn": 29,
+  "HP|HP_cornstover": 29,
+  "HP|HP_glucose": 29,
+  "HP|HP_hexanol_corn": 29,
+  "HP|HP_hexanol_cornstover": 29,
+  "HP|HP_hexanol_glucose": 29,
+  "HP|HP_hexanol_sugarcane": 29,
+  "HP|HP_neutral_corn": 29,
+  "HP|HP_neutral_cornstover": 29,
+  "HP|HP_neutral_glucose": 29,
+  "HP|HP_neutral_hexanol_corn": 29,
+  "HP|HP_neutral_hexanol_cornstover": 29,
+  "HP|HP_neutral_hexanol_glucose": 29,
+  "HP|HP_neutral_hexanol_sugarcane": 29,
+  "HP|HP_neutral_sugarcane": 29,
+  "HP|HP_sugarcane": 29,
+  "TAL|TAL_SA_corn": 29,
+  "TAL|TAL_SA_cornstover": 29,
+  "TAL|TAL_SA_glucose": 29,
+  "TAL|TAL_SA_sugarcane": 29,
+  "TAL|TAL_corn": 29,
+  "TAL|TAL_cornstover": 29,
+  "TAL|TAL_glucose": 29,
+  "TAL|TAL_sugarcane": 29,
+  "ethanol|ethanol_corn": 109,
+  "ethanol|ethanol_cornstover": 109,
+  "ethanol|ethanol_sugarcane": 109,
+  "isobutanol|IBO_EtOH_corn": 109,
+  "lactic|lactic_lowpH_SHF_cornstover": 27,
+  "lactic|lactic_lowpH_SSCF_cornstover": 25,
+  "lactic|lactic_neutral_SHF_cornstover": 34,
+  "lactic|lactic_neutral_SSCF_cornstover": 27,
+  "oxalic|oxalic_neutral_sugarcane": 211,
+  "succinic|succinic_corn": 18,
+  "succinic|succinic_cornstover": 18,
+  "succinic|succinic_glucose": 18,
+  "succinic|succinic_neutral_corn": 18,
+  "succinic|succinic_neutral_cornstover": 18,
+  "succinic|succinic_neutral_glucose": 18,
+  "succinic|succinic_neutral_sugarcane": 18,
+  "succinic|succinic_sugarcane": 18
+ },
+ "rejections_by_biorefinery": {
+  "lactic": {
+   "incomplete": 1,
+   "too_few_yields": 9,
+   "too_few_points": 11,
+   "low_R2": 2
+  }
+ },
+ "per_biorefinery": {
+  "HP": {
+   "n_kept": 464,
+   "rejected": {},
+   "R2": 0.9998981381277131,
+   "fit_mape": 0.011827183800175126,
+   "closure_rel": 0.0013823179980040358,
+   "closure_rel_max": 0.0035426212494518152,
+   "phi": 0.14521756594224625,
+   "phi_min": 0.12470349627484341,
+   "phi_max": 0.1689965776927332,
+   "phi_cv_productivity": 0.006207153886585469,
+   "F_fixed": 4676460.386373577,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor": 464
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 464
+   },
+   "ng_price": 0.2765,
+   "ng_price_source": {
+    "pools": 464
+   },
+   "ng_mixed_pool": {
+    "": 464
+   },
+   "ng_unpriced_flow_share": 0.0,
+   "capex_weights": {
+    "tdc": 464
+   },
+   "foc_alloc": {
+    "isbl": 464
+   },
+   "sum_check_max": 1.174399318446983e-15,
+   "ng_kg_per_kg": 0.10643436253938546
+  },
+  "TAL": {
+   "n_kept": 232,
+   "rejected": {},
+   "R2": 0.9996666593855661,
+   "fit_mape": 0.011477523551584459,
+   "closure_rel": 0.0010176845308086367,
+   "closure_rel_max": 0.0032514543322195643,
+   "phi": 0.14548983348095093,
+   "phi_min": 0.12379447689195924,
+   "phi_max": 0.16741476986336415,
+   "phi_cv_productivity": 0.010250375775767623,
+   "F_fixed": 1396120.8520896132,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor": 232
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 232
+   },
+   "ng_price": 0.2765000000000001,
+   "ng_price_source": {
+    "pools": 232
+   },
+   "ng_mixed_pool": {
+    "": 232
+   },
+   "ng_unpriced_flow_share": 1.1102230246251565e-16,
+   "capex_weights": {
+    "tdc": 232
+   },
+   "foc_alloc": {
+    "isbl": 232
+   },
+   "sum_check_max": 2.514296297825959e-15,
+   "ng_kg_per_kg": 0.7691261299321991
+  },
+  "ethanol": {
+   "n_kept": 327,
+   "rejected": {},
+   "R2": 0.9996865720004455,
+   "fit_mape": 0.00859070443528249,
+   "closure_rel": 0.0011586421399852871,
+   "closure_rel_max": 0.002466042367624638,
+   "phi": 0.15501433519919436,
+   "phi_min": 0.13594922728282624,
+   "phi_max": 0.24524208733371783,
+   "phi_cv_productivity": 0.0005551700092237903,
+   "F_fixed": 4750000.0,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor_foc": 109,
+    "labor": 218
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 327
+   },
+   "ng_price": 0.21840140264305344,
+   "ng_price_source": {
+    "pools": 327
+   },
+   "ng_mixed_pool": {
+    "": 327
+   },
+   "ng_unpriced_flow_share": 0.0,
+   "capex_weights": {
+    "installed": 109,
+    "tdc": 218
+   },
+   "foc_alloc": {
+    "weights": 109,
+    "isbl": 218
+   },
+   "sum_check_max": 1.9975208550904074e-15,
+   "ng_kg_per_kg": 0.0
+  },
+  "isobutanol": {
+   "n_kept": 109,
+   "rejected": {},
+   "R2": 0.9950086542576014,
+   "fit_mape": 0.03255175282982272,
+   "closure_rel": 1.4445181794065028e-05,
+   "closure_rel_max": 2.0829216195200333e-05,
+   "phi": 0.21858581087388027,
+   "phi_min": 0.21174387389626387,
+   "phi_max": 0.22796355348842068,
+   "phi_cv_productivity": 6.803785415298243e-06,
+   "F_fixed": 3679999.9999999995,
+   "fixed_over_labor": 1.5999999999999999,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor_foc": 109
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 109
+   },
+   "ng_price": 0.2893046531979421,
+   "ng_price_source": {
+    "pools": 109
+   },
+   "ng_mixed_pool": {
+    "": 109
+   },
+   "ng_unpriced_flow_share": 2.220446049250313e-16,
+   "capex_weights": {
+    "installed": 109
+   },
+   "foc_alloc": {
+    "weights": 109
+   },
+   "sum_check_max": 7.826769254341128e-16,
+   "ng_kg_per_kg": 1.6064323405052827
+  },
+  "lactic": {
+   "n_kept": 113,
+   "rejected": {
+    "incomplete": 1,
+    "too_few_yields": 9,
+    "too_few_points": 11,
+    "low_R2": 2
+   },
+   "R2": 0.9986128224155166,
+   "fit_mape": 0.010962078824511345,
+   "closure_rel": 0.00012650365500824513,
+   "closure_rel_max": 0.0003898443452690897,
+   "phi": 0.1419499039922919,
+   "phi_min": 0.14005176455630522,
+   "phi_max": 0.14402492680348333,
+   "phi_cv_productivity": 0.003832426128070963,
+   "F_fixed": 6105238.2627799995,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor": 113
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 113
+   },
+   "ng_price": 0.253,
+   "ng_price_source": {
+    "pools": 113
+   },
+   "ng_mixed_pool": {
+    "": 113
+   },
+   "ng_unpriced_flow_share": 0.0,
+   "capex_weights": {
+    "tdc": 113
+   },
+   "foc_alloc": {
+    "isbl": 113
+   },
+   "sum_check_max": 1.68082681661321e-14,
+   "ng_kg_per_kg": 1.6380234022569422
+  },
+  "oxalic": {
+   "n_kept": 211,
+   "rejected": {},
+   "R2": 0.9975957961344654,
+   "fit_mape": 0.0180011197371953,
+   "closure_rel": 0.0015871158984158192,
+   "closure_rel_max": 0.0035414464168188114,
+   "phi": 0.14465971034278144,
+   "phi_min": 0.12440243564403085,
+   "phi_max": 0.16695345532525407,
+   "phi_cv_productivity": 0.008462087109892625,
+   "F_fixed": 12175903.700380653,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor": 211
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 211
+   },
+   "ng_price": 0.276011662323727,
+   "ng_price_source": {
+    "pools": 211
+   },
+   "ng_mixed_pool": {
+    "": 211
+   },
+   "ng_unpriced_flow_share": 0.0,
+   "capex_weights": {
+    "tdc": 211
+   },
+   "foc_alloc": {
+    "isbl": 211
+   },
+   "sum_check_max": 8.542431077341533e-16,
+   "ng_kg_per_kg": 0.0
+  },
+  "succinic": {
+   "n_kept": 144,
+   "rejected": {},
+   "R2": 0.9999283316043501,
+   "fit_mape": 0.01088907951279906,
+   "closure_rel": 0.0020196133289598433,
+   "closure_rel_max": 0.004153486263908965,
+   "phi": 0.1414314875962191,
+   "phi_min": 0.13854089032745537,
+   "phi_max": 0.1434941238279863,
+   "phi_cv_productivity": 0.008282297216116443,
+   "F_fixed": 22850419.742509328,
+   "fixed_over_labor": 1.9,
+   "F_negative": 0,
+   "fixed_exceeds_foc": 0,
+   "fixed_source": {
+    "labor": 144
+   },
+   "channels_ok_frac": 1.0,
+   "ng_pool": {
+    "split": 144
+   },
+   "ng_price": 0.2527,
+   "ng_price_source": {
+    "pools": 144
+   },
+   "ng_mixed_pool": {
+    "": 144
+   },
+   "ng_unpriced_flow_share": 1.1102230246251565e-16,
+   "capex_weights": {
+    "tdc": 144
+   },
+   "foc_alloc": {
+    "isbl": 144
+   },
+   "sum_check_max": 8.970749688499817e-16,
+   "ng_kg_per_kg": 0.270463250091718
+  }
+ }
+}

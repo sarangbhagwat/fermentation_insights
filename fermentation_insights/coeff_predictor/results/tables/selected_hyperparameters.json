@@ -1,0 +1,77 @@
+{
+ "selected": {
+  "width": 128,
+  "depth": 2,
+  "dropout": 0.05,
+  "weight_decay": 6e-05,
+  "lr": 0.0047,
+  "w_mpsp": 0.3,
+  "w_ch": 3.0,
+  "w_phys": 0.03,
+  "colloc_ratio": 2.0,
+  "early_stop": "mpsp",
+  "clip_inputs": 0.0
+ },
+ "candidate": 15,
+ "hpo_folds": [
+  {
+   "fold": "fold0",
+   "n_test_configs": 8,
+   "n_test": 361
+  },
+  {
+   "fold": "fold1",
+   "n_test_configs": 8,
+   "n_test": 279
+  },
+  {
+   "fold": "fold2",
+   "n_test_configs": 7,
+   "n_test": 238
+  },
+  {
+   "fold": "fold3",
+   "n_test_configs": 7,
+   "n_test": 237
+  },
+  {
+   "fold": "fold4",
+   "n_test_configs": 7,
+   "n_test": 238
+  }
+ ],
+ "plan": {
+  "mode": "full",
+  "hpo_k": 5,
+  "hpo_candidates": 16,
+  "hpo_members": 2,
+  "cv_members": 5,
+  "hpo_lopo_weight": 0.0,
+  "final_members": 5,
+  "release_members": 5,
+  "random_k": 5,
+  "loco_folds": null,
+  "ablation_loco_folds": 12,
+  "epochs": 300,
+  "patience": 40,
+  "min_epochs": 20,
+  "batch_size": 128,
+  "request": {
+   "budget_hours": 3.0,
+   "hpo_candidates": 0,
+   "hpo_members": 2,
+   "hpo_lopo_weight": 0.0,
+   "ablation_loco_folds": 12
+  },
+  "estimate": {
+   "seconds_per_member_sample": 0.02429597040013688,
+   "hpo_hours": 0.2921995373456462,
+   "cv_hours": 1.751694613615042,
+   "final_hours": 0.03745335018853799,
+   "total_hours": 2.081347501149226,
+   "budget_hours": 3.0,
+   "threads": 4,
+   "fits_budget": true
+  }
+ }
+}
