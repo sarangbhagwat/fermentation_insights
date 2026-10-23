@@ -528,6 +528,35 @@ def test_cell_mass_yield_sets_the_inflection_yield(shipped):
     assert not any('y above the inflection yield' in m for m in msgs), msgs
 
 
+def test_derived_inflection_yield_stays_in_the_training_spread(shipped):
+    """At the ends of a configuration's cell-mass-yield range the derived
+    inflection yield stays inside the training spread, so the row still counts
+    as the known configuration; a names-only row that encodes no training
+    configuration warns that the registry inflection yield was kept."""
+    _, P = shipped
+    for cid in ('TAL_glucose', 'TAL_cornstover', 'TAL_SA_cornstover', 'HP_corn'):
+        lo, hi = P._inflection_ranges(cid)[:2]
+        rows = pd.DataFrame([dict(config_id=cid, r=0.3, feedstock_price=0.2, p_cell_mass_yield=v)
+                             for v in np.linspace(lo, hi, 5)])
+        _, _, det = _quiet(P._batch, rows, None, False)
+        assert all(cid in d['training_configs'] for d in det), cid
+        assert all(d.get('inflection_derived') for d in det), cid
+    q = dict(feedstock='corn', fermentation_product='HP', final_product='AcrylicAcid', neutralization=False,
+             r=0.3, feedstock_price=0.2, p_cell_mass_yield=0.22)
+    _, msgs = _caught(P.predict, q)
+    assert any('no training relation' in m for m in msgs), msgs
+    _, msgs = _caught(P.predict, dict(q, config_id='HP_corn'))
+    assert not any('no training relation' in m for m in msgs), msgs
+    assert any('derived from the given p_cell_mass_yield' in m for m in msgs), msgs
+    # a cell-mass yield whose derived inflection yield is the registry one: no warning
+    infl0 = float(_quiet(P._batch, dict(config_id='HP_corn', r=0.3, feedstock_price=0.2), None, False)[0]
+                  ['inflection_yield'][0])
+    slope, icpt, _ = P._inflection_relation('HP_corn')
+    _, msgs = _caught(P.predict, dict(config_id='HP_corn', r=0.3, feedstock_price=0.2,
+                                      p_cell_mass_yield=(infl0 - icpt) / slope))
+    assert not any('derived from the given p_cell_mass_yield' in m for m in msgs), msgs
+
+
 def test_given_contextual_parameters_with_unreliable_response_warn(shipped):
     _, P = shipped
     q = dict(config_id='lactic_lowpH_SHF_cornstover', r=0.9, feedstock_price=0.06)

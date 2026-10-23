@@ -797,7 +797,10 @@ class CoefficientPredictor:
             batch = self.spec.transform(df, descriptors=descriptors, strict=True, missing_categorical='other')
             for d, m in zip(det, self._training_configs(batch.X)):
                 d['training_configs'] = m
-            der = [(i, d['inflection_derived']) for i, d in enumerate(det) if d.get('inflection_derived')]
+            # a derived value equal to the registry baseline is no news
+            der = [(i, d['inflection_derived']) for i, d in enumerate(det) if d.get('inflection_derived')
+                   and abs(d['inflection_derived'][0] - d['inflection_derived'][1])
+                   > 1e-3 * abs(d['inflection_derived'][1])]
             if warn and der:
                 warnings.warn('; '.join(f'row {i}: inflection_yield={v:.4g} (registry baseline {o:.4g})'
                                         for i, (v, o, c) in der[:6])
@@ -805,6 +808,13 @@ class CoefficientPredictor:
                               'configuration (' + ', '.join(sorted({c for _, (_, _, c) in der})) + '), as in its '
                               'training samples; give inflection_yield to override (column filled_from_registry; '
                               'README section 5)', UserWarning, stacklevel=3)
+        nd = [i for i, d in enumerate(det) if d.get('inflection_not_derived')]
+        if warn and nd:
+            warnings.warn('rows ' + ', '.join(map(str, nd[:6])) + ': p_cell_mass_yield given, but inflection_yield '
+                          'is the registry baseline -- these rows encode no training configuration, so no training '
+                          'relation of the inflection yield to the cell-mass yield applies (pass config_id, or give '
+                          'inflection_yield consistent with the cell-mass yield; README section 5)',
+                          UserWarning, stacklevel=3)
         if self._apply_tea_fixed(df, det, warn):
             # a given TEA parameter equal to the configuration's fixed value:
             # encoded as missing, as in its training rows
@@ -1102,6 +1112,38 @@ class CoefficientPredictor:
         cache[cid] = rel
         return rel
 
+    def _inflection_ranges(self, cid):
+        """(cell-mass yield min, max, inflection yield min, max) [g/g] over
+        the training rows of ``cid`` (:meth:`_training_rows`; the inflection
+        range includes the baseline encoding, as in
+        :meth:`_training_configs`), or None."""
+        cache = self.__dict__.setdefault('_infl_rng', {})
+        if cid in cache:
+            return cache[cid]
+        out = None
+        tr = self._training_rows().get(cid)
+        cols = self.spec.columns
+        num = {d['name']: d for d in self.spec.numeric}
+        rg = list(self._identity_split()[1])
+        if tr is not None and {'inflection_yield', 'p_cell_mass_yield'} <= set(num) \
+                and cols.index('inflection_yield') in rg:
+
+            def raw(c, z):
+                d = num[c]
+                v = np.asarray(z, float) * d['std'] + d['mean']
+                return 10 ** v if d['log'] else v
+            k = rg.index(cols.index('inflection_yield'))
+            ylo, yhi = raw('inflection_yield', [tr[1][k], tr[2][k]])
+            Z = np.asarray(self.ensemble.ad.Z, float)[tr[0]]
+            ok = np.ones(len(Z), bool)
+            if 'missing__p_cell_mass_yield' in cols:
+                ok = Z[:, cols.index('missing__p_cell_mass_yield')] < 0.5
+            if ok.any():
+                x = raw('p_cell_mass_yield', Z[ok, cols.index('p_cell_mass_yield')])
+                out = (float(x.min()), float(x.max()), float(min(ylo, yhi)), float(max(ylo, yhi)))
+        cache[cid] = out
+        return out
+
     def _derive_inflection(self, df, det):
         """Rows with a given ``p_cell_mass_yield`` and an inflection yield
         filled from the registry (not given) that encode as a training
@@ -1121,12 +1163,24 @@ class CoefficientPredictor:
             cids = list(d.get('training_configs') or [])
             if not cids and d.get('config_id') and not d['conflict'] and not d['custom_feedstock']:
                 cids = [d['config_id']]
-            rel = self._inflection_relation(cids[0]) if cids else None
+            if not cids:
+                # a new configuration: no training relation applies
+                d['inflection_not_derived'] = True
+                continue
+            rel = self._inflection_relation(cids[0])
             if rel is None:
                 continue
             v = rel[0] * float(df.at[i, 'p_cell_mass_yield']) + rel[1]
             ty = pd.to_numeric(pd.Series([df.at[i, 'theoretical_yield'] if 'theoretical_yield' in df else np.nan]),
                                errors='coerce').iloc[0]
+            # the relation is a least-squares fit: keep the derived value
+            # inside the configuration's training spread of the inflection
+            # yield (the range :meth:`_training_configs` checks) when the
+            # cell-mass yield is inside its training range
+            rng = self._inflection_ranges(cids[0])
+            tol = 1e-3 * (rng[1] - rng[0]) if rng is not None else 0.  # float32 encoding round-off
+            if rng is not None and rng[0] - tol <= float(df.at[i, 'p_cell_mass_yield']) <= rng[1] + tol:
+                v = min(max(v, rng[2]), rng[3])
             if not (v > 0) or (np.isfinite(ty) and v > ty):
                 continue
             old = float(df.at[i, 'inflection_yield'])
